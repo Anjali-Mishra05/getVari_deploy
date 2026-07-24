@@ -1,0 +1,7 @@
+- [x] Create shared components (`BrandLogo`, `GlassCard`)
+- [x] Create Splash and Loading screens
+- [x] Redesign Login and OTP screens
+- [x] Port and optimize Onboarding screen for mobile
+- [x] Port and optimize Home/Dashboard screen for mobile
+- [x] Update `App.tsx` navigation stack and boot logic
+- [x] Final polishing and verification
