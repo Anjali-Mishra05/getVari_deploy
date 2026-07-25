@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "494620336775",
+    "project_id": "getvari-d7908",
+    "storage_bucket": "getvari-d7908.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:494620336775:android:5ed6c3a62a13ec2d00ce22",
+        "android_client_info": {
+          "package_name": "com.getvariapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAXFTkz6vKUeN3IiNvkD3g2Hv95-pXp3jk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

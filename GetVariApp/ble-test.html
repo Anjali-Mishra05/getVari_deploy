@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GetVari // BLE Diagnostics Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #02050e;
+      --panel: rgba(10, 18, 42, 0.4);
+      --border: rgba(255, 255, 255, 0.08);
+      --cyan: #00f2fe;
+      --teal: #4facfe;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg);
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(0, 242, 254, 0.05) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(79, 172, 254, 0.05) 0%, transparent 40%);
+      color: var(--text);
+      min-height: 100-screen;
+      padding: 2rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 900px;
+      display: flex;
+      flex-direction: column;
+      gap: 2rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      letter-spacing: -0.05em;
+      background: linear-gradient(135deg, var(--cyan), var(--teal));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+    }
+
+    header p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 2rem;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    }
+
+    .btn-deck {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    button {
+      padding: 0.85rem 1.75rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      font-family: 'Outfit', sans-serif;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--cyan), var(--teal));
+      border: none;
+      color: #010409;
+      box-shadow: 0 0 15px rgba(0, 242, 254, 0.2);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 25px rgba(0, 242, 254, 0.4);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.08);
+      transform: translateY(-2px);
+    }
+
+    /* Pairing Table Styles */
+    .table-container {
+      overflow-x: auto;
+      margin-top: 1rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+
+    th {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      padding: 1rem;
+      border-b: 1px solid var(--border);
+    }
+
+    td {
+      padding: 1rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      font-size: 0.9rem;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.01);
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-family: 'Outfit', sans-serif;
+      padding: 0.25rem 0.65rem;
+      border-radius: 99px;
+      border: 1px solid transparent;
+    }
+
+    .status-connected {
+      background: rgba(16, 185, 129, 0.1);
+      border-color: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+    }
+
+    .status-disconnected {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+    }
+
+    /* Terminal Console Logger Overlay */
+    .console-header {
+      display: flex;
+      justify-between: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+
+    .console-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .console-title::before {
+      content: '';
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #ef4444;
+      box-shadow: 0 0 8px #ef4444;
+    }
+
+    .console-clear {
+      font-size: 0.7rem;
+      color: var(--cyan);
+      cursor: pointer;
+      text-transform: uppercase;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      border: none;
+      background: none;
+    }
+
+    .console {
+      background: rgba(2, 4, 10, 0.8);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.25rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      height: 250px;
+      overflow-y: auto;
+      color: #38bdf8;
+      box-shadow: inset 0 2px 8px rgba(0,0,0,0.8);
+    }
+
+    .log-entry {
+      margin-bottom: 0.4rem;
+      word-break: break-all;
+    }
+
+    .log-entry.info { color: #38bdf8; }
+    .log-entry.success { color: #4ade80; }
+    .log-entry.warn { color: #fbbf24; }
+    .log-entry.error { color: #f87171; }
+    .log-time {
+      color: rgba(255,255,255,0.2);
+      margin-right: 0.5rem;
+    }
+
+    .empty-state {
+      text-align: center;
+      color: var(--text-muted);
+      padding: 3rem 1rem;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <h1>Web Bluetooth Diagnostics Hub</h1>
+      <p>Scan and query nearby Bluetooth Low Energy carriers using do-not-filter parameters</p>
+    </header>
+
+    <!-- Scan Deck & Device List Card -->
+    <div class="card">
+      <div class="btn-deck">
+        <button id="scan-btn" class="btn-primary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          Scan Nearby Devices
+        </button>
+        <button id="refresh-btn" class="btn-secondary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          Refresh Query
+        </button>
+      </div>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Device Name</th>
+              <th>Device Identifier</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="device-table-body">
+            <!-- Discovered devices populated dynamically -->
+            <tr>
+              <td colspan="4" class="empty-state">No Bluetooth devices paired yet. Click scan above to query carriers.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- On-screen Developer Terminal Card -->
+    <div class="card" style="padding: 1.5rem;">
+      <div class="console-header">
+        <div class="console-title">Live Diagnostics Terminal Logs</div>
+        <button id="clear-log-btn" class="console-clear">Clear Logger</button>
+      </div>
+      <div id="console-log" class="console">
+        <div class="log-entry info"><span class="log-time">[00:00:00]</span>Web Bluetooth subsystem initialized. Ready to scan.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // In-browser custom telemetry logging console
+    const consoleDiv = document.getElementById('console-log');
+    const tableBody = document.getElementById('device-table-body');
+    const scanBtn = document.getElementById('scan-btn');
+    const refreshBtn = document.getElementById('refresh-btn');
+    const clearLogBtn = document.getElementById('clear-log-btn');
+
+    let discoveredDevices = new Map();
+
+    function log(message, type = 'info') {
+      const now = new Date();
+      const timeStr = now.toTimeString().split(' ')[0];
+      
+      // 1. Browser Console Log (Requirement 6)
+      if (type === 'error') {
+        console.error(`[BLE Diagnostics] ${message}`);
+      } else if (type === 'warn') {
+        console.warn(`[BLE Diagnostics] ${message}`);
+      } else {
+        console.log(`[BLE Diagnostics] ${message}`);
+      }
+
+      // 2. On-screen terminal logs
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.innerHTML = `<span class="log-time">[${timeStr}]</span>${message}`;
+      consoleDiv.appendChild(entry);
+      consoleDiv.scrollTop = consoleDiv.scrollHeight;
+    }
+
+    // Refresh devices list table view
+    async function updateTable() {
+      if (discoveredDevices.size === 0) {
+        tableBody.innerHTML = `
+          <tr>
+            <td colspan="4" class="empty-state">No Bluetooth devices paired yet. Click scan above to query carriers.</td>
+          </tr>
+        `;
+        return;
+      }
+
+      tableBody.innerHTML = '';
+      discoveredDevices.forEach((device) => {
+        const isConnected = device.gatt ? device.gatt.connected : false;
+        const row = document.createElement('tr');
+        
+        row.innerHTML = `
+          <td style="font-weight: 600; color: #fff;">${device.name || '<em>Unnamed Peripheral</em>'}</td>
+          <td style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-muted);">${device.id}</td>
+          <td>
+            <span class="status-badge ${isConnected ? 'status-connected' : 'status-disconnected'}">
+              ${isConnected ? 'Connected' : 'Disconnected'}
+            </span>
+          </td>
+          <td>
+            ${isConnected ? 
+              `<button onclick="disconnectDevice('${device.id}')" class="btn-secondary" style="padding: 0.4rem 0.8rem; font-size: 0.7rem; border-radius: 8px; text-transform: none; letter-spacing: 0.02em;">Disconnect</button>` : 
+              `<button onclick="connectDevice('${device.id}')" class="btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.7rem; border-radius: 8px; text-transform: none; letter-spacing: 0.02em;">Link GATT</button>`
+            }
+          </td>
+        `;
+        tableBody.appendChild(row);
+      });
+    }
+
+    // Connect to specific GATT server
+    async function connectDevice(deviceId) {
+      const device = discoveredDevices.get(deviceId);
+      if (!device) return;
+
+      log(`Attempting GATT connection to ${device.name || device.id}...`, 'info');
+      try {
+        device.addEventListener('gattserverdisconnected', onDisconnected);
+        const server = await device.gatt.connect();
+        log(`Successfully coupled GATT server to device: ${device.name || device.id}`, 'success');
+        updateTable();
+      } catch (err) {
+        log(`Failed GATT coupling to ${device.id}: ${err.message}`, 'error');
+      }
+    }
+
+    // Disconnect GATT server
+    function disconnectDevice(deviceId) {
+      const device = discoveredDevices.get(deviceId);
+      if (!device || !device.gatt) return;
+
+      log(`Initiating unlink request for ${device.name || device.id}...`, 'info');
+      device.gatt.disconnect();
+      log(`GATT server decoupled from: ${device.name || device.id}`, 'warn');
+      updateTable();
+    }
+
+    function onDisconnected(event) {
+      const device = event.target;
+      log(`Device connection dropped: ${device.name || device.id}`, 'error');
+      updateTable();
+    }
+
+    // 1. Scan Nearby BLE Devices using do-not-filter (Requirement 1, 2, 4, 5)
+    async function scanBluetoothDevices() {
+      log('Requesting Bluetooth peripherals with "acceptAllDevices: true" (unfiltered scan)...', 'info');
+
+      if (!navigator.bluetooth) {
+        log('Web Bluetooth is not supported in this browser or context. Make sure you are on HTTPS / localhost.', 'error');
+        alert('Web Bluetooth is not supported. Please use Chrome/Edge on macOS/Windows/Android over HTTPS.');
+        return;
+      }
+
+      try {
+        const device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true
+        });
+
+        log(`Device chosen by user: Name: "${device.name}", ID: "${device.id}"`, 'success');
+        
+        discoveredDevices.set(device.id, device);
+        updateTable();
+
+      } catch (err) {
+        if (err.name === 'NotFoundError') {
+          log('User cancelled the browser device selection prompt.', 'warn');
+        } else {
+          log(`Scan failed or rejected: ${err.message}`, 'error');
+        }
+      }
+    }
+
+    // 7. Refresh Query / devices lists
+    async function refreshDeviceQuery() {
+      log('Refreshing active devices status...', 'info');
+      
+      if (navigator.bluetooth && navigator.bluetooth.getDevices) {
+        try {
+          const devices = await navigator.bluetooth.getDevices();
+          log(`Queried browser cache. Found ${devices.length} remembered devices.`, 'info');
+          devices.forEach(device => {
+            discoveredDevices.set(device.id, device);
+          });
+          updateTable();
+        } catch (err) {
+          log(`Failed querying cached BLE devices: ${err.message}`, 'error');
+        }
+      } else {
+        log('Browser does not support cached device retrieval (getDevices). Refreshing table state only.', 'warn');
+        updateTable();
+      }
+    }
+
+    scanBtn.addEventListener('click', scanBluetoothDevices);
+    refreshBtn.addEventListener('click', refreshDeviceQuery);
+    
+    clearLogBtn.addEventListener('click', () => {
+      consoleDiv.innerHTML = `<div class="log-entry info"><span class="log-time">[${new Date().toTimeString().split(' ')[0]}]</span>Logger cleared. Subsystem ready.</div>`;
+    });
+
+  </script>
+</body>
+</html>
