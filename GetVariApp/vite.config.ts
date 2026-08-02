@@ -16,6 +16,7 @@ export default defineConfig(() => {
         input: {
           main: path.resolve(__dirname, 'index.html'),
           admin: path.resolve(__dirname, 'admin.html'),
+          adminWeb: path.resolve(__dirname, 'admin-web.html'),
           bleTest: path.resolve(__dirname, 'ble-test.html'),
           guide: path.resolve(__dirname, 'guide.html'),
         },

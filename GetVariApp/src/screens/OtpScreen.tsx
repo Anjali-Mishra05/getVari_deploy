@@ -11,6 +11,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { AuthService } from '../services/AuthService';
+import NotificationService from '../services/NotificationService';
 import { Cpu } from 'lucide-react-native';
 import GlassCard from '../components/GlassCard';
 import Animated, { FadeInUp } from 'react-native-reanimated';
@@ -46,6 +47,8 @@ const OtpScreen = ({ route, navigation }: any) => {
 
     try {
       await AuthService.verifyOtp(confirmation, otpCode);
+      // Trigger welcome notification
+      await NotificationService.showWelcomeNotification();
       navigation.replace('Onboarding');
     } catch (err: any) {
       setError(err.message || 'Invalid authorization code.');
