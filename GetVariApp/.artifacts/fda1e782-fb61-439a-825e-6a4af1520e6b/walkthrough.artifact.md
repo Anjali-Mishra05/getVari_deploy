@@ -1,30 +1,30 @@
-# Walkthrough - Dynamic Demo User Sessions
+# Walkthrough - Final Keyboard & UI Stability Fixes
 
-I have updated the authentication logic so that every time you log in with the demo code `884200`, a brand new unique ID is generated. This ensures that every testing session creates its own distinct row in your Supabase database instead of updating the same one.
+I have implemented a more robust layout for the chatbot to ensure the keyboard never covers the input box and the UI remains stable on Android.
 
 ## Changes Made
 
-### 1. Unique ID Generation
-- **[MODIFY] AuthService.ts**:
-    - Updated `verifyOtp` to generate a session-specific ID using the current timestamp and a random number (e.g., `demo_1722612345678_123`).
-    - This ID is now stored in the secure Keychain as the user's identifier for that session.
+### 1. Keyboard Visibility Fix (Android)
+- **[MODIFY] [AquaSageChat.tsx](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/chatbot/AquaSageChat.tsx)**:
+    - Set `KeyboardAvoidingView` behavior to `height` for Android. This is the most reliable mode when using `adjustResize` and a translucent status bar.
+    - Added a precise `keyboardVerticalOffset` of 25.
+    - Optimized the input area padding (`pb-36`) to give the text box more "breathing room" above the Android navigation bar.
 
-### 2. Session Logic
-- **[MODIFY] AuthService.ts**:
-    - Updated `getCurrentUserId` to retrieve and return this session-specific ID.
-    - All subsequent calls to save profiles or log hydration will use this unique ID.
+### 2. UI Stability & Animation
+- **[MODIFY] [AquaSageChat.tsx](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/chatbot/AquaSageChat.tsx)**:
+    - Standardized the slide animation duration to **350ms** for a more solid, non-fluctuating feel.
+    - Added `maxHeight: '82%'` to the chat window to prevent it from growing or shrinking unpredictably when the keyboard layout changes.
+
+### 3. Connection Reliability
+- **[VERIFIED]**: The app's server discovery loop is still active, ensuring it tries to find your Python server on all common local addresses.
 
 ## Verification Results
 
 ### How to test:
-1.  **Logout**: If you are already logged in, log out or clear the app storage.
-2.  **Login 1**: Enter any number and use `884200`. Complete onboarding.
-3.  **Check Supabase**: You will see a new ID (starting with `demo_`) in `getvari_profiles`.
-4.  **Logout & Login 2**: Repeat the process.
-5.  **Check Supabase**: You will now see a **second** unique ID in the database with the new values.
+1.  **Restart Server**: `python Chatbot/backend/main.py`
+2.  **Reload App**: Press `r` in the terminal.
+3.  **Keyboard Test**: Open the chat and click the text box. The window should adjust perfectly, keeping the box visible.
+4.  **Stability Test**: Open and close the chat quickly. It should feel smooth and stable without jitter.
 
 > [!TIP]
-> This is perfect for demonstrating the app to multiple investors or for testing different biometric profiles side-by-side in your dashboard.
-
-> [!IMPORTANT]
-> Because each login creates a new ID, your "Hydration History" will be empty every time you log back in. This is expected since you are acting as a brand-new user for each demo session.
+> If you still see "Connection Error," double-check your terminal. If the Python script shows "Incoming Request," but the app shows an error, it might be a timeout issue. I've increased the timeout to allow for slower networks.

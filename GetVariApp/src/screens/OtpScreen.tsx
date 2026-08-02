@@ -34,9 +34,6 @@ const OtpScreen = ({ route, navigation }: any) => {
   }, [countdown]);
 
   const handleVerifyOtp = async () => {
-    // Note: Demo bypass number is 6 digits '884200' in AuthService,
-    // but the prototype shows 4-digit interaction.
-    // I will support 6 digits for the actual logic but keep the UI clean.
     if (otpCode.length < 4) {
       setError('Please enter the verification code.');
       return;
@@ -211,12 +208,11 @@ const OtpScreen = ({ route, navigation }: any) => {
                   <Cpu color="#00f2fe" size={14} />
                   <Text className="text-[10px] text-[#00f2fe] font-black uppercase font-mono tracking-[0.18em]">DEMO / INVESTOR TESTING KEY</Text>
                 </View>
-                <Text className="text-[11px] text-neutral-500 leading-6 font-medium">
+                <Text className="text-[11px] text-neutral-400 leading-6 font-medium">
                   Enter any Indian mobile number, check the Terms &amp; Conditions checkbox, and submit. The demo verification passcode is <Text className="text-[#00f2fe] font-black">884200</Text>.
                 </Text>
               </View>
 
-              
             </GlassCard>
           </Animated.View>
         </KeyboardAvoidingView>

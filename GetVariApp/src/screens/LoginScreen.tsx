@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import {
   View,
@@ -234,7 +233,7 @@ const LoginScreen = ({ navigation }: any) => {
               </View>
 
               <View className="mt-8 items-center">
-                
+
               </View>
               </GlassCard>
             </Animated.View>

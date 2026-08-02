@@ -1,30 +1,30 @@
-# Implementation Plan - Dynamic Demo User Sessions
+# Implementation Plan - Final Keyboard & UI Fix
 
-The user wants every login session using the demo code `884200` to create a brand new, unique record in Supabase instead of updating the same fixed "Demo" row.
+Resolve the persistent keyboard issue where the input box is covered or disappears on Android, and ensure UI stability.
 
 ## User Review Required
 
-> [!WARNING]
-> With this change, every time you log out and log back in with the demo code, you will start with a **fresh account**. You will not see your previous logs or profile because a new unique ID will be generated for that session. This matches your request to have "various IDs" in the database.
+> [!IMPORTANT]
+> I will be switching the `KeyboardAvoidingView` to use `behavior="padding"` for both iOS and Android. This is generally more reliable within Modals that use `statusBarTranslucent`.
 
 ## Proposed Changes
 
-### 1. Authentication Service
+### 1. Fix Keyboard Visibility (Android)
 
-#### [MODIFY] [src/services/AuthService.ts](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/services/AuthService.ts)
-- Update `verifyOtp`: If the bypass code `884200` is used, generate a new random UUID (or unique timestamp-based ID) and store it as the `demoUserId` in the Keychain session.
-- Update `getCurrentUserId`: Retrieve and return this session-specific unique ID instead of the fixed `0000...` ID.
+#### [MODIFY] [src/chatbot/AquaSageChat.tsx](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/chatbot/AquaSageChat.tsx)
+- Change `behavior` to `padding` for Android.
+- Adjust `keyboardVerticalOffset` to account for the Status Bar and Navigation Bar on Android.
+- Change the chat window height from a percentage (`height: '82%'`) to a more flexible `maxHeight` or `flex: 1` structure when the keyboard is active, to prevent the window from shrinking too much or pushing the input off-screen.
 
-### 2. Verification
+### 2. UI Stability
 
-- Every "Onboarding" completion and every "Log Drink" will now be associated with the unique ID generated at the start of that specific login session.
+#### [MODIFY] [src/chatbot/AquaSageChat.tsx](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/chatbot/AquaSageChat.tsx)
+- Ensure the teaser bubble and FAB are completely static when the modal is open.
+- Refine the slide animation to be even more "solid" (less bouncy).
 
 ## Verification Plan
 
 ### Manual Verification
-1. Open the app and log in with `884200`.
-2. Complete onboarding and log a drink.
-3. Log out of the app (or reset it).
-4. Log in again with `884200`.
-5. Complete onboarding with different values.
-6. **Check Supabase**: Verify that two distinct rows now exist in `getvari_profiles` with two different IDs.
+1.  **Typing Test**: Open the chat on an Android emulator/device.
+2.  **Keyboard Check**: Tap the input box. Verify the input box stays visible and "follows" the keyboard up.
+3.  **Stability Check**: Close and open the chat multiple times. Verify no jitter or "fluctuation" occurs.

@@ -55,7 +55,7 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
   const current = fontSizes[textSize];
 
   return (
-    <View className="items-center justify-center">
+    <View className="flex-row items-center">
       <View style={{ width: size, height: size }}>
         <Svg width="100%" height="100%" viewBox="0 0 100 100" fill="none">
           <Defs>
@@ -92,7 +92,7 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
       </View>
 
       {withText && (
-        <View className="flex-row items-center justify-center mt-4">
+        <View className="flex-row items-center ml-3">
           <View
             style={{
               width: current.dot,

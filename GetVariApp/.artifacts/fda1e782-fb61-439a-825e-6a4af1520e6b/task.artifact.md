@@ -1,7 +1,6 @@
-- [x] Update `OnboardingScreen.tsx` to correctly map and save all user inputs to Supabase.
-- [x] Update `HomeScreen.tsx` to display real data from the user profile.
-- [x] Add better error handling and logging for data persistence.
-- [x] Verify that selections like "High Strain" or "Elite / Hybrid" are correctly persisted.
-- [x] Generate unique session ID for Demo User in `AuthService.ts`
-- [x] Update `getCurrentUserId` to return the session-specific ID
-- [x] Verify multi-row persistence in Supabase
+- [/] Fix Keyboard Visibility (Android)
+    - [ ] Update `KeyboardAvoidingView` behavior and offset
+    - [ ] Adjust Modal content height logic
+- [ ] UI Stability Refinements
+    - [ ] Stabilize FAB and teaser bubble
+    - [ ] Smoothing Slide animation

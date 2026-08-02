@@ -1,4 +1,4 @@
-    import React, { useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { View, SafeAreaView, Text, Platform, Dimensions } from 'react-native';
 import { supabase } from '../services/SupabaseClient';
 import Animated, {

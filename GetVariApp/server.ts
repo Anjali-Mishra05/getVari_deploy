@@ -8,6 +8,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import admin from 'firebase-admin';
 import rateLimit from 'express-rate-limit';
 import { signToken, verifyFirebaseToken } from './src/utils/auth';
+import { aquaSageChat } from './Chatbot/backend/workflow';
 
 import { diag, DiagConsoleLogger, DiagLogLevel } from '@opentelemetry/api';
 
@@ -105,6 +106,29 @@ app.post('/auth/logout', (req, res) => {
   // Client is responsible for clearing the JWT.
   // We can implement token blacklisting here if needed.
   res.json({ success: true, message: 'Logged out successfully' });
+});
+
+app.post('/api/chat', async (req, res) => {
+  const { question, chatHistory = [] } = req.body;
+
+  if (!question) {
+    return res.status(400).json({ error: 'Question is required' });
+  }
+
+  try {
+    const result = await aquaSageChat.invoke({
+      question,
+      chatHistory,
+    });
+
+    res.json({
+      answer: result.answer,
+      context: result.context,
+    });
+  } catch (error: any) {
+    console.error('Chat API Error:', error);
+    res.status(500).json({ error: error.message || 'An internal error occurred' });
+  }
 });
 
 // Log incoming API requests to insights

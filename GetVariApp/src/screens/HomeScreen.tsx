@@ -3,11 +3,11 @@ import {
   View,
   Text,
   ScrollView,
-  SafeAreaView,
   TouchableOpacity,
   Dimensions,
   Platform,
 } from 'react-native';
+import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import {
   Heart,
   Activity,
@@ -18,7 +18,6 @@ import {
   Battery,
   TrendingUp,
   Cpu,
-  User
 } from 'lucide-react-native';
 import Svg, { Circle, Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 import Animated, {
@@ -34,6 +33,7 @@ import GlassCard from '../components/GlassCard';
 import { supabase } from '../services/SupabaseClient';
 import { AuthService } from '../services/AuthService';
 import { HydrationLog } from '../types';
+import AquaSageChat from '../chatbot/AquaSageChat';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 const { width } = Dimensions.get('window');
@@ -173,7 +173,7 @@ const HomeScreen = ({ navigation }: any) => {
         </Svg>
       </View>
 
-      <SafeAreaView className="flex-1">
+      <SafeAreaView className="flex-1" edges={['top', 'left', 'right']}>
         <ScrollView className="flex-1 px-6 pt-4" showsVerticalScrollIndicator={false}>
 
           {/* Header */}
@@ -363,6 +363,8 @@ const HomeScreen = ({ navigation }: any) => {
             </View>
           </TouchableOpacity>
         </View>
+
+        <AquaSageChat userProfile={userProfile} />
       </SafeAreaView>
     </View>
   );

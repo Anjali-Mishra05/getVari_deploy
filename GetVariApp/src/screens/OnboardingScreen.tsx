@@ -144,25 +144,20 @@ const OnboardingScreen = ({ navigation }: any) => {
 
           console.log('[Supabase] Profile data to be saved:', profileData);
 
-          const { data, error } = await supabase
+          const { error } = await supabase
             .from('getvari_profiles')
             .upsert({
               id: userId,
               profile: profileData,
               updated_at: new Date().toISOString(),
-            })
-            .select();
+            });
 
           if (error) {
             console.error('[Supabase] Profile save error:', error.message);
             setErrorMsg('System busy. Syncing locally...');
-            // Still allow navigation so they aren't stuck
             setTimeout(() => navigation.replace('Home'), 1500);
             return;
           }
-          console.log('[Supabase] Profile saved successfully:', data);
-        } else {
-          console.warn('[Supabase] No User ID found during onboarding finalization.');
         }
         navigation.replace('Home');
       } catch (error) {
