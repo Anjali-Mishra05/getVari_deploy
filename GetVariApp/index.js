@@ -1,7 +1,5 @@
-/**
- * @format
- */
-
+import 'react-native-url-polyfill/auto';
+import 'react-native-gesture-handler';
 import './global.css';
 import { AppRegistry } from 'react-native';
 import App from './App';

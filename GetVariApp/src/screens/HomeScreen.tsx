@@ -3,11 +3,11 @@ import {
   View,
   Text,
   ScrollView,
-  SafeAreaView,
   TouchableOpacity,
   Dimensions,
   Platform,
 } from 'react-native';
+import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import {
   Heart,
   Activity,
@@ -18,10 +18,7 @@ import {
   Battery,
   TrendingUp,
   Cpu,
-  User
 } from 'lucide-react-native';
-import BrandLogo from '../components/BrandLogo';
-import GlassCard from '../components/GlassCard';
 import Svg, { Circle, Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 import Animated, {
   useSharedValue,
@@ -31,12 +28,118 @@ import Animated, {
   useAnimatedStyle
 } from 'react-native-reanimated';
 
+import BrandLogo from '../components/BrandLogo';
+import GlassCard from '../components/GlassCard';
+import { supabase } from '../services/SupabaseClient';
+import { AuthService } from '../services/AuthService';
+import { HydrationLog } from '../types';
+import AquaSageChat from '../chatbot/AquaSageChat';
+
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 const { width } = Dimensions.get('window');
 
 const HomeScreen = ({ navigation }: any) => {
   const [score, setScore] = useState(24);
+  const [waterLogs, setWaterLogs] = useState<HydrationLog[]>([]);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const progress = useSharedValue(0);
+
+  useEffect(() => {
+    fetchUserData();
+  }, []);
+
+  const fetchUserData = async () => {
+    try {
+      const userId = await AuthService.getCurrentUserId();
+      console.log('[Supabase] Fetching data for user:', userId);
+      if (!userId) return;
+
+      // Fetch Profile
+      const { data: profileRow, error: profileError } = await supabase
+        .from('getvari_profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (profileError) {
+        console.error('[Supabase] Error fetching profile:', profileError.message);
+      } else if (profileRow?.profile) {
+        console.log('[Supabase] Profile data loaded:', profileRow.profile);
+        setUserProfile(profileRow.profile);
+      }
+
+      // Fetch Hydration Logs
+      const { data: logsData, error: logsError } = await supabase
+        .from('getvari_hydration_logs')
+        .select('*')
+        .eq('user_id', userId)
+        .order('timestamp', { ascending: false });
+
+      if (logsError) {
+        console.error('[Supabase] Error fetching logs:', logsError.message);
+      } else if (logsData) {
+        console.log('[Supabase] Logs data loaded:', logsData.length, 'entries');
+        setWaterLogs(logsData.map(l => ({
+          id: l.id,
+          timestamp: l.timestamp,
+          amountMl: l.amount_ml,
+          source: l.source as any
+        })));
+      }
+    } catch (error) {
+      console.error('[Supabase] Fatal error fetching data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const totalWaterConsumed = waterLogs.reduce((acc, curr) => acc + curr.amountMl, 0);
+  const targetMl = userProfile?.targetDailyMl || 2500;
+  const targetPercent = Math.min(100, Math.round((totalWaterConsumed / targetMl) * 100));
+
+  const logDrink = async (amountMl: number) => {
+    try {
+      const userId = await AuthService.getCurrentUserId();
+      console.log('[Supabase] Attempting to log drink for user:', userId);
+
+      if (!userId) {
+        console.warn('[Supabase] Cannot log drink: No authenticated user ID found.');
+        return;
+      }
+
+      const newLog = {
+        id: `log_${userId}_${Date.now()}`,
+        user_id: userId,
+        timestamp: new Date().toISOString(),
+        amount_ml: amountMl,
+        source: 'manual',
+      };
+
+      const { data, error } = await supabase
+        .from('getvari_hydration_logs')
+        .insert(newLog)
+        .select();
+
+      if (error) {
+        console.error('[Supabase] Error inserting log:', error.message, error.details);
+        throw error;
+      }
+
+      console.log('[Supabase] Successfully logged drink:', data);
+
+      // Update local state
+      setWaterLogs(prev => [{
+        id: newLog.id,
+        timestamp: newLog.timestamp,
+        amountMl: newLog.amount_ml,
+        source: 'manual'
+      }, ...prev]);
+
+    } catch (error) {
+      console.error('[Supabase] Fatal error in logDrink:', error);
+    }
+  };
 
   useEffect(() => {
     progress.value = withTiming(score / 100, { duration: 1500 });
@@ -70,7 +173,7 @@ const HomeScreen = ({ navigation }: any) => {
         </Svg>
       </View>
 
-      <SafeAreaView className="flex-1">
+      <SafeAreaView className="flex-1" edges={['top', 'left', 'right']}>
         <ScrollView className="flex-1 px-6 pt-4" showsVerticalScrollIndicator={false}>
 
           {/* Header */}
@@ -85,7 +188,10 @@ const HomeScreen = ({ navigation }: any) => {
               <TouchableOpacity className="w-11 h-11 rounded-2xl bg-white/[0.03] border border-white/10 items-center justify-center">
                 <Bell color="#94a3b8" size={20} />
               </TouchableOpacity>
-              <TouchableOpacity className="w-11 h-11 rounded-2xl bg-[#00f2fe] items-center justify-center shadow-xl shadow-cyan-500/30">
+              <TouchableOpacity
+                className="w-11 h-11 rounded-2xl bg-[#00f2fe] items-center justify-center shadow-xl shadow-cyan-500/30"
+                onPress={() => logDrink(250)}
+              >
                 <Plus color="#020617" size={24} strokeWidth={3} />
               </TouchableOpacity>
             </View>
@@ -137,7 +243,9 @@ const HomeScreen = ({ navigation }: any) => {
             <View className="mt-10 px-6 w-full">
               <View className="bg-black/40 p-5 rounded-3xl border border-white/[0.05]">
                 <Text className="text-[11px] text-neutral-400 leading-relaxed font-medium italic text-center">
-                  "Physiological markers indicate optimal recovery. Cellular hydration pool is currently synced at 92% efficiency."
+                  {userProfile
+                    ? `Physiological markers for ${userProfile.gender}, ${userProfile.weightKg}kg indicate stable recovery. Dynamic target synced at ${targetMl}ml.`
+                    : `"Physiological markers indicate optimal recovery. Cellular hydration pool is currently synced at 92% efficiency."`}
                 </Text>
               </View>
             </View>
@@ -147,23 +255,25 @@ const HomeScreen = ({ navigation }: any) => {
           <View className="flex-row gap-4 mb-6">
             <GlassCard className="flex-1 p-5 bg-white/[0.01]">
               <View className="flex-row items-center gap-2 mb-3">
-                <Heart color="#f43f5e" size={14} fill="#f43f5e" fillOpacity={0.2} />
-                <Text className="text-[10px] font-black text-neutral-500 uppercase font-mono tracking-widest">Cardiac</Text>
+                <Droplets color="#00f2fe" size={14} />
+                <Text className="text-[10px] font-black text-neutral-500 uppercase font-mono tracking-widest">Hydration</Text>
               </View>
               <View className="flex-row items-baseline gap-1.5">
-                <Text className="text-3xl font-black text-white font-mono">72</Text>
-                <Text className="text-[10px] text-neutral-500 font-mono font-bold">BPM</Text>
+                <Text className="text-3xl font-black text-white font-mono">{totalWaterConsumed}</Text>
+                <Text className="text-[10px] text-neutral-500 font-mono font-bold">ML</Text>
               </View>
+              <Text className="text-[9px] text-neutral-600 font-mono mt-1">{targetPercent}% OF GOAL</Text>
             </GlassCard>
             <GlassCard className="flex-1 p-5 bg-white/[0.01]">
               <View className="flex-row items-center gap-2 mb-3">
                 <TrendingUp color="#a78bfa" size={14} />
-                <Text className="text-[10px] font-black text-neutral-500 uppercase font-mono tracking-widest">Strain</Text>
+                <Text className="text-[10px] font-black text-neutral-500 uppercase font-mono tracking-widest">Target</Text>
               </View>
               <View className="flex-row items-baseline gap-1.5">
-                <Text className="text-3xl font-black text-white font-mono">14</Text>
-                <Text className="text-[10px] text-neutral-500 font-mono font-bold">/100</Text>
+                <Text className="text-3xl font-black text-white font-mono">{targetMl}</Text>
+                <Text className="text-[10px] text-neutral-500 font-mono font-bold">ML</Text>
               </View>
+              <Text className="text-[9px] text-neutral-600 font-mono mt-1 uppercase">{userProfile?.activityLevel || 'MODERATE'} LOAD</Text>
             </GlassCard>
           </View>
 
@@ -253,6 +363,8 @@ const HomeScreen = ({ navigation }: any) => {
             </View>
           </TouchableOpacity>
         </View>
+
+        <AquaSageChat userProfile={userProfile} />
       </SafeAreaView>
     </View>
   );

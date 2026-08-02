@@ -1,43 +1,25 @@
-import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
+import { supabase } from './SupabaseClient';
 import * as Keychain from 'react-native-keychain';
-import { Platform } from 'react-native';
-
-// Use your local IP for physical device testing
-const BACKEND_URL = Platform.OS === 'android' ? 'http://10.149.145.52:3000' : 'http://localhost:3000';
 
 export class AuthService {
   /**
-   * Triggers Firebase Phone Authentication.
+   * Triggers Supabase Phone Authentication (SMS OTP).
    */
-  static async sendOtp(phoneNumber: string): Promise<FirebaseAuthTypes.ConfirmationResult> {
+  static async sendOtp(phoneNumber: string): Promise<any> {
     try {
       // Demo Bypass for User Testing
       if (phoneNumber === '+919004223553') {
-        console.log('Demo Mode: Bypassing Firebase SMS for +919004223553');
-        return {
-          confirm: async (code: string) => {
-            if (code === '884200') {
-              return { user: { getIdToken: async () => 'demo-id-token' } };
-            }
-            throw new Error('Invalid demo code. Use 884200');
-          },
-        } as any;
+        console.log('Demo Mode: Bypassing Supabase SMS for +919004223553');
+        return { isDemo: true, phoneNumber };
       }
 
-      // Backend validation and throttling check
-      const response = await fetch(`${BACKEND_URL}/auth/send-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumber }),
+      const { error } = await supabase.auth.signInWithOtp({
+        phone: phoneNumber,
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to authorize OTP request');
-      }
+      if (error) throw error;
 
-      // Trigger Firebase SMS
-      return await auth().signInWithPhoneNumber(phoneNumber);
+      return { isDemo: false, phoneNumber };
     } catch (error) {
       console.error('Send OTP Error:', error);
       throw error;
@@ -45,43 +27,41 @@ export class AuthService {
   }
 
   /**
-   * Verifies the OTP code with Firebase and exchanges the ID Token for a backend JWT.
+   * Verifies the OTP code with Supabase.
    */
   static async verifyOtp(
-    confirmation: FirebaseAuthTypes.ConfirmationResult,
+    confirmation: any,
     otp: string
   ): Promise<void> {
     try {
-      const userCredential = await confirmation.confirm(otp);
-      if (!userCredential) throw new Error('Verification failed');
+      let sessionData: any = { isDemo: false, token: null };
 
-      // If in demo mode, skip backend JWT exchange or use a mock
-      const idToken = await userCredential.user.getIdToken();
-      if (idToken === 'demo-id-token') {
-        await Keychain.setGenericPassword('user_session', 'demo-jwt-token', {
-          service: 'com.getvari.auth',
+      if (confirmation.isDemo) {
+        if (otp === '884200') {
+          // Generate a unique ID for this specific demo session
+          const uniqueDemoId = `demo_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+          sessionData = { isDemo: true, token: uniqueDemoId };
+        } else {
+          throw new Error('Invalid demo code. Use 884200');
+        }
+      } else {
+        const { data, error } = await supabase.auth.verifyOtp({
+          phone: confirmation.phoneNumber,
+          token: otp,
+          type: 'sms',
         });
-        return;
+
+        if (error) throw error;
+        if (!data.session) throw new Error('Verification failed');
+
+        sessionData = { isDemo: false, token: data.session.access_token };
       }
 
-      // Exchange Firebase ID Token for Backend JWT
-      const response = await fetch(`${BACKEND_URL}/auth/verify-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idToken }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Backend verification failed');
-      }
-
-      const { token } = await response.json();
-
-      // Securely store JWT in Keychain
-      await Keychain.setGenericPassword('user_session', token, {
+      // Store entire session object in Keychain to avoid overwriting
+      await Keychain.setGenericPassword('user_session', JSON.stringify(sessionData), {
         service: 'com.getvari.auth',
       });
+
     } catch (error) {
       console.error('Verify OTP Error:', error);
       throw error;
@@ -89,25 +69,46 @@ export class AuthService {
   }
 
   /**
-   * Retrieves the stored backend JWT.
+   * Retrieves the current user UUID.
    */
-  static async getStoredToken(): Promise<string | null> {
+  static async getCurrentUserId(): Promise<string | null> {
     try {
+      // 1. Check Supabase native auth first
+      const { data } = await supabase.auth.getUser();
+      if (data.user?.id) return data.user.id;
+
+      // 2. Fallback to check Keychain for Demo status
       const credentials = await Keychain.getGenericPassword({
         service: 'com.getvari.auth',
       });
-      return credentials ? credentials.password : null;
-    } catch (error) {
+
+      if (credentials) {
+        try {
+          const session = JSON.parse(credentials.password);
+          if (session.isDemo) {
+            // Return the unique session ID generated during verifyOtp
+            return session.token;
+          }
+        } catch (parseError) {
+          // Fallback for unexpected formats
+          if (credentials.password === 'demo-token') {
+            return 'demo_legacy_user';
+          }
+        }
+      }
+
+      return null;
+    } catch (e) {
       return null;
     }
   }
 
   /**
-   * Clears session from Firebase and Keychain.
+   * Clears session from Supabase and Keychain.
    */
   static async logout(): Promise<void> {
     try {
-      await auth().signOut();
+      await supabase.auth.signOut();
       await Keychain.resetGenericPassword({
         service: 'com.getvari.auth',
       });

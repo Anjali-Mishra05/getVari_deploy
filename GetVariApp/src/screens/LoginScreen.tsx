@@ -1,5 +1,3 @@
-
-
 import React, { useState } from 'react';
 import {
   View,
@@ -14,11 +12,12 @@ import {
   Dimensions,
   Keyboard,
 } from 'react-native';
+import Animated, { FadeInUp } from 'react-native-reanimated';
+import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
+
 import { AuthService } from '../services/AuthService';
 import { AlertTriangle, Cpu } from 'lucide-react-native';
 import GlassCard from '../components/GlassCard';
-import Animated, { FadeInUp } from 'react-native-reanimated';
-import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
 const { width } = Dimensions.get('window');
 
@@ -234,7 +233,7 @@ const LoginScreen = ({ navigation }: any) => {
               </View>
 
               <View className="mt-8 items-center">
-                
+
               </View>
               </GlassCard>
             </Animated.View>

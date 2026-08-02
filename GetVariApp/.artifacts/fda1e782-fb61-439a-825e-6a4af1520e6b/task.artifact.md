@@ -1,0 +1,6 @@
+- [/] Fix Keyboard Visibility (Android)
+    - [ ] Update `KeyboardAvoidingView` behavior and offset
+    - [ ] Adjust Modal content height logic
+- [ ] UI Stability Refinements
+    - [ ] Stabilize FAB and teaser bubble
+    - [ ] Smoothing Slide animation

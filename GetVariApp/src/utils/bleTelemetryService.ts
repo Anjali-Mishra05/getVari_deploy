@@ -1,4 +1,6 @@
 import { SensorData, ConnectionState } from '../types';
+import { supabase } from '../services/SupabaseClient';
+import { AuthService } from '../services/AuthService';
 
 export interface BLEDevicePayload {
   heartRate: number;
@@ -83,6 +85,7 @@ export class BLETelemetryService {
         batteryLevel: this.simulatedBattery
       });
 
+      this.saveDeviceToSupabase(deviceName, deviceId, this.simulatedBattery);
       this.startMockTelemetryStream(mockDeviceType);
       return;
     }
@@ -122,6 +125,8 @@ export class BLETelemetryService {
         batteryLevel: 100 // Updated via characteristics
       });
 
+      this.saveDeviceToSupabase(this.device.name || 'GetVari Device', this.device.id, 100);
+
     } catch (err: any) {
       this.emit('status', 'disconnected');
       throw err;
@@ -141,6 +146,25 @@ export class BLETelemetryService {
     this.characteristic = null;
     this.isMockMode = false;
     this.emit('status', 'disconnected');
+  }
+
+  private async saveDeviceToSupabase(name: string, deviceId: string, battery: number) {
+    try {
+      const userId = await AuthService.getCurrentUserId();
+      if (!userId) return;
+
+      await supabase
+        .from('getvari_devices')
+        .upsert({
+          user_id: userId,
+          device_id: deviceId,
+          name: name,
+          battery_level: battery,
+          last_synced: new Date().toISOString(),
+        });
+    } catch (error) {
+      console.error('Error saving device to Supabase:', error);
+    }
   }
 
   // Handle characteristic notification packets
