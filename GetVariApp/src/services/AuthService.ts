@@ -3,7 +3,8 @@ import * as Keychain from 'react-native-keychain';
 import { Platform } from 'react-native';
 
 // Use your local IP for physical device testing
-const BACKEND_URL = Platform.OS === 'android' ? 'http://10.149.145.52:3000' : 'http://localhost:3000';
+// Fallback to localhost if not specified in .env
+const BACKEND_URL = process.env.BACKEND_URL || (Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000');
 
 export class AuthService {
   /**
