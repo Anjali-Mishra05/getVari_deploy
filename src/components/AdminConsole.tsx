@@ -469,7 +469,7 @@ export default function AdminConsole() {
   const upgradeFirmware = (userId: string, userName: string) => {
     addLog(`Initiating OTA firmware compilation for ${userName}'s hardware...`, 'info');
     setUsersData(prev => prev.map(u => u.id === userId ? { ...u, firmwareVersion: 'v1.4.2 (Updating...)' } : u));
-    
+
     setTimeout(() => {
       setUsersData(prev => prev.map(u => u.id === userId ? { ...u, firmwareVersion: 'v1.4.2', batteryLevel: Math.max(0, u.batteryLevel - 3) } : u));
       addLog(`OTA Firmware installation successful on ${userName}'s device. Re-negotiated BLE sync.`, 'success');
@@ -683,7 +683,7 @@ export default function AdminConsole() {
                 {/* Risk Filter */}
                 <div className="flex items-center gap-2 bg-neutral-950/60 border border-white/10 px-3 py-1.5 rounded-xl">
                   <Filter className="w-3.5 h-3.5 text-neutral-400" />
-                  <select 
+                  <select
                     value={riskFilter}
                     onChange={(e) => setRiskFilter(e.target.value)}
                     className="bg-transparent text-xs text-neutral-300 border-none outline-none cursor-pointer"
@@ -699,7 +699,7 @@ export default function AdminConsole() {
                 {/* Workload Filter */}
                 <div className="flex items-center gap-2 bg-neutral-950/60 border border-white/10 px-3 py-1.5 rounded-xl">
                   <Sliders className="w-3.5 h-3.5 text-neutral-400" />
-                  <select 
+                  <select
                     value={workloadFilter}
                     onChange={(e) => setWorkloadFilter(e.target.value)}
                     className="bg-transparent text-xs text-neutral-300 border-none outline-none cursor-pointer"
@@ -735,7 +735,7 @@ export default function AdminConsole() {
                       </tr>
                     ) : (
                       filteredUsers.map(u => (
-                        <tr 
+                        <tr
                           key={u.id}
                           className="border-b border-white/5 hover:bg-white/3 transition cursor-pointer"
                           onClick={() => setSelectedUser(u)}
@@ -912,7 +912,7 @@ export default function AdminConsole() {
                         </span>
                       </div>
                       <p className="text-[10px] text-neutral-400">Heavy heart strain detected at {u.heartRate} bpm. Deficit is severe.</p>
-                      <button 
+                      <button
                         onClick={() => setSelectedUser(u)}
                         className="w-full text-center text-[10px] bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500 hover:text-white py-1.5 rounded-lg transition font-mono cursor-pointer"
                       >
@@ -938,7 +938,7 @@ export default function AdminConsole() {
                         </span>
                       </div>
                       <p className="text-[10px] text-neutral-400">Target is {u.targetDailyMl}ml. User has logged minimal fluid intake despite active workload.</p>
-                      <button 
+                      <button
                         onClick={() => setSelectedUser(u)}
                         className="w-full text-center text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500 hover:text-white py-1.5 rounded-lg transition font-mono cursor-pointer"
                       >
@@ -964,7 +964,7 @@ export default function AdminConsole() {
                         </span>
                       </div>
                       <p className="text-[10px] text-neutral-400">Device mac sequenceMAC_{u.id}_F8 has lost GATT streaming sync.</p>
-                      <button 
+                      <button
                         onClick={() => setSelectedUser(u)}
                         className="w-full text-center text-[10px] bg-neutral-800 text-neutral-300 hover:bg-neutral-700 py-1.5 rounded-lg transition font-mono cursor-pointer border border-white/5"
                       >
@@ -982,11 +982,11 @@ export default function AdminConsole() {
         {activeTab === 'analytics' && (
           <div className="space-y-6 animate-fadeIn">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              
+
               {/* Analytics Card 1: Hydration Risk Distribution (pure-CSS visual representation) */}
               <div className="glass rounded-3xl p-6 border border-white/10 space-y-5">
                 <h3 className="text-sm font-extrabold text-neutral-200 uppercase tracking-wider">Hydration Risk Distribution</h3>
-                
+
                 <div className="flex items-end justify-between h-40 gap-3 pt-6 border-b border-white/10 px-2">
                   {/* Category bars representing users count */}
                   <div className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
@@ -1006,7 +1006,7 @@ export default function AdminConsole() {
                     <span className="text-[9px] font-mono text-neutral-400">Critical</span>
                   </div>
                 </div>
-                
+
                 <div className="text-[11px] text-neutral-400 leading-relaxed text-center italic">
                   Fleet status shows a cluster of hydrated office profiles and high-risk field workout groups.
                 </div>
@@ -1015,7 +1015,7 @@ export default function AdminConsole() {
               {/* Analytics Card 2: Cumulative Daily Water Intake Trend (Hourly) */}
               <div className="glass rounded-3xl p-6 border border-white/10 space-y-5">
                 <h3 className="text-sm font-extrabold text-neutral-200 uppercase tracking-wider">Water Intake Trends (Hourly)</h3>
-                
+
                 <div className="flex items-end justify-between h-40 gap-2 pt-6 border-b border-white/10 px-2">
                   {[
                     { hr: '08:00', pct: '20%', vol: '1.2L' },
@@ -1040,7 +1040,7 @@ export default function AdminConsole() {
               {/* Analytics Card 3: Exertion vs Hydration Correlation */}
               <div className="glass rounded-3xl p-6 border border-white/10 space-y-5">
                 <h3 className="text-sm font-extrabold text-neutral-200 uppercase tracking-wider">Exertion vs Risk Correlation</h3>
-                
+
                 {/* 2D Grid Plot visual overlay using absolute divs */}
                 <div className="h-40 border-l border-b border-white/10 relative px-2">
                   <span className="absolute bottom-1 left-2 text-[8px] text-neutral-400 uppercase font-mono tracking-wider">Low Exertion</span>
@@ -1070,10 +1070,10 @@ export default function AdminConsole() {
           <div className="fixed inset-0 bg-neutral-950/80 backdrop-blur-sm z-50 flex justify-end animate-fadeIn">
             {/* Click outside to close */}
             <div className="flex-1" onClick={() => setSelectedUser(null)}></div>
-            
+
             <div className="w-full max-w-xl bg-neutral-900 border-l border-white/10 h-full p-6 overflow-y-auto space-y-6 shadow-2xl flex flex-col justify-between animate-slideIn">
               <div className="space-y-6">
-                
+
                 {/* Drawer Header */}
                 <div className="flex justify-between items-center border-b border-white/5 pb-4">
                   <div>
@@ -1081,8 +1081,8 @@ export default function AdminConsole() {
                     <h2 className="text-xl font-extrabold text-white mt-0.5">{selectedUser.name}</h2>
                     <span className="text-[10px] font-mono text-neutral-500">MAC ID: MAC_{selectedUser.id}_F8</span>
                   </div>
-                  
-                  <button 
+
+                  <button
                     onClick={() => setSelectedUser(null)}
                     className="p-2 bg-white/5 hover:bg-white/10 rounded-xl transition border border-white/5 cursor-pointer"
                   >
@@ -1146,7 +1146,7 @@ export default function AdminConsole() {
                 {/* State Segment: Live Sensor Telemetry Feed */}
                 <div className="bg-neutral-950/60 p-5 rounded-2xl border border-white/5 space-y-4">
                   <span className="text-[10px] font-mono uppercase text-neutral-400 block border-b border-white/5 pb-2">Active Sensor Feeds</span>
-                  
+
                   <div className="grid grid-cols-3 gap-2 text-center">
                     <div className="bg-neutral-900/60 p-3 rounded-xl">
                       <span className="text-[9px] text-neutral-500 uppercase block">Heart rate</span>
@@ -1177,7 +1177,7 @@ export default function AdminConsole() {
                 {/* Associated Hardware Node Status */}
                 <div className="bg-neutral-950/60 p-5 rounded-2xl border border-white/5 space-y-3">
                   <span className="text-[10px] font-mono uppercase text-neutral-400 block border-b border-white/5 pb-2">Carrier Telemetry node status</span>
-                  
+
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-neutral-400">Firmware Build</span>
                     <span className="text-white font-mono font-bold">{selectedUser.firmwareVersion}</span>
@@ -1212,12 +1212,12 @@ export default function AdminConsole() {
                   onClick={() => {
                     const randomMl = [250, 400, 500][Math.floor(Math.random() * 3)];
                     addLog(`Manual Admin Override: Injected fluid intake (+${randomMl}ml) for ${selectedUser.name}.`, 'success');
-                    
+
                     setUsersData(prev => prev.map(u => {
                       if (u.id === selectedUser.id) {
                         const newWater = u.waterIntakeMl + randomMl;
                         const newRisk = Math.max(0, u.riskScore - Math.round(randomMl * 0.08));
-                        const newStatus = 
+                        const newStatus =
                           newRisk <= 25 ? 'Hydrated' as const :
                           newRisk <= 50 ? 'Mild Risk' as const :
                           newRisk <= 75 ? 'High Risk' as const : 'Critical' as const;
