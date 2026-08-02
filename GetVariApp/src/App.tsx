@@ -14,6 +14,8 @@ import { runHydrationRiskSolver, calculateRecoveryEstimation, calculatePredicted
 import Onboarding from './components/Onboarding';
 import DeviceSimulator from './components/DeviceSimulator';
 import { BLETelemetryService } from './utils/bleTelemetryService';
+import { supabase } from './services/SupabaseClient';
+import { AuthService } from './services/AuthService';
 
 const bleService = new BLETelemetryService();
 import { 
@@ -243,14 +245,7 @@ export default function App() {
   const [isVerifyingLogin, setIsVerifyingLogin] = useState<boolean>(false);
 
   // Settings / Core state
-  const [profile, setProfile] = useState<UserProfile>(() => {
-    try {
-      const saved = localStorage.getItem('getvari_profile');
-      return saved ? JSON.parse(saved) : INITIAL_MOCK_PROFILE;
-    } catch {
-      return INITIAL_MOCK_PROFILE;
-    }
-  });
+  const [profile, setProfile] = useState<UserProfile>(INITIAL_MOCK_PROFILE);
 
   // Navigation tab state
   const [activeTab, setActiveTab] = useState<'dashboard' | 'analytics' | 'sensors' | 'settings'>('dashboard');
@@ -266,27 +261,48 @@ export default function App() {
   const [deviceConnection, setDeviceConnection] = useState<ConnectionState>('connected');
   const [hoursSinceDrink, setHoursSinceDrink] = useState<number>(0.8);
   const [effectiveHoursSinceDrink, setEffectiveHoursSinceDrink] = useState<number>(0.8);
-  const [waterLogs, setWaterLogs] = useState<HydrationLog[]>(() => {
-    try {
-      const saved = localStorage.getItem('getvari_water_logs');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.error('Error loading water logs:', e);
-    }
-    const defaultLogs: HydrationLog[] = [
-      { id: 'log_1', timestamp: new Date(Date.now() - 3600000 * 3).toISOString(), amountMl: 400, source: 'manual' },
-      { id: 'log_2', timestamp: new Date(Date.now() - 3600000 * 1.2).toISOString(), amountMl: 250, source: 'smart_cap' }
-    ];
-    return defaultLogs;
-  });
+  const [waterLogs, setWaterLogs] = useState<HydrationLog[]>([]);
 
   useEffect(() => {
+    fetchSupabaseData();
+  }, [isLoggedIn]);
+
+  const fetchSupabaseData = async () => {
+    if (!isLoggedIn) return;
     try {
-      localStorage.setItem('getvari_water_logs', JSON.stringify(waterLogs));
+      // For web, AuthService might need a different token retrieval or we use supabase.auth directly
+      const { data: { user } } = await supabase.auth.getUser();
+      const userId = user?.id || '00000000-0000-0000-0000-000000000000'; // Demo fallback for web too
+
+      // Fetch Profile
+      const { data: profileRow } = await supabase
+        .from('getvari_profiles')
+        .select('profile')
+        .eq('id', userId)
+        .single();
+
+      if (profileRow?.profile) {
+        setProfile(profileRow.profile);
+      }
+
+      // Fetch Logs
+      const { data: logsData } = await supabase
+        .from('getvari_hydration_logs')
+        .select('*')
+        .order('timestamp', { ascending: false });
+
+      if (logsData) {
+        setWaterLogs(logsData.map(l => ({
+          id: l.id,
+          timestamp: l.timestamp,
+          amountMl: l.amount_ml,
+          source: l.source as any
+        })));
+      }
     } catch (e) {
-      console.error('Error saving water logs:', e);
+      console.error('Supabase fetch failed:', e);
     }
-  }, [waterLogs]);
+  };
 
   // Connected integration wearables representation
   const [connectedDevices, setConnectedDevices] = useState<WearableDevice[]>([
@@ -520,14 +536,40 @@ export default function App() {
   }, [isOnboarded]);
 
   // Log new fluid consumption manually
-  const logDrink = (amountMl: number) => {
-    const newLog: HydrationLog = {
-      id: generateUniqueId('log'),
-      timestamp: new Date().toISOString(),
-      amountMl,
-      source: 'manual',
-    };
-    setWaterLogs((prev) => [newLog, ...prev]);
+  const logDrink = async (amountMl: number) => {
+    const timestamp = new Date().toISOString();
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const userId = user?.id || '00000000-0000-0000-0000-000000000000';
+
+      const newLog = {
+        id: `log_${userId}_${Date.now()}`,
+        timestamp,
+        amount_ml: amountMl,
+        source: 'manual',
+      };
+
+      await supabase.from('getvari_hydration_logs').insert(newLog);
+
+      const logItem: HydrationLog = {
+        id: newLog.id,
+        timestamp,
+        amountMl,
+        source: 'manual',
+      };
+      setWaterLogs((prev) => [logItem, ...prev]);
+    } catch (e) {
+      console.error('Failed to log to Supabase:', e);
+      // Fallback local update
+      const fallbackLog: HydrationLog = {
+        id: generateUniqueId('log'),
+        timestamp,
+        amountMl,
+        source: 'manual',
+      };
+      setWaterLogs((prev) => [fallbackLog, ...prev]);
+    }
     
     // Add logged liquid volume directly to the stomach absorption channel
     setStomachVolume((prev) => Math.min(1200, prev + amountMl));

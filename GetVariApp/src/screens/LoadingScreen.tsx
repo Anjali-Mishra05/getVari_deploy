@@ -1,5 +1,6 @@
     import React, { useEffect } from 'react';
 import { View, SafeAreaView, Text, Platform, Dimensions } from 'react-native';
+import { supabase } from '../services/SupabaseClient';
 import Animated, {
   FadeIn,
   FadeOut,
@@ -42,11 +43,37 @@ const LoadingDot = ({ delay }: { delay: number }) => {
 
 const LoadingScreen = ({ navigation }: any) => {
   useEffect(() => {
-    const timer = setTimeout(() => {
-      navigation.replace('Login');
-    }, 4500);
-    return () => clearTimeout(timer);
+    checkSession();
   }, [navigation]);
+
+  const checkSession = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      // Artificial delay to show the nice loading animation
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      if (session) {
+        // Check if profile exists
+        const { data: profile } = await supabase
+          .from('getvari_profiles')
+          .select('id')
+          .eq('id', session.user.id)
+          .single();
+
+        if (profile) {
+          navigation.replace('Home');
+        } else {
+          navigation.replace('Onboarding');
+        }
+      } else {
+        navigation.replace('Login');
+      }
+    } catch (error) {
+      console.error('Session check failed:', error);
+      navigation.replace('Login');
+    }
+  };
 
   return (
     <View className="flex-1 bg-[#01040a]">

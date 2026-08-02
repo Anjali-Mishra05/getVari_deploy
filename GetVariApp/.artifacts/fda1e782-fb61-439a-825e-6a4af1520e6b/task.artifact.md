@@ -1,4 +1,7 @@
-- [x] Limit build architectures in `android/gradle.properties`
-- [x] Run Gradle clean to free up space
-- [x] Verify build with limited architectures
-
+- [x] Update `OnboardingScreen.tsx` to correctly map and save all user inputs to Supabase.
+- [x] Update `HomeScreen.tsx` to display real data from the user profile.
+- [x] Add better error handling and logging for data persistence.
+- [x] Verify that selections like "High Strain" or "Elite / Hybrid" are correctly persisted.
+- [x] Generate unique session ID for Demo User in `AuthService.ts`
+- [x] Update `getCurrentUserId` to return the session-specific ID
+- [x] Verify multi-row persistence in Supabase

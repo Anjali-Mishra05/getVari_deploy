@@ -8,6 +8,7 @@ import {
   Dimensions,
   ScrollView,
   TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import {
   Waves,
@@ -19,7 +20,6 @@ import {
   Info,
   CircleAlert
 } from 'lucide-react-native';
-import GlassCard from '../components/GlassCard';
 import Animated, {
   FadeInRight,
   FadeOutLeft,
@@ -29,6 +29,10 @@ import Animated, {
   withSpring
 } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
+
+import GlassCard from '../components/GlassCard';
+import { supabase } from '../services/SupabaseClient';
+import { AuthService } from '../services/AuthService';
 
 const { width } = Dimensions.get('window');
 
@@ -97,17 +101,76 @@ const OnboardingScreen = ({ navigation }: any) => {
   const [medicalConditions, setMedicalConditions] = useState<string[]>([]);
 
   // State for Step 4
-  const [activityLevel, setActivityLevel] = useState('Moderate Load');
+  const [activityLevel, setActivityLevel] = useState('moderate');
 
   // State for Step 5
   const [isScanning, setIsScanning] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [isFinalizing, setIsFinalizing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step < totalSteps) {
       setStep(step + 1);
     } else {
-      navigation.replace('Home');
+      setIsFinalizing(true);
+      setErrorMsg('');
+      try {
+        const userId = await AuthService.getCurrentUserId();
+        console.log('[Supabase] Attempting to save profile for user:', userId);
+
+        if (userId) {
+          // Calculate target water intake
+          let targetMl = weight * 35;
+          if (activityLevel === 'active') targetMl += 600;
+          if (activityLevel === 'elite') targetMl += 1200;
+
+          if (medicalConditions.includes('diabetes')) targetMl += 450;
+          if (medicalConditions.includes('kidney')) targetMl -= 250;
+          if (medicalConditions.includes('hypertension')) targetMl += 150;
+
+          targetMl = Math.round(targetMl / 50) * 50;
+          targetMl = Math.min(4500, Math.max(1500, targetMl));
+
+          const profileData = {
+            age,
+            gender,
+            weightKg: weight,
+            selectedCity,
+            medicalConditions,
+            activityLevel,
+            targetDailyMl: targetMl,
+          };
+
+          console.log('[Supabase] Profile data to be saved:', profileData);
+
+          const { data, error } = await supabase
+            .from('getvari_profiles')
+            .upsert({
+              id: userId,
+              profile: profileData,
+              updated_at: new Date().toISOString(),
+            })
+            .select();
+
+          if (error) {
+            console.error('[Supabase] Profile save error:', error.message);
+            setErrorMsg('System busy. Syncing locally...');
+            // Still allow navigation so they aren't stuck
+            setTimeout(() => navigation.replace('Home'), 1500);
+            return;
+          }
+          console.log('[Supabase] Profile saved successfully:', data);
+        } else {
+          console.warn('[Supabase] No User ID found during onboarding finalization.');
+        }
+        navigation.replace('Home');
+      } catch (error) {
+        console.error('[Supabase] Fatal error in handleNext onboarding:', error);
+        navigation.replace('Home');
+      } finally {
+        setIsFinalizing(false);
+      }
     }
   };
 
@@ -254,6 +317,12 @@ const OnboardingScreen = ({ navigation }: any) => {
                       Select any active diagnoses. GetVari dynamically tunes cardiovascular fluid strain thresholds and sweat predictions accordingly.
                     </Text>
 
+                    {errorMsg ? (
+                      <View className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl mb-4">
+                        <Text className="text-red-400 text-[10px] font-bold text-center uppercase tracking-wider">{errorMsg}</Text>
+                      </View>
+                    ) : null}
+
                     {[
                       { id: 'diabetes', title: 'Diabetes (Type I/II)', desc: 'Heightened systemic glucose requires higher osmotic dilution. (+450ml adaptive cushion)' },
                       { id: 'hypertension', title: 'Hypertension / High BP', desc: 'Heart pressure feedback active. Micro-hydration bursts help reduce blood vessel resistance.' },
@@ -290,21 +359,21 @@ const OnboardingScreen = ({ navigation }: any) => {
                     <Text className="text-[10px] text-neutral-500 font-mono uppercase tracking-[2px] mb-4">Daily Activity Strain</Text>
 
                     {[
-                      { title: 'Sedentary', desc: 'Minimal physical exertion. Remote work style.' },
-                      { title: 'Light Active', desc: 'Slight exertion. Light walks or stretching/yoga.' },
-                      { title: 'Moderate Load', desc: 'Moderate physical load, gym session 3-4x/week.' },
-                      { title: 'High Strain', desc: 'Daily athletic strain, high sweating baseline.' },
-                      { title: 'Elite / Hybrid', desc: 'Double sessions daily or intensive endurance sports.' },
+                      { id: 'sedentary', title: 'Sedentary', desc: 'Minimal physical exertion. Remote work style.' },
+                      { id: 'light', title: 'Light Active', desc: 'Slight exertion. Light walks or stretching/yoga.' },
+                      { id: 'moderate', title: 'Moderate Load', desc: 'Moderate physical load, gym session 3-4x/week.' },
+                      { id: 'active', title: 'High Strain', desc: 'Daily athletic strain, high sweating baseline.' },
+                      { id: 'elite', title: 'Elite / Hybrid', desc: 'Double sessions daily or intensive endurance sports.' },
                     ].map((opt) => (
                       <TouchableOpacity
-                        key={opt.title}
-                        onPress={() => setActivityLevel(opt.title)}
+                        key={opt.id}
+                        onPress={() => setActivityLevel(opt.id)}
                         activeOpacity={0.7}
                         className={`w-full p-4 rounded-2xl border mb-3 ${
-                          activityLevel === opt.title ? 'bg-[#00f2fe]/5 border-[#00f2fe]/50 shadow-lg' : 'bg-white/[0.02] border-white/5'
+                          activityLevel === opt.id ? 'bg-[#00f2fe]/5 border-[#00f2fe]' : 'bg-white/5 border-white/5'
                         }`}
                       >
-                        <Text className={`font-bold text-[14px] mb-0.5 ${activityLevel === opt.title ? 'text-[#00f2fe]' : 'text-white'}`}>{opt.title}</Text>
+                        <Text className={`font-bold text-[14px] mb-0.5 ${activityLevel === opt.id ? 'text-[#00f2fe]' : 'text-white'}`}>{opt.title}</Text>
                         <Text className="text-neutral-500 text-[10px]">{opt.desc}</Text>
                       </TouchableOpacity>
                     ))}
@@ -347,8 +416,11 @@ const OnboardingScreen = ({ navigation }: any) => {
                             <Text className="text-[9px] text-[#00f2fe] font-mono">SCANNING CARRIER WAVE...</Text>
                             <Text className="text-[9px] text-neutral-500 font-mono">RSSI -42 dBm</Text>
                           </View>
-                          <View className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
-                            <Animated.View className="h-full bg-[#00f2fe] w-2/3" />
+                          <View className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden mt-2">
+                            <View
+                              style={{ width: '65%' }}
+                              className="h-full bg-[#00f2fe]"
+                            />
                           </View>
                         </View>
                       )}
@@ -380,7 +452,8 @@ const OnboardingScreen = ({ navigation }: any) => {
                 <TouchableOpacity
                   onPress={handleNext}
                   activeOpacity={0.8}
-                  className={`${step === 1 ? 'w-full' : 'flex-[2]'} py-4 bg-[#00f2fe] rounded-[22px] flex-row items-center justify-center shadow-2xl`}
+                  disabled={isFinalizing}
+                  className={`${step === 1 ? 'w-full' : 'flex-[2]'} py-4 bg-[#00f2fe] rounded-[22px] flex-row items-center justify-center shadow-2xl ${isFinalizing ? 'opacity-50' : ''}`}
                   style={{
                     shadowColor: '#00f2fe',
                     shadowOffset: { width: 0, height: 6 },
@@ -389,10 +462,16 @@ const OnboardingScreen = ({ navigation }: any) => {
                     elevation: 10,
                   }}
                 >
-                  <Text className="text-[#020617] text-[13px] font-black uppercase tracking-wider mr-1">
-                    {step === totalSteps ? 'Finalize connection' : 'Next'}
-                  </Text>
-                  <ChevronRight color="#020617" size={18} strokeWidth={3} />
+                  {isFinalizing ? (
+                    <ActivityIndicator color="#020617" size="small" />
+                  ) : (
+                    <>
+                      <Text className="text-[#020617] text-[13px] font-black uppercase tracking-wider mr-1">
+                        {step === totalSteps ? 'Finalize connection' : 'Next'}
+                      </Text>
+                      <ChevronRight color="#020617" size={18} strokeWidth={3} />
+                    </>
+                  )}
                 </TouchableOpacity>
               </View>
 

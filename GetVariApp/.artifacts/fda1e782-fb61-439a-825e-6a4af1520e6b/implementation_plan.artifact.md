@@ -1,31 +1,30 @@
-# Implementation Plan - Fix "No Space Left on Device" Build Failure
+# Implementation Plan - Dynamic Demo User Sessions
 
-The build failed because your disk is nearly full (only 1.3GB available). Android builds, especially with React Native's New Architecture, require significant disk space for intermediate artifacts and native libraries.
+The user wants every login session using the demo code `884200` to create a brand new, unique record in Supabase instead of updating the same fixed "Demo" row.
 
 ## User Review Required
 
-> [!CAUTION]
-> Your machine has only **1.3GB of free space**. This is not enough for stable Android development. You should try to free up at least **5-10GB** by deleting unused files or clearing your Trash.
-
-> [!IMPORTANT]
-> I am proposing to limit the build to a single architecture (**arm64-v8a**). This will significantly reduce disk usage and compilation time.
+> [!WARNING]
+> With this change, every time you log out and log back in with the demo code, you will start with a **fresh account**. You will not see your previous logs or profile because a new unique ID will be generated for that session. This matches your request to have "various IDs" in the database.
 
 ## Proposed Changes
 
-### Build Configuration
+### 1. Authentication Service
 
-#### [MODIFY] [android/gradle.properties](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/android/gradle.properties)
-- Change `reactNativeArchitectures` from `armeabi-v7a,arm64-v8a,x86,x86_64` to `arm64-v8a`.
+#### [MODIFY] [src/services/AuthService.ts](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/services/AuthService.ts)
+- Update `verifyOtp`: If the bypass code `884200` is used, generate a new random UUID (or unique timestamp-based ID) and store it as the `demoUserId` in the Keychain session.
+- Update `getCurrentUserId`: Retrieve and return this session-specific unique ID instead of the fixed `0000...` ID.
 
-### Cleanup
+### 2. Verification
 
-- Run `./gradlew clean` to remove existing build artifacts and free up some space immediately.
+- Every "Onboarding" completion and every "Log Drink" will now be associated with the unique ID generated at the start of that specific login session.
 
 ## Verification Plan
 
-### Automated Tests
-- Run `./gradlew clean`
-- Run `npm run android` and verify it finishes much faster and doesn't run out of space.
-
 ### Manual Verification
-- Check disk space after the cleanup to see how much was recovered.
+1. Open the app and log in with `884200`.
+2. Complete onboarding and log a drink.
+3. Log out of the app (or reset it).
+4. Log in again with `884200`.
+5. Complete onboarding with different values.
+6. **Check Supabase**: Verify that two distinct rows now exist in `getvari_profiles` with two different IDs.
