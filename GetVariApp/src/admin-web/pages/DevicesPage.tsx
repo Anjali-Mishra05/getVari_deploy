@@ -14,7 +14,6 @@ const DevicesPage: React.FC = () => {
 
       <DeviceTable
         users={mockUsers}
-        onPing={(name) => console.log('Pinged', name)}
         onUpdate={(id, name) => console.log('Updating', name)}
       />
     </div>

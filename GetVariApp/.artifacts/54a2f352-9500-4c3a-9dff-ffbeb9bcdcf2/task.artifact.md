@@ -1,0 +1,2 @@
+- [x] Add `NativeModules` and `Platform` to `mock-react-native.ts`
+- [x] Verify build by advising user to run `npm run dev`

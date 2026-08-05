@@ -4,10 +4,13 @@ import UserTable from '../components/users/UserTable';
 import { mockUsers } from '../data/mockData';
 import { User } from '../types';
 
+import UserDetailDrawer from '../components/users/UserDetailDrawer';
+
 const UsersPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [riskFilter, setRiskFilter] = useState('all');
   const [workloadFilter, setWorkloadFilter] = useState('all');
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
 
   const filteredUsers = useMemo(() => {
     return mockUsers.filter(user => {
@@ -24,6 +27,10 @@ const UsersPage: React.FC = () => {
     });
   }, [searchQuery, riskFilter, workloadFilter]);
 
+  const handleUserSelect = (user: User) => {
+    setSelectedUser(user);
+  };
+
   return (
     <div className="space-y-6">
       <UserFilters
@@ -37,8 +44,15 @@ const UsersPage: React.FC = () => {
 
       <UserTable
         users={filteredUsers}
-        onUserClick={(user) => console.log('Selected User:', user.name)}
+        onUserClick={handleUserSelect}
       />
+
+      {selectedUser && (
+        <UserDetailDrawer
+          user={selectedUser}
+          onClose={() => setSelectedUser(null)}
+        />
+      )}
     </div>
   );
 };

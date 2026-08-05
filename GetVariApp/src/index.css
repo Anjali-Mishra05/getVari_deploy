@@ -1,4 +1,78 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Outfit', sans-serif;
+}
+
+html,
+body,
+#admin-web-root {
+  min-height: 100%;
+  font-family: 'Outfit', sans-serif !important;
+  background-color: #02050e;
+  color: #ffffff;
+}
+
+body {
+  margin: 0;
+}
+
+* {
+  font-family: 'Outfit', sans-serif !important;
+}
+
+.font-sans {
+  font-family: 'Outfit', sans-serif !important;
+}
+
+.font-mono,
+code,
+pre,
+kbd,
+samp {
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* Drawer specific styles to match prototype */
+.overlay-open .user-drawer-root + * {
+  /* ensure content behind is dimmed - handled by overlay; keep for safety */
+}
+
+/* Target the scrollable drawer area for a thinner themed scrollbar */
+.user-drawer-root .scroll-area::-webkit-scrollbar {
+  width: 10px;
+}
+.user-drawer-root .scroll-area::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.06);
+}
+.user-drawer-root .scroll-area::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* For Firefox */
+.user-drawer-root .scroll-area {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.08) rgba(0,0,0,0.06);
+}
+
+/* Hide the main page scrollbar while drawer is open (safer fallback) */
+.overlay-open ::-webkit-scrollbar {
+  width: 0px;
+  height: 0px;
+}
+.overlay-open {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
 
 @layer utilities {
   .glass {

@@ -1,24 +1,21 @@
-import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [react()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+        'react-native': path.resolve(__dirname, 'src/mock-react-native.ts'),
       },
     },
     build: {
       rollupOptions: {
         input: {
           main: path.resolve(__dirname, 'index.html'),
-          admin: path.resolve(__dirname, 'admin.html'),
           adminWeb: path.resolve(__dirname, 'admin-web.html'),
-          bleTest: path.resolve(__dirname, 'ble-test.html'),
-          guide: path.resolve(__dirname, 'guide.html'),
         },
       },
     },

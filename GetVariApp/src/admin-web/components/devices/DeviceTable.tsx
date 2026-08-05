@@ -6,11 +6,10 @@ import { User } from '../../types';
 
 interface DeviceTableProps {
   users: User[];
-  onPing: (name: string) => void;
   onUpdate: (id: string, name: string) => void;
 }
 
-const DeviceTable: React.FC<DeviceTableProps> = ({ users, onPing, onUpdate }) => {
+const DeviceTable: React.FC<DeviceTableProps> = ({ users, onUpdate }) => {
   return (
     <GlassCard className="p-0 overflow-hidden">
       <div className="overflow-x-auto">
@@ -70,12 +69,6 @@ const DeviceTable: React.FC<DeviceTableProps> = ({ users, onPing, onUpdate }) =>
                 </td>
                 <td className="p-6 text-right">
                   <div className="flex gap-2 justify-end">
-                    <button
-                      onClick={() => onPing(u.name)}
-                      className="bg-white/5 hover:bg-white/10 text-white font-mono text-[9px] font-bold px-3 py-2 rounded-lg border border-white/5 transition uppercase tracking-widest"
-                    >
-                      GATT Ping
-                    </button>
                     {u.firmwareVersion !== 'v1.4.2' && (
                       <button
                         onClick={() => onUpdate(u.id, u.name)}

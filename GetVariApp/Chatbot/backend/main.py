@@ -23,8 +23,10 @@ app.add_middleware(
 )
 
 # Supabase setup
-supabase_url: str = "https://ntuboicvzsoamwedtprg.supabase.co"
+supabase_url: str = os.getenv("SUPABASE_URL", "https://ntuboicvzsoamwedtprg.supabase.co")
 supabase_key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+if not supabase_key:
+    raise ValueError("SUPABASE_SERVICE_ROLE_KEY is required in .env")
 supabase: Client = create_client(supabase_url, supabase_key)
 
 JINA_API_KEY = os.getenv("JINA_API_KEY")

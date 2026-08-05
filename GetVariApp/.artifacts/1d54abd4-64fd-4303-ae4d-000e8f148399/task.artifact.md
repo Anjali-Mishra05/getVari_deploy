@@ -1,32 +1,4 @@
-- `[x]` Initialize project structure and entry points
-    - `[x]` Update `package.json` with scripts and dependencies
-    - `[x]` Install dependencies via `npm install`
-    - `[x]` Verify `vite.config.ts`
-    - `[x]` Verify `admin-web.html`
-- `[x]` Define Types and Mock Data
-    - `[x]` Create `src/admin-web/types/index.ts`
-    - `[x]` Create `src/admin-web/data/mockData.ts`
-- `[x]` Implement Shared UI Components (Independent)
-    - `[x]` `src/admin-web/components/shared/GlassCard.tsx`
-    - `[x]` `src/admin-web/components/shared/Button.tsx`
-    - `[x]` `src/admin-web/components/shared/Modal.tsx`
-    - `[x]` `src/admin-web/components/shared/Badge.tsx`
-    - `[x]` `src/admin-web/components/shared/Input.tsx`
-- `[x]` Implement Layout Components
-    - `[x]` `src/admin-web/components/layout/Navbar.tsx` (Converted from Sidebar)
-    - `[x]` `src/admin-web/components/layout/AdminLayout.tsx`
-- `[x]` Implement Individual Pages
-    - `[x]` `DashboardPage.tsx`
-    - `[x]` `UsersPage.tsx`
-    - `[x]` `DevicesPage.tsx`
-    - `[x]` `AlertsPage.tsx`
-    - `[x]` `AnalyticsPage.tsx`
-    - `[x]` `FeedbackPage.tsx` (New)
-- `[x]` Final Assembly
-    - `[x]` `src/admin-web/App.tsx`
-    - `[x]` `src/admin-web/main.tsx`
-- `[x]` Verification and Walkthrough
-- `[/]` Convert vertical Sidebar to horizontal Navbar
-    - `[ ]` Create `src/admin-web/components/layout/Navbar.tsx` with horizontal layout and prototype styling
-    - `[ ]` Update `src/admin-web/components/layout/AdminLayout.tsx` to use `Navbar`
-    - `[ ]` Remove `Sidebar.tsx` and `Header.tsx`
+- `[/]` Add and install `react-native-ble-plx` and `react-native-permissions`
+- `[ ]` Configure Android permissions in `AndroidManifest.xml`
+- `[ ]` Implement BLE logic and update UI in `OnboardingScreen.tsx`
+- `[ ]` Verify build

@@ -1,5 +1,5 @@
 numpy==1.26.4
-langchain-core==0.3.86
+langchain-core==1.5.3
 langgraph==1.2.10
 langchain-google-genai==4.3.2
 langchain-community==0.4.2
@@ -9,9 +9,7 @@ fastapi
 uvicorn
 supabase
 python-dotenv
-axios
 requests
 unstructured
 python-docx
 jinja2
-ws

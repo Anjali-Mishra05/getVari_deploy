@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { addOverlay, removeOverlay } from '../../utils/overlayManager';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -21,13 +22,9 @@ const Modal: React.FC<ModalProps> = ({
   maxWidth = 'max-w-2xl'
 }) => {
   useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = 'unset';
-    }
+    if (isOpen) addOverlay();
     return () => {
-      document.body.style.overflow = 'unset';
+      if (isOpen) removeOverlay();
     };
   }, [isOpen]);
 

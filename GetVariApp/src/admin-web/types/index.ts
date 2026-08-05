@@ -26,6 +26,7 @@ export interface User {
   targetDailyMl: number;
   riskHistory: number[];
   waterHistory: { time: string; amount: number }[];
+  phone?: string;
 }
 
 export interface Alert {
@@ -62,4 +63,34 @@ export interface DashboardStats {
   avgRisk: number;
   critical: number;
   totalWater: number;
+}
+
+// Generic activity/event model for User Journey / audit trail
+export type ActorType = 'User' | 'AI' | 'System' | 'Admin';
+export type EventCategory =
+  | 'Auth'
+  | 'Onboarding'
+  | 'Profile'
+  | 'Device'
+  | 'Telemetry'
+  | 'Intake'
+  | 'Notification'
+  | 'AI'
+  | 'Setting'
+  | 'Error'
+  | 'Other';
+
+export interface ActivityEvent {
+  eventId: string;
+  userId: string;
+  eventType: string; // e.g. 'login', 'ble_connected', 'water_intake_added'
+  category: EventCategory;
+  actor: ActorType;
+  title: string;
+  description?: string;
+  oldValue?: any;
+  newValue?: any;
+  metadata?: Record<string, any>;
+  timestamp: string; // ISO
+  status?: 'success' | 'failed' | 'pending';
 }

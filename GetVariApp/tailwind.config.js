@@ -6,8 +6,8 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["System"],
-        mono: ["Menlo", "Courier", "monospace"],
+        sans: ["Outfit", "system-ui", "sans-serif"],
+        mono: ["JetBrains Mono", "Menlo", "Courier", "monospace"],
       },
       colors: {
         vari: {

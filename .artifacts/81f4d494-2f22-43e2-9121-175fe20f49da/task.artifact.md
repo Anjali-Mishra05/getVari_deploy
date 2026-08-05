@@ -1,7 +1,6 @@
-- [x] Create shared components (`BrandLogo`, `GlassCard`)
-- [x] Create Splash and Loading screens
-- [x] Redesign Login and OTP screens
-- [x] Port and optimize Onboarding screen for mobile
-- [x] Port and optimize Home/Dashboard screen for mobile
-- [x] Update `App.tsx` navigation stack and boot logic
-- [x] Final polishing and verification
+- [/] Define `FeedbackSubmission` interface and mock data
+- [/] Update `activeTab` state and navigation bar to include "Feedback"
+- [ ] Implement the Feedback tab layout (Search, Sorting, Table)
+- [ ] Implement the Feedback detail modal
+- [ ] Ensure all existing tabs (Dashboard, Users, etc.) are functional and pixel-perfect
+- [ ] Final verification of design and responsiveness
