@@ -12,17 +12,30 @@ import { signToken, verifyFirebaseToken } from './src/utils/auth';
 import { diag, DiagConsoleLogger, DiagLogLevel } from '@opentelemetry/api';
 
 // Initialize Firebase Admin
-if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    }),
-  });
-  console.log('Firebase Admin initialized successfully');
-} else {
-  console.warn('Firebase Admin credentials missing. Auth routes will operate in limited mode.');
+try {
+  const fs = await import('fs');
+  const serviceAccountPath = path.resolve(process.cwd(), 'service-account.json');
+  if (fs.existsSync(serviceAccountPath)) {
+    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+
+    // Ensure private key is correctly formatted with real newlines
+    if (serviceAccount.private_key) {
+      serviceAccount.private_key = serviceAccount.private_key
+        .replace(/\\n/g, '\n')
+        .replace(/[\u000B\u000C\u0085\u2028\u2029]/g, '')
+        .trim();
+    }
+
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    console.log('Firebase Admin initialized successfully from service-account.json');
+  } else {
+    console.warn('service-account.json not found. Auth routes will operate in limited mode.');
+  }
+} catch (error) {
+  console.warn('Firebase Admin initialization failed:', error.message);
+  console.warn('Auth routes will operate in limited mode.');
 }
 
 // Enable OpenTelemetry diagnostic logging

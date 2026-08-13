@@ -1,6 +1,5 @@
-- [/] Fix Keyboard Visibility (Android)
-    - [ ] Update `KeyboardAvoidingView` behavior and offset
-    - [ ] Adjust Modal content height logic
-- [ ] UI Stability Refinements
-    - [ ] Stabilize FAB and teaser bubble
-    - [ ] Smoothing Slide animation
+- [ ] Update `@react-native-firebase/app` to `^26.1.0` in `package.json`
+- [ ] Update `@react-native-firebase/auth` to `^26.1.0` in `package.json`
+- [ ] Run `npm install`
+- [ ] Run `cd android && ./gradlew clean`
+- [ ] Verify build with `npx react-native run-android`

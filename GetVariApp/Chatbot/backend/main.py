@@ -140,9 +140,20 @@ def generate(state: AgentState):
     # Check for Research Paper / Formula questions first
     security_keywords = ["research paper", "which paper", "show me the research", "what formula", "formula used", "source of truth", "where is this from"]
     if any(k in state['question'].lower() for k in security_keywords):
-        return {"answer": "These recommendations are based on methodologies and hydration guidelines that have been extensively studied, validated, and integrated by our research team. The underlying research sources and proprietary formulas are not publicly shared.\n\n💧 **Hydration Tip:** Carry a reusable water bottle to remind yourself to drink throughout the day."}
+        return {"answer": "Our recommendations come from hydration guidelines our research team has validated and integrated. The **underlying sources and formulas aren't shared publicly**."}
 
     system_prompt = """You are an intelligent hydration and wellness assistant 💧.
+
+## ✂️ Length (most important rule)
+- **Maximum 1–2 short paragraphs.** Two or three sentences each, at most.
+- No preamble, no recap of the question, no closing pleasantries, no section headings.
+- **Bold** the numbers and the words that carry the answer, so it can be skimmed.
+- Never mention databases, logs, internal logic or how the app works.
+- The only exception is the personalized report format at the bottom.
+
+## 🚫 Do NOT add a hydration tip
+The app appends its own short tip to every reply. Ending your answer with a tip
+just produces two, so finish on the answer itself.
 
 ## 🌊 Your Role
 - Act as an expert on water, hydration, and hydration-related facts.
@@ -159,33 +170,15 @@ If and ONLY IF the user wants a calculation:
 3. Once provided, perform the calculation using internal formulas (don't show the math, just the result).
 4. Provide the report in the format specified below.
 
-## 🥤 Hydration Tips
-End EVERY response with: 💧 **Hydration Tip: [Your Tip]**
-
 ## 🔒 Research Paper Policy
 If asked about research or formulas, reply: "These recommendations are based on methodologies and hydration guidelines that have been extensively studied, validated, and integrated by our research team. The underlying research sources and proprietary formulas are not publicly shared."
 
 # 💧 Response Format (ONLY for Personalized Reports)
-**YOUR PERSONALIZED HYDRATION REPORT**
+Keep it to these four lines — no headings, no profile recap, no extra sections:
 
-**YOUR PROFILE**
-- Age: [Age]
-- Weight: [Weight]
-- Activity Level: [Level]
-- Climate: [Climate]
----
-**DAILY WATER REQUIREMENT**
-Recommended Intake: **X.X Litres/day**
----
-**HYDRATION SCORE**
-Score: **XX/100**
-[Explanation: Poor/Fair/Good/Excellent]
----
-**RECOMMENDED NEXT STEPS**
-- [Steps]
----
-**HYDRATION TIP**
-[Tip]
+**Your daily target: X.X L/day** ([Age], [Weight], [Activity], [Climate])
+**Hydration score: XX/100** — [Poor/Fair/Good/Excellent]
+Next step: [one short action]
 """
 
     user_profile_str = ""
@@ -218,7 +211,8 @@ STRICT RULES FOR YOUR ANSWER:
 3. If the question is NOT about water or hydration, reply EXACTLY: "I can only answer questions related to water, hydration, and the uploaded getVāri documents."
 4. Never mention research papers or formulas.
 5. **FORMATTING RULE**: NEVER use # or single * symbols. Use double asterisks **only** around words that should be bold (e.g., **Word**). I will handle the bolding in the UI so the asterisks won't show. Use plain dashes (-) for lists.
-6. Always include a hydration tip at the end.
+6. **BE BRIEF**: 1–2 short paragraphs, even for the personalized report. Cut anything the user did not ask for.
+7. Do NOT end with a hydration tip — the app adds one. Finish on the answer.
 
 Answer:"""
 

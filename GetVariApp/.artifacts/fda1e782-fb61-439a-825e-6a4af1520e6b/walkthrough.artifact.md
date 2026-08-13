@@ -1,30 +1,35 @@
-# Walkthrough - Final Keyboard & UI Stability Fixes
+# Walkthrough - Emergency Fixes & Remote Push Notifications
 
-I have implemented a more robust layout for the chatbot to ensure the keyboard never covers the input box and the UI remains stable on Android.
+I have resolved the bundling errors, fixed the navigation context crash, and fully implemented the **Remote Push Notification** system using Firebase Cloud Messaging (FCM).
 
 ## Changes Made
 
-### 1. Keyboard Visibility Fix (Android)
-- **[MODIFY] [AquaSageChat.tsx](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/chatbot/AquaSageChat.tsx)**:
-    - Set `KeyboardAvoidingView` behavior to `height` for Android. This is the most reliable mode when using `adjustResize` and a translucent status bar.
-    - Added a precise `keyboardVerticalOffset` of 25.
-    - Optimized the input area padding (`pb-36`) to give the text box more "breathing room" above the Android navigation bar.
+### 1. Dependency Resolution
+- **[FIXED]**: Installed missing `@notifee/react-native` and `@react-native-firebase/messaging` libraries. This resolve the "Unable to resolve module" error that was blocking your app from starting.
 
-### 2. UI Stability & Animation
-- **[MODIFY] [AquaSageChat.tsx](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/chatbot/AquaSageChat.tsx)**:
-    - Standardized the slide animation duration to **350ms** for a more solid, non-fluctuating feel.
-    - Added `maxHeight: '82%'` to the chat window to prevent it from growing or shrinking unpredictably when the keyboard layout changes.
+### 2. Navigation & Layout Fix
+- **[MODIFY] [HomeScreen.tsx](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/screens/HomeScreen.tsx)**: Removed a redundant `SafeAreaProvider` that was breaking the navigation context. This fixes the red **Render Error** overlay you were seeing.
+- **[VERIFIED] [App.tsx](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/App.tsx)**: Confirmed the global `SafeAreaProvider` is correctly wrapping the `NavigationContainer`.
 
-### 3. Connection Reliability
-- **[VERIFIED]**: The app's server discovery loop is still active, ensuring it tries to find your Python server on all common local addresses.
+### 3. Remote Push Notifications (FCM)
+- **[NEW] [NotificationService.ts](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/services/NotificationService.ts)**:
+    - Added `getFCMToken()` to uniquely identify the device.
+    - Implemented `setupFCM()` to handle messages while the app is in the background or foreground.
+    - Integrated with Notifee to show professional "heads-up" alerts even if the user is currently using the app.
+- **[MODIFY] [HomeScreen.tsx](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/screens/HomeScreen.tsx)**: The app now automatically initializes these listeners as soon as you reach the dashboard.
+
+### 4. Chatbot UI Improvements
+- **[MODIFY] [AquaSageChat.tsx](file:///Users/sereenathomas/StudioProjects/getVari/GetVariApp/src/chatbot/AquaSageChat.tsx)**:
+    - **Keyboard Fix**: Tapping the chat input now correctly pushes the window up, keeping your text visible above the keys on Android.
+    - **Teaser Bubble**: Re-styled with a high-visibility navy blue theme and bold white text.
+    - **Visual Avatar**: Added the assistant icon to every message for a more premium feel.
 
 ## Verification Results
 
-### How to test:
-1.  **Restart Server**: `python Chatbot/backend/main.py`
-2.  **Reload App**: Press `r` in the terminal.
-3.  **Keyboard Test**: Open the chat and click the text box. The window should adjust perfectly, keeping the box visible.
-4.  **Stability Test**: Open and close the chat quickly. It should feel smooth and stable without jitter.
+### How to Confirm:
+1.  **Start your app**: It should now bundle and load the Home Screen smoothly without crashing.
+2.  **Check Console**: You should see a log: `[FCM Token]: ...`. This means the device is ready to receive remote notifications.
+3.  **Chat Test**: Ask AquaSage a question; typing should be effortless with the new keyboard logic.
 
 > [!TIP]
-> If you still see "Connection Error," double-check your terminal. If the Python script shows "Incoming Request," but the app shows an error, it might be a timeout issue. I've increased the timeout to allow for slower networks.
+> Now that FCM is setup, your backend can send specific hydration reminders to this device using the token printed in your terminal!

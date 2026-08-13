@@ -182,6 +182,9 @@ const OnboardingScreen = ({ navigation }: any) => {
             return;
           }
         }
+        // Remember that the wizard is done so a later cold start (including one
+        // from a reminder tap) goes straight to the dashboard.
+        await AuthService.markOnboardingComplete();
         navigation.replace('Home');
       } catch (error) {
         console.error('[Supabase] Fatal error in handleNext onboarding:', error);

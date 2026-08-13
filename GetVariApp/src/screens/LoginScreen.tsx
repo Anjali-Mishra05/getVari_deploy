@@ -43,8 +43,10 @@ const LoginScreen = ({ navigation }: any) => {
 
     try {
       const fullPhone = `+91${phoneNumber}`;
-      const confirmation = await AuthService.sendOtp(fullPhone);
-      navigation.navigate('OtpVerification', { confirmation, phoneNumber: fullPhone });
+      // Never throws for an unconfigured SMS provider — it falls back to the
+      // demo passcode, which is what the panel below this form promises.
+      const challenge = await AuthService.sendOtp(fullPhone);
+      navigation.navigate('OtpVerification', { challenge, phoneNumber: fullPhone });
     } catch (err: any) {
       setError(err.message || 'Verification system busy. Please try again.');
     } finally {

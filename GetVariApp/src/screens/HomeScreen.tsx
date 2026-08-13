@@ -6,8 +6,9 @@ import {
   TouchableOpacity,
   Dimensions,
   Platform,
+  AppState,
 } from 'react-native';
-import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   Heart,
   Activity,
@@ -34,6 +35,13 @@ import { supabase } from '../services/SupabaseClient';
 import { AuthService } from '../services/AuthService';
 import { HydrationLog } from '../types';
 import AquaSageChat from '../chatbot/AquaSageChat';
+import NotificationService from '../services/NotificationService';
+import NotificationHistory from '../services/NotificationHistory';
+import NotificationCenter from '../components/NotificationCenter';
+import QuickLogSheet from '../components/QuickLogSheet';
+import ProfileSheet from '../components/ProfileSheet';
+import ChatBus from '../services/ChatBus';
+import HydrationService from '../services/HydrationService';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 const { width } = Dimensions.get('window');
@@ -43,11 +51,93 @@ const HomeScreen = ({ navigation }: any) => {
   const [waterLogs, setWaterLogs] = useState<HydrationLog[]>([]);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [quickLogOpen, setQuickLogOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [unseenNotifications, setUnseenNotifications] = useState(0);
   const progress = useSharedValue(0);
 
   useEffect(() => {
     fetchUserData();
+    setupNotifications();
+
+    // Reminder presses are forwarded with the id of the press that produced
+    // them. Deduping and the "ask once" rule live in the chat's prompt
+    // session, so this screen can forward every delivery unconditionally.
+    const unsubscribePress = NotificationService.onForegroundReminderPress(eventId => {
+      ChatBus.openHydrationPrompt(eventId);
+    });
+
+    // Everything shown while the app is foregrounded goes into the bell menu's
+    // delivery log; background deliveries are recorded from index.js.
+    const unsubscribeHistory = NotificationService.startHistoryTracking();
+
+    const refreshUnseen = async () => {
+      try {
+        setUnseenNotifications(await NotificationHistory.unseenCount());
+      } catch (error) {
+        console.error('[Notifications] Failed to count unseen:', error);
+      }
+    };
+    refreshUnseen();
+    const historySub = NotificationHistory.onChange(refreshUnseen);
+
+    // Reminders tapped from a background/quit state were recorded for replay.
+    const replayPendingPrompts = async () => {
+      try {
+        const pending = await NotificationService.consumePendingHydrationPrompts();
+        pending.forEach(eventId => ChatBus.openHydrationPrompt(eventId));
+      } catch (error) {
+        console.error('[Reminders] Failed to replay pending prompts:', error);
+      }
+    };
+    replayPendingPrompts();
+
+    // An entry logged from the chat updates this screen's totals.
+    const loggedSub = ChatBus.onHydrationLogged(result => {
+      if (result.entry) {
+        setWaterLogs(prev =>
+          prev.some(log => log.id === result.entry!.id) ? prev : [result.entry!, ...prev]
+        );
+      } else {
+        refreshTodayLogs();
+      }
+    });
+
+    // Returning to the app restarts the reminder countdown from now.
+    const appStateSub = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        replayPendingPrompts();
+        refreshTodayLogs();
+        refreshUnseen();
+        NotificationService.scheduleHydrationReminders();
+      }
+    });
+
+    return () => {
+      unsubscribePress();
+      unsubscribeHistory();
+      historySub.remove();
+      loggedSub.remove();
+      appStateSub.remove();
+    };
   }, []);
+
+  /**
+   * Push setup is best-effort: a device without Play Services, a revoked
+   * permission or a missing Firebase config should cost the user their
+   * reminders, not the whole screen. Failures are logged rather than left to
+   * surface as an uncaught rejection.
+   */
+  const setupNotifications = async () => {
+    try {
+      await NotificationService.setupFCM();
+      await NotificationService.getFCMToken();
+      await NotificationService.scheduleHydrationReminders();
+    } catch (error) {
+      console.error('[Notifications] Setup failed:', error);
+    }
+  };
 
   const fetchUserData = async () => {
     try {
@@ -55,12 +145,14 @@ const HomeScreen = ({ navigation }: any) => {
       console.log('[Supabase] Fetching data for user:', userId);
       if (!userId) return;
 
-      // Fetch Profile
+      // Fetch Profile. `maybeSingle` rather than `single`: a user who has not
+      // finished onboarding has no row yet, and `single` reports that missing
+      // row as an error.
       const { data: profileRow, error: profileError } = await supabase
         .from('getvari_profiles')
         .select('*')
         .eq('id', userId)
-        .single();
+        .maybeSingle();
 
       if (profileError) {
         console.error('[Supabase] Error fetching profile:', profileError.message);
@@ -69,24 +161,11 @@ const HomeScreen = ({ navigation }: any) => {
         setUserProfile(profileRow.profile);
       }
 
-      // Fetch Hydration Logs
-      const { data: logsData, error: logsError } = await supabase
-        .from('getvari_hydration_logs')
-        .select('*')
-        .eq('user_id', userId)
-        .order('timestamp', { ascending: false });
-
-      if (logsError) {
-        console.error('[Supabase] Error fetching logs:', logsError.message);
-      } else if (logsData) {
-        console.log('[Supabase] Logs data loaded:', logsData.length, 'entries');
-        setWaterLogs(logsData.map(l => ({
-          id: l.id,
-          timestamp: l.timestamp,
-          amountMl: l.amount_ml,
-          source: l.source as any
-        })));
-      }
+      // Today's hydration logs — the widget reports a *daily* total, so
+      // yesterday's entries must not be counted in it.
+      const logs = await HydrationService.fetchTodayLogs(userId);
+      console.log('[Supabase] Logs data loaded:', logs.length, "of today's entries");
+      setWaterLogs(logs);
     } catch (error) {
       console.error('[Supabase] Fatal error fetching data:', error);
     } finally {
@@ -94,51 +173,53 @@ const HomeScreen = ({ navigation }: any) => {
     }
   };
 
+  /**
+   * Re-reads today's entries from Supabase (after a foreground, or a write).
+   * Called from event listeners, so a failed read keeps the last known list
+   * instead of escaping as an uncaught rejection.
+   */
+  const refreshTodayLogs = async () => {
+    try {
+      setWaterLogs(await HydrationService.fetchTodayLogs());
+    } catch (error) {
+      console.error('[Supabase] Failed to refresh today logs:', error);
+    }
+  };
+
   const totalWaterConsumed = waterLogs.reduce((acc, curr) => acc + curr.amountMl, 0);
   const targetMl = userProfile?.targetDailyMl || 2500;
   const targetPercent = Math.min(100, Math.round((totalWaterConsumed / targetMl) * 100));
+  const profileInitial =
+    (typeof userProfile?.gender === 'string' && userProfile.gender.charAt(0).toUpperCase()) || 'U';
 
-  const logDrink = async (amountMl: number) => {
-    try {
-      const userId = await AuthService.getCurrentUserId();
-      console.log('[Supabase] Attempting to log drink for user:', userId);
+  /**
+   * After a sign-out, `reset` rather than `navigate`: the back gesture must not
+   * return to a Home screen whose session no longer exists.
+   */
+  const handleLoggedOut = () => {
+    navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+  };
 
-      if (!userId) {
-        console.warn('[Supabase] Cannot log drink: No authenticated user ID found.');
-        return;
-      }
+  /**
+   * The "+" button. Writes through the shared hydration service so it obeys
+   * the same idempotency and reminder-reset rules as the chat. The local list
+   * is updated by the `onHydrationLogged` subscription above.
+   */
+  const logDrink = async (
+    amountMl: number,
+    source: HydrationLog['source'] = 'manual'
+  ): Promise<boolean> => {
+    const result = await HydrationService.logWater({
+      amountMl,
+      source,
+      requestId: HydrationService.generateRequestId('home'),
+    });
 
-      const newLog = {
-        id: `log_${userId}_${Date.now()}`,
-        user_id: userId,
-        timestamp: new Date().toISOString(),
-        amount_ml: amountMl,
-        source: 'manual',
-      };
-
-      const { data, error } = await supabase
-        .from('getvari_hydration_logs')
-        .insert(newLog)
-        .select();
-
-      if (error) {
-        console.error('[Supabase] Error inserting log:', error.message, error.details);
-        throw error;
-      }
-
-      console.log('[Supabase] Successfully logged drink:', data);
-
-      // Update local state
-      setWaterLogs(prev => [{
-        id: newLog.id,
-        timestamp: newLog.timestamp,
-        amountMl: newLog.amount_ml,
-        source: 'manual'
-      }, ...prev]);
-
-    } catch (error) {
-      console.error('[Supabase] Fatal error in logDrink:', error);
+    if (result.status === 'error' || result.status === 'unauthenticated') {
+      console.warn('[Supabase] Could not log drink:', result.status, result.error ?? '');
+      return false;
     }
+    return true;
   };
 
   useEffect(() => {
@@ -185,8 +266,24 @@ const HomeScreen = ({ navigation }: any) => {
               </Text>
             </View>
             <View className="flex-row gap-3">
-              <TouchableOpacity className="w-11 h-11 rounded-2xl bg-white/[0.03] border border-white/10 items-center justify-center">
-                <Bell color="#94a3b8" size={20} />
+              <TouchableOpacity
+                className="w-11 h-11 rounded-2xl bg-white/[0.03] border border-white/10 items-center justify-center"
+                onPress={() => setNotificationsOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  unseenNotifications > 0
+                    ? `Notifications, ${unseenNotifications} new`
+                    : 'Notifications'
+                }
+              >
+                <Bell color={unseenNotifications > 0 ? '#00f2fe' : '#94a3b8'} size={20} />
+                {unseenNotifications > 0 && (
+                  <View className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#00f2fe] items-center justify-center border-2 border-[#02050e]">
+                    <Text className="text-[9px] font-black text-[#020617]">
+                      {unseenNotifications > 9 ? '9+' : unseenNotifications}
+                    </Text>
+                  </View>
+                )}
               </TouchableOpacity>
               <TouchableOpacity
                 className="w-11 h-11 rounded-2xl bg-[#00f2fe] items-center justify-center shadow-xl shadow-cyan-500/30"
@@ -254,9 +351,20 @@ const HomeScreen = ({ navigation }: any) => {
           {/* Vital Grid */}
           <View className="flex-row gap-4 mb-6">
             <GlassCard className="flex-1 p-5 bg-white/[0.01]">
-              <View className="flex-row items-center gap-2 mb-3">
-                <Droplets color="#00f2fe" size={14} />
-                <Text className="text-[10px] font-black text-neutral-500 uppercase font-mono tracking-widest">Hydration</Text>
+              <View className="flex-row items-center justify-between mb-3">
+                <View className="flex-row items-center gap-2">
+                  <Droplets color="#00f2fe" size={14} />
+                  <Text className="text-[10px] font-black text-neutral-500 uppercase font-mono tracking-widest">Hydration</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setQuickLogOpen(true)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Log water"
+                  className="w-6 h-6 rounded-lg bg-cyan-500/10 border border-cyan-500/25 items-center justify-center"
+                >
+                  <Plus color="#00f2fe" size={13} strokeWidth={3.5} />
+                </TouchableOpacity>
               </View>
               <View className="flex-row items-baseline gap-1.5">
                 <Text className="text-3xl font-black text-white font-mono">{totalWaterConsumed}</Text>
@@ -355,15 +463,43 @@ const HomeScreen = ({ navigation }: any) => {
               <Activity color="#475569" size={22} />
             </View>
           </TouchableOpacity>
-          <TouchableOpacity className="items-center">
+          <TouchableOpacity
+            className="items-center"
+            onPress={() => setProfileOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Profile and account settings"
+          >
             <View className="w-12 h-12 items-center justify-center">
               <View className="w-7 h-7 rounded-full bg-neutral-800 border border-white/10 items-center justify-center">
-                <Text className="text-[10px] font-black text-neutral-500">M</Text>
+                <Text className="text-[10px] font-black text-neutral-500">{profileInitial}</Text>
               </View>
             </View>
           </TouchableOpacity>
         </View>
 
+        <NotificationCenter
+          visible={notificationsOpen}
+          onClose={() => setNotificationsOpen(false)}
+        />
+
+        <QuickLogSheet
+          visible={quickLogOpen}
+          onClose={() => setQuickLogOpen(false)}
+          onLog={logDrink}
+          totalMl={totalWaterConsumed}
+          targetMl={targetMl}
+        />
+
+        <ProfileSheet
+          visible={profileOpen}
+          onClose={() => setProfileOpen(false)}
+          userProfile={userProfile}
+          targetMl={targetMl}
+          onLoggedOut={handleLoggedOut}
+        />
+
+        {/* The chat writes through HydrationService itself and reports back
+            over ChatBus, so no logging callback is threaded through here. */}
         <AquaSageChat userProfile={userProfile} />
       </SafeAreaView>
     </View>
