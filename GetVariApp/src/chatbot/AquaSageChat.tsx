@@ -22,6 +22,7 @@ import Animated, {
   SlideInDown,
   SlideOutDown,
 } from 'react-native-reanimated';
+import { backendCandidates } from '../config/backend';
 import ChatBus from '../services/ChatBus';
 import HydrationService from '../services/HydrationService';
 import HydrationPromptSession from '../services/HydrationPromptSession';
@@ -276,16 +277,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
 
   // Server Discovery Logic
   const discoverServer = async () => {
-    // `localhost` is tried first: it covers the iOS simulator and any physical
-    // device running `adb reverse tcp:8000 tcp:8000`, and fails instantly
-    // elsewhere. 10.0.2.2 only resolves on the Android emulator.
-    const candidates = [
-      'http://localhost:8000',     // iOS Simulator / adb reverse
-      'http://10.0.2.2:8000',      // Android Emulator
-      'http://192.168.0.106:8000', // Mac Local IP (LAN)
-      'http://192.168.0.101:8000',
-      'http://192.168.1.101:8000',
-    ];
+    const candidates = backendCandidates();
 
     for (const base of candidates) {
       try {

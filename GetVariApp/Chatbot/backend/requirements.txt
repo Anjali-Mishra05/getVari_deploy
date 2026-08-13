@@ -1,17 +1,17 @@
-numpy==1.26.4
-langchain-core==0.3.86
+# Verified against the working dev environment (Python 3.12).
+# Python 3.13+ is not supported: several pinned wheels here have no 3.13 build.
+
+langchain-core==1.5.3
 langgraph==1.2.10
 langchain-google-genai==4.3.2
 langchain-community==0.4.2
 langchain-groq==1.1.3
-pypdf
-fastapi
-uvicorn
-supabase
-python-dotenv
-axios
-requests
-unstructured
-python-docx
-jinja2
-ws
+pypdf==6.14.2
+fastapi==0.115.0
+uvicorn==0.30.6
+supabase==2.28.3
+python-dotenv==1.0.1
+requests==2.32.5
+unstructured==0.25.0
+python-docx==1.2.0
+jinja2==3.1.6
