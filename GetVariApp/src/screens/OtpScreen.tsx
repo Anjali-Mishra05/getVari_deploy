@@ -21,7 +21,7 @@ import GlassCard from '../components/GlassCard';
 const { width } = Dimensions.get('window');
 
 const OtpScreen = ({ route, navigation }: any) => {
-  const { confirmation, phoneNumber } = route.params;
+  const { challenge, phoneNumber } = route.params;
   const [otpCode, setOtpCode] = useState('');
   const [countdown, setCountdown] = useState(60);
   const [loading, setLoading] = useState(false);
@@ -44,10 +44,11 @@ const OtpScreen = ({ route, navigation }: any) => {
     setError('');
 
     try {
-      await AuthService.verifyOtp(confirmation, otpCode);
+      await AuthService.verifyOtp(challenge, otpCode);
       // Trigger welcome notification
       await NotificationService.showWelcomeNotification();
-      navigation.replace('Onboarding');
+      // A returning user who already onboarded goes straight to the dashboard.
+      navigation.replace(await AuthService.resolveStartupRoute());
     } catch (err: any) {
       setError(err.message || 'Invalid authorization code.');
     } finally {
@@ -59,8 +60,8 @@ const OtpScreen = ({ route, navigation }: any) => {
     if (countdown > 0) return;
     setLoading(true);
     try {
-      const newConfirmation = await AuthService.sendOtp(phoneNumber);
-      navigation.setParams({ confirmation: newConfirmation });
+      const newChallenge = await AuthService.sendOtp(phoneNumber);
+      navigation.setParams({ challenge: newChallenge });
       setCountdown(60);
       setError('');
     } catch (err: any) {

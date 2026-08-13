@@ -1,14 +1,28 @@
 import React, { useEffect } from 'react';
 import { View, SafeAreaView, Text } from 'react-native';
 import BrandLogo from '../components/BrandLogo';
+import NotificationService from '../services/NotificationService';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 const SplashScreen = ({ navigation }: any) => {
   useEffect(() => {
-    const timer = setTimeout(() => {
-      navigation.replace('Loading');
-    }, 4500); // Elegant 4.5s splash
-    return () => clearTimeout(timer);
+    let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    // Tapping a reminder is a request to log water *now* — 4.5s of branding
+    // before the chat even starts loading reads as the app ignoring the tap.
+    (async () => {
+      const openedFromReminder = await NotificationService.hasPendingHydrationPrompt().catch(
+        () => false
+      );
+      if (cancelled) return;
+      timer = setTimeout(() => navigation.replace('Loading'), openedFromReminder ? 400 : 4500);
+    })();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [navigation]);
 
   return (

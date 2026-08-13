@@ -1856,7 +1856,7 @@ export default function App() {
                             <div>
                               <span className="text-xs block font-bold text-white">Water Intake Synced</span>
                               <span className="text-[9px] text-neutral-400 block -mt-0.5">
-                                Source: {log.source === 'manual' ? 'Manual Sync' : log.source === 'smart_cap' ? 'GetVari Proprietary SmartCap®' : 'Health Integrator'}
+                                Source: {log.source === 'manual' ? 'Manual Sync' : log.source === 'ai_chat' ? 'AquaSage AI Chat' : log.source === 'smart_cap' ? 'GetVari Proprietary SmartCap®' : 'Health Integrator'}
                               </span>
                             </div>
                           </div>

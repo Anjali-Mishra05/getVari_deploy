@@ -3,6 +3,13 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Hydration reminders are scheduled as exact alarms so they fire on
+         their interval instead of being batched onto Android's ~5-minute
+         inexact-alarm grid, and still fire while the device is idle. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
       android:name=".MainApplication"
       android:label="@string/app_name"

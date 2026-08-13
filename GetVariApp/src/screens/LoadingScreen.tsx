@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { View, SafeAreaView, Text, Platform, Dimensions } from 'react-native';
-import { supabase } from '../services/SupabaseClient';
+import { AuthService } from '../services/AuthService';
+import NotificationService from '../services/NotificationService';
 import Animated, {
   FadeIn,
   FadeOut,
@@ -47,32 +48,24 @@ const LoadingScreen = ({ navigation }: any) => {
   }, [navigation]);
 
   const checkSession = async () => {
+    // Resolved from the locally persisted session, so a launch with no network
+    // — or the cold start caused by tapping a reminder — still lands on Home
+    // instead of asking the user to sign up all over again.
+    let route: 'Home' | 'Onboarding' | 'Login' = 'Login';
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-
-      // Artificial delay to show the nice loading animation
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      if (session) {
-        // Check if profile exists
-        const { data: profile } = await supabase
-          .from('getvari_profiles')
-          .select('id')
-          .eq('id', session.user.id)
-          .single();
-
-        if (profile) {
-          navigation.replace('Home');
-        } else {
-          navigation.replace('Onboarding');
-        }
-      } else {
-        navigation.replace('Login');
-      }
+      route = await AuthService.resolveStartupRoute();
     } catch (error) {
       console.error('Session check failed:', error);
-      navigation.replace('Login');
     }
+
+    // A reminder tap should reach the chat quickly; only a normal launch gets
+    // the full loading animation.
+    const openedFromReminder = await NotificationService.hasPendingHydrationPrompt().catch(
+      () => false
+    );
+    await new Promise(resolve => setTimeout(resolve, openedFromReminder ? 300 : 2200));
+
+    navigation.replace(route);
   };
 
   return (
