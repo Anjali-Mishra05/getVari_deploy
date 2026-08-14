@@ -1,0 +1,3 @@
+- `[ ]` Register `BluetoothPackage` in `MainApplication.kt`
+- `[ ]` Update `OnboardingScreen.tsx` to use the native `BluetoothModule`
+- `[ ]` Verify system dialog appears and scan resumes automatically
