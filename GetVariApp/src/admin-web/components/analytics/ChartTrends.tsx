@@ -11,24 +11,24 @@ const ChartTrends: React.FC = () => {
   ];
 
   return (
-    <GlassCard className="space-y-6">
-      <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Hourly Intake Volume</h3>
+    <GlassCard className="space-y-6 h-full flex flex-col">
+      <h3 className="text-sm font-black uppercase tracking-wider text-slate-900">Water Intake Trends (Hourly)</h3>
 
-      <div className="flex items-end justify-between h-48 gap-3 pt-10 border-b border-slate-100 px-4">
+      <div className="flex items-end justify-between h-48 gap-4 pt-12 border-b border-slate-100 px-4">
         {data.map(h => (
-          <div key={h.hr} className="flex-1 flex flex-col items-center gap-3 h-full justify-end group">
-            <span className="text-[8px] font-mono font-black text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-widest">{h.vol}</span>
+          <div key={h.hr} className="flex-1 flex flex-col items-center gap-4 h-full justify-end group">
+            <span className="text-[10px] font-mono font-black text-cyan-500 opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-widest">{h.vol}</span>
             <div
-              className="bg-blue-600/20 w-full rounded-t-xl transition-all duration-300 group-hover:bg-blue-600 group-hover:shadow-[0_0_15px_rgba(37,99,235,0.2)]"
+              className="bg-cyan-600/20 w-full rounded-t-xl transition-all duration-300 group-hover:bg-cyan-500 group-hover:shadow-[0_0_15px_rgba(6,182,212,0.2)]"
               style={{ height: h.pct }}
             ></div>
-            <span className="text-[9px] font-mono font-bold text-slate-400 group-hover:text-slate-900 transition-colors">{h.hr}</span>
+            <span className="text-[11px] font-mono font-bold text-slate-400 group-hover:text-slate-900 transition-colors">{h.hr}</span>
           </div>
         ))}
       </div>
 
-      <p className="text-[11px] text-neutral-500 leading-relaxed text-center italic font-medium px-4">
-        Fleet-wide fluid ingestion spikes consistently during mid-morning operational cycles between 09:00 and 11:00.
+      <p className="text-[11px] text-slate-500 leading-relaxed text-center italic font-medium px-4 mt-auto">
+        Cumulative fluid ingestion volume spikes consistently between 09:00 and 11:00.
       </p>
     </GlassCard>
   );

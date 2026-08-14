@@ -91,6 +91,27 @@ export const fetchEventsForUser = async (userId: string): Promise<ActivityEvent[
       });
     }
 
+    const { data: alerts } = await supabase
+      .from('getvari_admin_alerts')
+      .select('*')
+      .eq('user_id', userId)
+      .order('sent_at', { ascending: true });
+
+    alerts?.forEach(alert => {
+      events.push({
+        eventId: alert.id || makeId('ALERT'),
+        userId,
+        eventType: 'critical_alert_sent',
+        category: 'Notification',
+        actor: 'Admin',
+        title: alert.title || 'Critical hydration alert sent',
+        description: alert.message || 'Admin sent a critical hydration alert.',
+        timestamp: alert.sent_at,
+        status: alert.status === 'sent' ? 'success' : 'failed',
+        metadata: { severity: alert.severity, alertStatus: alert.status }
+      });
+    });
+
     // Note: AI recommendations and real-time telemetry are not currently persisted in Supabase.
     // We do not fabricate these events here.
 

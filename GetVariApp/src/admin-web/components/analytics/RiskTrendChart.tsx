@@ -10,7 +10,7 @@ interface RiskTrendChartProps {
 const RiskTrendChart: React.FC<RiskTrendChartProps> = ({ data, loading }) => {
   if (loading) {
     return (
-      <GlassCard className="h-80 flex items-center justify-center">
+      <GlassCard className="h-[300px] flex items-center justify-center">
         <div className="animate-pulse text-slate-400 font-mono text-[10px]">TRACKING RISK VECTOR...</div>
       </GlassCard>
     );
@@ -19,10 +19,10 @@ const RiskTrendChart: React.FC<RiskTrendChartProps> = ({ data, loading }) => {
   const hasData = data.length > 0;
 
   return (
-    <GlassCard className="space-y-6">
+    <GlassCard className="space-y-4 h-[300px]">
       <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Risk Trend Over Time</h3>
 
-      <div className="h-64 w-full relative">
+      <div className="h-[210px] w-full relative">
         {!hasData && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/50 backdrop-blur-[1px] rounded-xl">
              <div className="text-slate-400 font-mono text-[10px] font-black tracking-widest uppercase">No Risk Data Available</div>

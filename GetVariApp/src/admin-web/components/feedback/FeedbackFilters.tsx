@@ -16,7 +16,7 @@ const FeedbackFilters: React.FC<FeedbackFiltersProps> = ({
   onSortToggle
 }) => {
   return (
-    <div className="bg-white rounded-2xl p-5 border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-sm mb-8">
+    <div className="bg-white rounded-xl p-4 border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm mb-6">
       <div className="flex-1 max-w-lg">
         <Input
           icon="search"
@@ -26,12 +26,12 @@ const FeedbackFilters: React.FC<FeedbackFiltersProps> = ({
         />
       </div>
 
-      <div className="flex gap-4">
+      <div className="flex gap-3">
         <button
           onClick={onSortToggle}
-          className="flex items-center gap-3 bg-slate-50 border border-slate-200 px-6 py-2.5 rounded-xl text-[10px] font-black text-slate-500 transition-all hover:text-blue-600 hover:border-blue-200 group uppercase tracking-widest shadow-sm"
+          className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-4 py-2 rounded-lg text-[11px] font-black text-slate-500 transition-all hover:text-blue-600 hover:border-blue-200 group uppercase tracking-widest shadow-sm"
         >
-          {sortOrder === 'newest' ? <SortDesc size={16} /> : <SortAsc size={16} />}
+          {sortOrder === 'newest' ? <SortDesc size={15} /> : <SortAsc size={15} />}
           Sort by: {sortOrder === 'newest' ? 'Newest' : 'Oldest'}
         </button>
       </div>

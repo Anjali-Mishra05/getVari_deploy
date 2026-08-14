@@ -78,3 +78,4 @@ yarn-error.log
 dist/
 .env*
 !.env.example
+.artifacts/

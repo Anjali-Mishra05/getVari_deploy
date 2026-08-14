@@ -10,7 +10,7 @@ interface IntakeVsGoalChartProps {
 const IntakeVsGoalChart: React.FC<IntakeVsGoalChartProps> = ({ data, loading }) => {
   if (loading) {
     return (
-      <GlassCard className="h-80 flex items-center justify-center">
+      <GlassCard className="h-[300px] flex items-center justify-center">
         <div className="animate-pulse text-slate-400 font-mono text-[10px]">SYNCING TARGET METRICS...</div>
       </GlassCard>
     );
@@ -18,17 +18,17 @@ const IntakeVsGoalChart: React.FC<IntakeVsGoalChartProps> = ({ data, loading }) 
 
   if (data.length === 0) {
     return (
-      <GlassCard className="h-80 flex items-center justify-center">
+      <GlassCard className="h-[300px] flex items-center justify-center">
         <div className="text-slate-400 font-mono text-[10px]">NO GOAL DATA AVAILABLE</div>
       </GlassCard>
     );
   }
 
   return (
-    <GlassCard className="space-y-6">
+    <GlassCard className="space-y-4 h-[300px]">
       <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Intake vs Daily Goal</h3>
 
-      <div className="h-64 w-full">
+      <div className="h-[210px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />

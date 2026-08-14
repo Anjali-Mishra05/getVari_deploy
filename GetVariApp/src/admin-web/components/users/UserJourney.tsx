@@ -209,6 +209,24 @@ const UserJourney: React.FC<Props> = ({ user }) => {
 
   const accountCreated = events.find(e => e.eventType === 'account_created')?.timestamp;
   const lastActive = events.length ? events[0].timestamp : null;
+  const intakeVsGoalData = chartData.timeline.map(({ date, consumed, recommended }) => ({
+    date,
+    actual: consumed,
+    goal: recommended
+  }));
+  const hydrationConsistencyData = chartData.timeline.map(({ date, consumed, recommended }) => ({
+    date,
+    performance: recommended > 0 ? (consumed / recommended) * 100 : 0
+  }));
+  const hydrationCalendarData = Array.from({ length: 28 }, (_, index) =>
+    hydrationConsistencyData[hydrationConsistencyData.length - 28 + index] ?? null
+  );
+  const hydrationColor = (performance: number) => {
+    if (performance < 50) return 'bg-red-400';
+    if (performance < 75) return 'bg-orange-400';
+    if (performance < 100) return 'bg-amber-400';
+    return 'bg-emerald-500';
+  };
 
   const formatIndianPhone = (phone?: string) => {
     if (phone && phone.trim().length > 0) {
@@ -220,12 +238,12 @@ const UserJourney: React.FC<Props> = ({ user }) => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Profile & KPI Summary - Tightened Layout */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
         <div className="flex flex-col lg:flex-row items-center justify-between pb-4">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-blue-100">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-base shadow-lg shadow-blue-100">
               {user.name.split(' ').map(s => s[0]).slice(0, 2).join('')}
             </div>
             <div>
@@ -234,18 +252,18 @@ const UserJourney: React.FC<Props> = ({ user }) => {
             </div>
           </div>
 
-          <div className="flex gap-10 text-right">
+          <div className="flex gap-6 text-right">
             <div>
-              <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Account Created</div>
-              <div className="text-[15px] font-black text-slate-800">{accountCreated ? new Date(accountCreated).toLocaleDateString() : '—'}</div>
+              <div className="text-xs uppercase font-black tracking-widest text-slate-400 mb-1">Account Created</div>
+              <div className="text-base font-black text-slate-800">{accountCreated ? new Date(accountCreated).toLocaleDateString() : '—'}</div>
             </div>
             <div>
-              <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Last Active</div>
-              <div className="text-[15px] font-black text-slate-800">{lastActive ? new Date(lastActive).toLocaleDateString() : '—'}</div>
+              <div className="text-xs uppercase font-black tracking-widest text-slate-400 mb-1">Last Active</div>
+              <div className="text-base font-black text-slate-800">{lastActive ? new Date(lastActive).toLocaleDateString() : '—'}</div>
             </div>
             <div>
-              <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Daily Goal</div>
-              <div className="text-[15px] font-black text-blue-600">{user.targetDailyMl} mL</div>
+              <div className="text-xs uppercase font-black tracking-widest text-slate-400 mb-1">Daily Goal</div>
+              <div className="text-base font-black text-blue-600">{user.targetDailyMl} mL</div>
             </div>
           </div>
         </div>
@@ -253,60 +271,60 @@ const UserJourney: React.FC<Props> = ({ user }) => {
         {/* 6-Column Divider KPI Row - Compact */}
         <div className="border-t border-slate-100 pt-5 mt-1">
           <div className="flex divide-x divide-slate-100 items-start">
-            <div className="flex-1 pr-4">
-              <div className="flex items-center gap-2 mb-1.5">
-                <Activity className="w-3.5 h-3.5 text-blue-600" />
-                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Activities</span>
+            <div className="flex-1 pr-5">
+              <div className="flex items-center gap-2.5 mb-2">
+                <Activity className="w-4 h-4 text-blue-600" />
+                <span className="text-xs uppercase font-black tracking-widest text-slate-400">Activities</span>
               </div>
-              <div className="text-lg font-black text-slate-900 leading-none">{filtered.length}</div>
+              <div className="text-xl font-black text-slate-900 leading-none">{filtered.length}</div>
             </div>
 
-            <div className="flex-1 px-5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <Cpu className="w-3.5 h-3.5 text-blue-600" />
-                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400 truncate">AI Recomm...</span>
+            <div className="flex-1 px-6">
+              <div className="flex items-center gap-2.5 mb-2">
+                <Cpu className="w-4 h-4 text-blue-600" />
+                <span className="text-xs uppercase font-black tracking-widest text-slate-400 truncate">AI Recomm...</span>
               </div>
-              <div className="text-lg font-black text-slate-900 leading-none">{stats.aiRecommendations}</div>
+              <div className="text-xl font-black text-slate-900 leading-none">{stats.aiRecommendations}</div>
             </div>
 
-            <div className="flex-1 px-5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Followed</span>
+            <div className="flex-1 px-6">
+              <div className="flex items-center gap-2.5 mb-2">
+                <CheckCircle className="w-4 h-4 text-emerald-600" />
+                <span className="text-xs uppercase font-black tracking-widest text-slate-400">Followed</span>
               </div>
-              <div className="text-lg font-black text-slate-900 leading-none">{stats.recommendationsFollowed}</div>
+              <div className="text-xl font-black text-slate-900 leading-none">{stats.recommendationsFollowed}</div>
             </div>
 
-            <div className="flex-[1.4] px-5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <Droplet className="w-3.5 h-3.5 text-blue-600" />
-                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Water</span>
+            <div className="flex-[1.5] px-6">
+              <div className="flex items-center gap-2.5 mb-2">
+                <Droplet className="w-4 h-4 text-blue-600" />
+                <span className="text-xs uppercase font-black tracking-widest text-slate-400">Water</span>
               </div>
-              <div className="text-lg font-black text-slate-900 leading-none whitespace-nowrap">
-                {stats.waterConsumed} mL <span className="text-slate-400 font-bold text-[11px]">/ {stats.waterRecommended} mL</span>
+              <div className="text-xl font-black text-slate-900 leading-none whitespace-nowrap">
+                {stats.waterConsumed} mL <span className="text-slate-400 font-bold text-sm">/ {stats.waterRecommended} mL</span>
               </div>
             </div>
 
-            <div className="flex-1 px-5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <AlertTriangle className="w-3.5 h-3.5 text-red-600" />
-                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Alert</span>
+            <div className="flex-1 px-6">
+              <div className="flex items-center gap-2.5 mb-2">
+                <AlertTriangle className="w-4 h-4 text-red-600" />
+                <span className="text-xs uppercase font-black tracking-widest text-slate-400">Alert</span>
               </div>
-              <div className="text-lg font-black text-slate-900 leading-none">{stats.alertCount}</div>
+              <div className="text-xl font-black text-slate-900 leading-none">{stats.alertCount}</div>
             </div>
 
-            <div className="flex-[1.2] pl-5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <TrendingUp className="w-3.5 h-3.5 text-red-600" />
-                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Risk Trend</span>
+            <div className="flex-[1.3] pl-6">
+              <div className="flex items-center gap-2.5 mb-2">
+                <TrendingUp className="w-4 h-4 text-red-600" />
+                <span className="text-xs uppercase font-black tracking-widest text-slate-400">Risk Trend</span>
               </div>
-              <div className="flex flex-col gap-1">
-                <div className="text-lg font-black text-slate-900 leading-none whitespace-nowrap">
+              <div className="flex flex-col gap-1.5">
+                <div className="text-xl font-black text-slate-900 leading-none whitespace-nowrap">
                   {stats.riskStart} <span className="text-slate-300 mx-1">→</span> {stats.riskEnd}
                   <span className="ml-1 text-slate-400 font-bold">{stats.riskTrend > 0 ? '↑' : stats.riskTrend < 0 ? '↓' : ''}</span>
                 </div>
                 {stats.riskTrend !== 0 && (
-                  <div className={`text-[9px] font-black uppercase tracking-tight ${stats.riskTrend > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                  <div className={`text-[10px] font-black uppercase tracking-tight ${stats.riskTrend > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
                     {stats.riskTrend > 0 ? `+${stats.riskTrend}` : stats.riskTrend} points
                   </div>
                 )}
@@ -317,20 +335,20 @@ const UserJourney: React.FC<Props> = ({ user }) => {
       </div>
 
       <div className="flex flex-col lg:flex-row gap-4 items-center justify-between">
-        <div className="flex-1 w-full lg:max-w-md flex items-center gap-3 rounded-2xl bg-white p-3 border border-slate-200 focus-within:border-blue-600 transition-all shadow-sm">
-          <SearchIcon className="w-5 h-5 text-slate-400" />
+        <div className="flex-1 w-full lg:max-w-md flex items-center gap-2 rounded-xl bg-white p-2.5 border border-slate-200 focus-within:border-blue-600 transition-all shadow-sm">
+          <SearchIcon className="w-4 h-4 text-slate-400" />
           <input placeholder="Filter journey events..." className="bg-transparent border-none outline-none text-sm text-slate-900 placeholder:text-slate-400 flex-1" value={query} onChange={e => setQuery(e.target.value)} />
         </div>
 
-        <div className="flex items-center gap-3 w-full lg:w-auto">
+        <div className="flex items-center gap-2 w-full lg:w-auto">
           <button
             onClick={() => setAnalyticsOpen(!analyticsOpen)}
-            className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-2xl font-bold text-sm transition-all shadow-sm border ${analyticsOpen ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-slate-200 hover:bg-slate-50'}`}
+            className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-all shadow-sm border ${analyticsOpen ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-slate-200 hover:bg-slate-50'}`}
           >
             {analyticsOpen ? <><X size={18} /> Close Analytics</> : <><BarChart3 size={18} /> View Analytics</>}
           </button>
 
-          <select className="flex-1 lg:flex-none bg-white border border-slate-200 text-sm font-bold text-slate-700 p-3 rounded-2xl shadow-sm outline-none" value={actorFilter} onChange={e => setActorFilter(e.target.value as any)}>
+          <select className="flex-1 lg:flex-none bg-white border border-slate-200 text-sm font-bold text-slate-700 p-2 rounded-xl shadow-sm outline-none" value={actorFilter} onChange={e => setActorFilter(e.target.value as any)}>
             <option value="All">All Actors</option>
             <option value="User">User</option>
             <option value="AI">AI</option>
@@ -338,8 +356,8 @@ const UserJourney: React.FC<Props> = ({ user }) => {
             <option value="Admin">Admin</option>
           </select>
 
-          <div className="flex-1 lg:flex-none flex items-center gap-3 rounded-2xl bg-white border border-slate-200 px-4 py-3 shadow-sm">
-            <Calendar className="w-5 h-5 text-blue-600" />
+          <div className="flex-1 lg:flex-none flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-3 py-2 shadow-sm">
+            <Calendar className="w-4 h-4 text-blue-600" />
             <select value={range} onChange={e => setRange(e.target.value as any)} className="bg-transparent border-none outline-none text-sm font-bold text-slate-700 cursor-pointer">
               <option value="all">All Time</option>
               <option value="1">Today</option>
@@ -354,11 +372,11 @@ const UserJourney: React.FC<Props> = ({ user }) => {
         {!analyticsOpen ? (
           <div className="relative">
             <div className="absolute left-6 top-0 bottom-0 w-px bg-slate-200" />
-            <div className="space-y-8 pl-12">
+            <div className="space-y-5 pl-10">
               {Object.entries(byDateGroups).map(([date, evs]) => (
                 <div key={date} className="space-y-4">
                   <div className="sticky top-24 z-20">
-                    <span className="bg-slate-100 text-slate-600 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border border-slate-200">
+                    <span className="bg-slate-100 text-slate-600 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest border border-slate-200">
                       {formatDateHeading(evs[0].timestamp)}
                     </span>
                   </div>
@@ -366,27 +384,27 @@ const UserJourney: React.FC<Props> = ({ user }) => {
                     {evs.map(ev => {
                       const human = humanizeEvent(ev);
                       return (
-                        <div key={ev.eventId} className="group relative bg-white p-5 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all hover:border-blue-200">
-                          <div className="absolute -left-[37px] top-6 w-3 h-3 rounded-full bg-white border-2 border-blue-600 z-10" />
+                        <div key={ev.eventId} className="group relative bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-all hover:border-blue-200">
+                          <div className="absolute -left-[37px] top-7 w-3.5 h-3.5 rounded-full bg-white border-2 border-blue-600 z-10" />
                           <div className="flex items-start justify-between gap-4">
-                            <div className="flex gap-4">
+                            <div className="flex gap-3">
                               <div className="mt-1 p-2 bg-slate-50 rounded-lg">{categoryIcon(ev.category)}</div>
                               <div>
-                                <h4 className="font-bold text-slate-900">{human.title}</h4>
-                                <p className="text-xs text-slate-500 mt-1">{human.desc}</p>
+                                <h4 className="font-bold text-slate-900 text-base">{human.title}</h4>
+                                <p className="text-sm text-slate-500 mt-1.5">{human.desc}</p>
                               </div>
                             </div>
                             <div className="text-right">
-                              <div className="text-[10px] font-black text-slate-400 uppercase">{formatTime(ev.timestamp)}</div>
-                              <div className="mt-2">{actorBadge(ev.actor)}</div>
+                              <div className="text-xs font-black text-slate-400 uppercase">{formatTime(ev.timestamp)}</div>
+                              <div className="mt-3">{actorBadge(ev.actor)}</div>
                             </div>
                           </div>
-                          <div className="mt-4 flex items-center justify-between pt-4 border-t border-slate-50">
-                            <div className="text-[11px] font-bold text-slate-400 uppercase tracking-tighter">
+                          <div className="mt-4 flex items-center justify-between pt-3 border-t border-slate-50">
+                            <div className="text-xs font-bold text-slate-400 uppercase tracking-tighter">
                               Status: <span className={ev.status === 'success' ? 'text-emerald-500' : 'text-red-500'}>{ev.status?.toUpperCase()}</span>
                             </div>
-                            <button onClick={() => setOpenEventId(openEventId === ev.eventId ? null : ev.eventId)} className="text-xs font-bold text-blue-600 flex items-center gap-1">
-                              {openEventId === ev.eventId ? 'Close Data' : 'View Data'} <ChevronRight size={14} className={openEventId === ev.eventId ? 'rotate-90' : ''} />
+                            <button onClick={() => setOpenEventId(openEventId === ev.eventId ? null : ev.eventId)} className="text-sm font-bold text-blue-600 flex items-center gap-2">
+                              {openEventId === ev.eventId ? 'Close Data' : 'View Data'} <ChevronRight size={16} className={openEventId === ev.eventId ? 'rotate-90' : ''} />
                             </button>
                           </div>
                           {openEventId === ev.eventId && (
@@ -403,71 +421,115 @@ const UserJourney: React.FC<Props> = ({ user }) => {
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-fadeIn">
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-fadeIn">
+            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
                 <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">Daily Water Consumption</h4>
                 <BarChart3 className="text-blue-600 w-5 h-5" />
               </div>
-              <div className="h-[250px] w-full">
+              <div className="h-[210px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData.timeline}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="date" fontSize={10} tickLine={false} axisLine={false} />
-                    <YAxis fontSize={10} tickLine={false} axisLine={false} unit="ml" />
+                    <XAxis dataKey="date" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis fontSize={12} tickLine={false} axisLine={false} unit="ml" />
                     <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
                     <Bar dataKey="consumed" fill="#2563EB" radius={[4, 4, 0, 0]} barSize={30} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </div>
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-6">
+            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">Water Consumption vs Daily Goal</h4>
+                <Target className="text-blue-600 w-5 h-5" />
+              </div>
+              <div className="h-[210px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={intakeVsGoalData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="date" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis fontSize={12} tickLine={false} axisLine={false} unit="ml" />
+                    <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                    <Bar dataKey="actual" name="Consumed" fill="#2563EB" radius={[4, 4, 0, 0]} barSize={16} />
+                    <Bar dataKey="goal" name="Daily Goal" fill="#CBD5E1" radius={[4, 4, 0, 0]} barSize={16} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">Hydration Consistency</h4>
+                <Calendar className="text-blue-600 w-5 h-5" />
+              </div>
+              <div className="h-[210px] flex flex-col gap-5">
+                <div className="grid grid-cols-7 gap-2">
+                  {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
+                    <span key={`${day}-${index}`} className="text-center text-[10px] font-black text-slate-400">{day}</span>
+                  ))}
+                  {hydrationCalendarData.map((day, index) => (
+                    <div
+                      key={index}
+                      title={day ? `${day.date}: ${Math.round(day.performance)}% of goal` : 'No intake data'}
+                      className={`h-8 rounded-md ${day ? hydrationColor(day.performance) : 'bg-slate-100'} transition-transform hover:scale-110`}
+                    />
+                  ))}
+                </div>
+                <div className="flex items-center justify-center gap-3 text-[10px] font-bold text-slate-400">
+                  <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-sm bg-red-400" />Below 50%</span>
+                  <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-sm bg-amber-400" />On track</span>
+                  <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-sm bg-emerald-500" />Goal met</span>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
                 <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">Risk Trend Over Time</h4>
                 <LineChartIcon className="text-blue-600 w-5 h-5" />
               </div>
-              <div className="h-[250px] w-full">
+              <div className="h-[210px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData.timeline}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="date" fontSize={10} tickLine={false} axisLine={false} />
-                    <YAxis fontSize={10} tickLine={false} axisLine={false} domain={[0, 100]} />
+                    <XAxis dataKey="date" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis fontSize={12} tickLine={false} axisLine={false} domain={[0, 100]} />
                     <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
                     <Line type="monotone" dataKey="risk" stroke="#EF4444" strokeWidth={3} dot={{ r: 4, fill: '#EF4444' }} activeDot={{ r: 6 }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
             </div>
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-6">
+            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
                 <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">Water Intake vs Risk Score</h4>
                 <TrendingUp className="text-blue-600 w-5 h-5" />
               </div>
-              <div className="h-[250px] w-full">
+              <div className="h-[210px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <ScatterChart>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis type="number" dataKey="consumed" name="Water" unit="ml" fontSize={10} tickLine={false} axisLine={false} />
-                    <YAxis type="number" dataKey="risk" name="Risk" fontSize={10} tickLine={false} axisLine={false} />
+                    <XAxis type="number" dataKey="consumed" name="Water" unit="ml" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis type="number" dataKey="risk" name="Risk" fontSize={12} tickLine={false} axisLine={false} />
                     <Tooltip cursor={{ strokeDasharray: '3 3' }} />
                     <Scatter name="Logs" data={chartData.scatter} fill="#2563EB" />
                   </ScatterChart>
                 </ResponsiveContainer>
               </div>
             </div>
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-6">
+            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
                 <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">AI Recommendation Effectiveness</h4>
                 <Cpu className="text-blue-600 w-5 h-5" />
               </div>
-              <div className="h-[250px] w-full">
+              <div className="h-[210px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData.timeline}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="date" fontSize={10} tickLine={false} axisLine={false} />
-                    <YAxis fontSize={10} tickLine={false} axisLine={false} />
+                    <XAxis dataKey="date" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis fontSize={12} tickLine={false} axisLine={false} />
                     <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
-                    <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
                     <Bar dataKey="aiRecs" name="Recs Given" fill="#CBD5E1" barSize={20} />
                     <Bar dataKey="aiFollowed" name="Recs Followed" fill="#2563EB" barSize={20} />
                   </ComposedChart>

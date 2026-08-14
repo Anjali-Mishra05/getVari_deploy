@@ -9,7 +9,7 @@ interface HydrationHeatmapProps {
 const HydrationHeatmap: React.FC<HydrationHeatmapProps> = ({ data, loading }) => {
   if (loading) {
     return (
-      <GlassCard className="h-80 flex items-center justify-center">
+      <GlassCard className="h-[300px] flex items-center justify-center">
         <div className="animate-pulse text-slate-400 font-mono text-[10px]">GENERATING CALENDAR MAP...</div>
       </GlassCard>
     );
@@ -39,7 +39,7 @@ const HydrationHeatmap: React.FC<HydrationHeatmapProps> = ({ data, loading }) =>
   });
 
   return (
-    <GlassCard className="space-y-6">
+    <GlassCard className="space-y-4 h-[300px]">
       <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Hydration Consistency</h3>
 
       <div className="grid grid-cols-7 gap-2 px-2">

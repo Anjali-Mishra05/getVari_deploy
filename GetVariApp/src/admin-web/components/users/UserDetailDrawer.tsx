@@ -1,10 +1,10 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Battery, Wifi, Droplet, Thermometer, Activity, Clock } from 'lucide-react';
 import { addOverlay, removeOverlay, forceClearLocks } from '../../utils/overlayManager';
 import Badge from '../shared/Badge';
-import UserJourney from './UserJourney';
 import { User } from '../../types';
+import { sendCriticalAlert } from '../../services/AdminAlertService';
 
 interface UserDetailDrawerProps {
   user?: User;
@@ -13,13 +13,22 @@ interface UserDetailDrawerProps {
 
 const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) => {
   if (!user) return null;
+  const [alertState, setAlertState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
 
-  const handlePing = () => {
-    console.log(`Broadcast GATT Ping for ${user.name}`);
-  };
+  const handleSendAlert = async () => {
+    if (user.status !== 'Critical') {
+      setAlertState('error');
+      return;
+    }
 
-  const handleSimulateIntake = () => {
-    console.log(`Simulate Admin Intake for ${user.name}`);
+    setAlertState('sending');
+    try {
+      await sendCriticalAlert(user);
+      setAlertState('sent');
+    } catch (error) {
+      console.error('[Admin alert] Failed to send:', error);
+      setAlertState('error');
+    }
   };
 
   const formatMockPhone = (id?: string) => {
@@ -49,8 +58,6 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
 
   if (typeof document === 'undefined') return null;
 
-  const [view, setView] = React.useState<'profile'|'journey'>('profile');
-
   const panel = (
     <div className="user-drawer-root fixed inset-0 z-50">
       <div
@@ -59,7 +66,7 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
         aria-hidden
       />
       <aside
-        className="fixed top-0 right-0 h-[100dvh] w-[55vw] max-w-[900px] bg-white border-l border-slate-200 p-6 overflow-y-auto space-y-6 shadow-2xl flex flex-col justify-between animate-slideIn scroll-area"
+        className="fixed top-0 right-0 h-[100dvh] w-[50vw] max-w-[820px] bg-white border-l border-slate-200 p-6 overflow-y-auto space-y-6 shadow-2xl flex flex-col justify-between animate-slideIn scroll-area"
         role="dialog"
         aria-modal="true"
       >
@@ -78,29 +85,13 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
             </button>
           </div>
 
-          <div className="flex gap-2 items-center bg-slate-50 p-1 rounded-xl w-fit">
-            <button
-              onClick={() => setView('profile')}
-              className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${view === 'profile' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              PROFILE
-            </button>
-            <button
-              onClick={() => setView('journey')}
-              className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${view === 'journey' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              USER JOURNEY
-            </button>
-          </div>
-
-          {view === 'profile' && (
-            <div className="space-y-6">
+          <div className="space-y-6">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 shadow-sm">
               <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Demographic Profile</span>
               <p className="text-sm font-black text-slate-900 mt-1">{user.gender}, {user.age} Years Old</p>
               <div className="mt-3">
-                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400 block">PHONE NUMBER</span>
+                <span className="text-[10px] uppercase font-black tracking-widest text-slate-400 block">PHONE NUMBER</span>
                 <p className="text-sm font-black text-slate-900 mt-1">{user.phone ? user.phone : formatMockPhone(user.id).replace('+1', '+91')}</p>
               </div>
               <p className="text-[10px] font-bold text-slate-500 mt-3 uppercase tracking-wider">Weight baseline: {user.weightKg} Kg</p>
@@ -108,6 +99,12 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
             <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 shadow-sm">
               <span className="text-[9px] uppercase font-black tracking-widest text-blue-600">Fluid Intake (Today)</span>
               <p className="text-sm font-black text-blue-700 mt-1">{user.waterIntakeMl} ml Ingested</p>
+              <div className="w-full h-1.5 bg-blue-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-blue-600"
+                  style={{ width: `${Math.min(100, (user.waterIntakeMl / user.targetDailyMl) * 100)}%` }}
+                ></div>
+              </div>
               <p className="text-[10px] font-bold text-blue-500 mt-1 uppercase tracking-wider">Daily Target: {user.targetDailyMl} ml</p>
             </div>
           </div>
@@ -140,9 +137,9 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
               <span className="text-[9px] uppercase font-black tracking-widest text-slate-400 block mb-1">7-Day Risk History Index trend</span>
               <div className="h-16 flex items-end justify-between gap-1 pt-4 border-b border-dashed border-slate-200 px-2">
                 {user.riskHistory.map((val, idx) => (
-                  <div key={idx} className="flex-1 flex flex-col items-center h-full justify-end" title={`Day ${idx + 1}: ${val}%`}>
-                    <div className={`w-full rounded-t-md transition-all duration-500 ${
-                      val >= 75 ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.2)]' :
+                  <div key={idx} className="flex-1 flex flex-col items-center h-full justify-end group relative" title={`Day ${idx + 1}: ${val}%`}>
+                    <div className={`w-full rounded-t-lg transition-all duration-500 group-hover:brightness-110 ${
+                      val >= 75 ? 'bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)]' :
                       val >= 50 ? 'bg-orange-400' :
                       val >= 25 ? 'bg-yellow-400' : 'bg-emerald-500'
                     }`} style={{ height: `${val}%` }}></div>
@@ -156,26 +153,26 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block border-b border-slate-200 pb-2">Active Sensor Feeds</span>
             <div className="grid grid-cols-3 gap-2 text-center">
               <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm">
-                <span className="text-[9px] text-slate-400 font-black uppercase block tracking-widest">Heart rate</span>
-                <span className="text-sm font-black text-slate-900 mt-1 block">{user.heartRate} BPM</span>
+                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Heart rate</span>
+                <span className="text-xl font-black text-slate-900 mt-1 block">{user.heartRate} BPM</span>
               </div>
               <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm">
-                <span className="text-[9px] text-slate-400 font-black uppercase block tracking-widest">Exertion</span>
-                <span className="text-sm font-black text-slate-900 mt-1 block">{user.activityLoad}%</span>
+                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Exertion</span>
+                <span className="text-xl font-black text-slate-900 mt-1 block">{user.activityLoad}%</span>
               </div>
               <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm">
-                <span className="text-[9px] text-slate-400 font-black uppercase block tracking-widest">Sweat GSR</span>
-                <span className="text-sm font-black text-slate-900 mt-1 block">{user.sweatGSR} µS</span>
+                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Sweat GSR</span>
+                <span className="text-xl font-black text-slate-900 mt-1 block">{user.sweatGSR} µS</span>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2 text-center">
               <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm">
-                <span className="text-[9px] text-slate-400 font-black uppercase block tracking-widest">Ambient Temp</span>
-                <span className="text-xs font-black text-slate-900 mt-1 block">{user.temperature} °C</span>
+                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Ambient Temp</span>
+                <span className="text-lg font-black text-slate-900 mt-1 block">{user.temperature} °C</span>
               </div>
               <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm">
-                <span className="text-[9px] text-slate-400 font-black uppercase block tracking-widest">Ambient Humidity</span>
-                <span className="text-xs font-black text-slate-900 mt-1 block">{user.humidity}% rH</span>
+                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Ambient Humidity</span>
+                <span className="text-lg font-black text-slate-900 mt-1 block">{user.humidity}% rH</span>
               </div>
             </div>
           </div>
@@ -183,19 +180,148 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
           <div className="bg-slate-50 p-5 rounded-3xl border border-slate-100 shadow-sm space-y-3">
             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block border-b border-slate-200 pb-2">Carrier Telemetry node status</span>
             <div className="flex justify-between items-center text-xs">
-              <span className="text-slate-500 font-bold uppercase tracking-wider">Firmware Build</span>
-              <span className="text-slate-900 font-mono font-black">{user.firmwareVersion}</span>
+              <span className="text-slate-500 font-bold uppercase tracking-[0.1em]">Firmware Build</span>
+              <span className="text-slate-900 font-mono font-black bg-white px-3 py-1 rounded-lg border border-slate-100 shadow-sm">{user.firmwareVersion}</span>
             </div>
             <div className="flex justify-between items-center text-xs">
-              <span className="text-slate-500 font-bold uppercase tracking-wider">Hardware Battery level</span>
-              <span className="text-emerald-600 font-mono font-black flex items-center gap-1">
-                <Battery className="w-3.5 h-3.5" /> {user.batteryLevel}%
+              <span className="text-slate-500 font-bold uppercase tracking-[0.1em]">Hardware Battery level</span>
+              <span className="text-emerald-600 font-mono font-black flex items-center gap-2 bg-white px-3 py-1 rounded-lg border border-slate-100 shadow-sm">
+                <Battery className="w-4 h-4" /> {user.batteryLevel}%
               </span>
             </div>
             <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-500 font-bold uppercase tracking-[0.1em]">BLE Sync Strength</span>
+              <span className="text-blue-600 font-mono font-black flex items-center gap-2 bg-white px-3 py-1 rounded-lg border border-slate-100 shadow-sm">
+                <Wifi className="w-4 h-4" /> {user.rssi} dBm
+              </span>
+            </div>
+          </div>
+            </div>
+        </div>
+
+        <div className="border-t border-slate-100 pt-6 mt-4">
+          <button
+            onClick={handleSendAlert}
+            disabled={alertState === 'sending' || alertState === 'sent'}
+            className={`w-full font-black text-xs py-3 rounded-2xl shadow-lg transition uppercase tracking-widest ${
+              alertState === 'sent' ? 'bg-emerald-600 text-white shadow-emerald-200 cursor-default' :
+              alertState === 'error' ? 'bg-red-600 text-white shadow-red-200' :
+              'bg-red-600 hover:bg-red-700 text-white shadow-red-200 cursor-pointer'
+            } disabled:opacity-70`}
+          >
+            {alertState === 'sending' ? 'Sending Alert...' : alertState === 'sent' ? 'Alert Sent Successfully' : alertState === 'error' ? 'Unable to Send Alert — Retry' : 'Send Alert'}
+          </button>
+          {alertState === 'sent' && <p className="mt-3 text-center text-xs font-bold text-emerald-600">Critical alert sent and recorded in this user’s journey.</p>}
+          {alertState === 'error' && <p className="mt-3 text-center text-xs font-bold text-red-600">The alert could not be delivered. Please try again.</p>}
+        </div>
+      </aside>
+    </div>
+  );
+
+  /*
+          {view === 'profile' && (
+            <div className="space-y-6">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 shadow-sm">
+              <span className="text-xs uppercase font-black tracking-widest text-slate-400">Demographic Profile</span>
+              <p className="text-base font-black text-slate-900 mt-1">{user.gender}, {user.age} Years Old</p>
+              <div className="mt-4">
+                <span className="text-xs uppercase font-black tracking-widest text-slate-400 block">PHONE NUMBER</span>
+                <p className="text-base font-black text-slate-900 mt-1">{user.phone ? user.phone : formatMockPhone(user.id).replace('+1', '+91')}</p>
+              </div>
+              <p className="text-xs font-bold text-slate-500 mt-4 uppercase tracking-wider">Weight baseline: {user.weightKg} Kg</p>
+            </div>
+            <div className="bg-blue-50 p-5 rounded-2xl border border-blue-100 shadow-sm">
+              <span className="text-xs uppercase font-black tracking-widest text-blue-600">Fluid Intake (Today)</span>
+              <p className="text-base font-black text-blue-700 mt-1">{user.waterIntakeMl} ml Ingested</p>
+              <p className="text-xs font-bold text-blue-500 mt-2 uppercase tracking-wider">Daily Target: {user.targetDailyMl} ml</p>
+            </div>
+          </div>
+
+          <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 shadow-sm space-y-4">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-black uppercase tracking-widest text-slate-400">Telemetry Resolved Risk</span>
+              <Badge
+                variant={
+                  user.status === 'Critical' ? 'red' :
+                  user.status === 'High Risk' ? 'amber' :
+                  user.status === 'Mild Risk' ? 'cyan' : 'emerald'
+                }
+                dot
+              >
+                {user.status}
+              </Badge>
+            </div>
+            <div className="flex items-baseline gap-3">
+              <h3 className={`text-6xl font-black ${
+                user.riskScore >= 75 ? 'text-red-600' :
+                user.riskScore >= 50 ? 'text-orange-500' :
+                user.riskScore >= 25 ? 'text-yellow-600' : 'text-emerald-600'
+              }`}>
+                {user.riskScore}
+              </h3>
+              <span className="text-sm font-bold text-slate-400 uppercase tracking-widest">/ 100 Risk Index</span>
+            </div>
+            <div className="pt-4">
+              <span className="text-xs uppercase font-black tracking-widest text-slate-400 block mb-2">7-Day Risk History Index trend</span>
+              <div className="h-16 flex items-end justify-between gap-1 pt-4 border-b border-dashed border-slate-200 px-2">
+                {user.riskHistory.map((val, idx) => (
+                  <div key={idx} className="flex-1 flex flex-col items-center h-full justify-end" title={`Day ${idx + 1}: ${val}%`}>
+                    <div className={`w-full rounded-t-md transition-all duration-500 ${
+                      val >= 75 ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.2)]' :
+                      val >= 50 ? 'bg-orange-400' :
+                      val >= 25 ? 'bg-yellow-400' : 'bg-emerald-500'
+                    }`} style={{ height: `${val}%` }}></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 shadow-sm space-y-5">
+            <span className="text-xs font-black uppercase tracking-widest text-slate-400 block border-b border-slate-200 pb-3">Active Sensor Feeds</span>
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Heart rate</span>
+                <span className="text-base font-black text-slate-900 mt-1 block">{user.heartRate} BPM</span>
+              </div>
+              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Exertion</span>
+                <span className="text-base font-black text-slate-900 mt-1 block">{user.activityLoad}%</span>
+              </div>
+              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Sweat GSR</span>
+                <span className="text-base font-black text-slate-900 mt-1 block">{user.sweatGSR} µS</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Ambient Temp</span>
+                <span className="text-sm font-black text-slate-900 mt-1 block">{user.temperature} °C</span>
+              </div>
+              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Ambient Humidity</span>
+                <span className="text-sm font-black text-slate-900 mt-1 block">{user.humidity}% rH</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 shadow-sm space-y-4">
+            <span className="text-xs font-black uppercase tracking-widest text-slate-400 block border-b border-slate-200 pb-3">Carrier Telemetry node status</span>
+            <div className="flex justify-between items-center text-sm">
+              <span className="text-slate-500 font-bold uppercase tracking-wider">Firmware Build</span>
+              <span className="text-slate-900 font-mono font-black">{user.firmwareVersion}</span>
+            </div>
+            <div className="flex justify-between items-center text-sm">
+              <span className="text-slate-500 font-bold uppercase tracking-wider">Hardware Battery level</span>
+              <span className="text-emerald-600 font-mono font-black flex items-center gap-2">
+                <Battery className="w-4.5 h-4.5" /> {user.batteryLevel}%
+              </span>
+            </div>
+            <div className="flex justify-between items-center text-sm">
               <span className="text-slate-500 font-bold uppercase tracking-wider">BLE Sync Strength</span>
-              <span className="text-blue-600 font-mono font-black flex items-center gap-1">
-                <Wifi className="w-3.5 h-3.5" /> {user.rssi} dBm
+              <span className="text-blue-600 font-mono font-black flex items-center gap-2">
+                <Wifi className="w-4.5 h-4.5" /> {user.rssi} dBm
               </span>
             </div>
           </div>
@@ -209,16 +335,16 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
           )}
         </div>
 
-        <div className="flex gap-3 border-t border-slate-100 pt-6 mt-4">
+        <div className="flex gap-4 border-t border-slate-100 pt-8 mt-6">
           <button
             onClick={handlePing}
-            className="flex-1 bg-white hover:bg-slate-50 text-slate-900 font-black text-xs py-3 rounded-2xl border border-slate-200 shadow-sm transition cursor-pointer uppercase tracking-widest"
+            className="flex-1 bg-white hover:bg-slate-50 text-slate-900 font-black text-sm py-4 rounded-2xl border border-slate-200 shadow-sm transition cursor-pointer uppercase tracking-widest"
           >
             Broadcast GATT Ping
           </button>
           <button
             onClick={handleSimulateIntake}
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs py-3 rounded-2xl shadow-lg shadow-blue-200 transition cursor-pointer uppercase tracking-widest"
+            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-black text-sm py-4 rounded-2xl shadow-lg shadow-blue-200 transition cursor-pointer uppercase tracking-widest"
           >
             Simulate Admin Intake
           </button>
@@ -226,6 +352,7 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
       </aside>
     </div>
   );
+  */
 
   return createPortal(panel, document.body);
 };

@@ -20,32 +20,33 @@ interface NavbarProps {
 
 const Navbar: React.FC<NavbarProps> = ({ activeTab, onTabChange }) => {
   const navItems: { id: NavItem; label: string }[] = [
-    { id: 'dashboard', label: 'DASHBOARD' },
-    { id: 'users', label: 'USERS' },
-    { id: 'journey', label: 'USER JOURNEY' },
-    { id: 'devices', label: 'DEVICES' },
-    { id: 'alerts', label: 'ALERTS' },
-    { id: 'analytics', label: 'ANALYTICS' },
-    { id: 'feedback', label: 'FEEDBACK' },
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'users', label: 'User Directory' },
+    { id: 'journey', label: 'User Journey' },
+    { id: 'devices', label: 'Hardware Fleet' },
+    { id: 'alerts', label: 'Safety Alerts' },
+    { id: 'analytics', label: 'Bio-Analytics' },
+    { id: 'feedback', label: 'User Feedback' },
   ];
 
   return (
-    <nav className="inline-flex bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm mb-12">
+    <nav className="inline-flex bg-slate-50 p-1 rounded-xl border border-slate-200 shadow-sm mb-7 overflow-x-auto max-w-full">
       {navItems.map((item) => (
         <button
           key={item.id}
           onClick={() => onTabChange(item.id)}
-          className={`px-6 py-2.5 rounded-xl text-[10px] font-black tracking-[0.2em] transition-all duration-200 ${
+          className={`px-5 py-2.5 rounded-lg text-[10.5px] font-black transition-all duration-200 whitespace-nowrap tracking-widest ${
             activeTab === item.id
-              ? 'bg-blue-600 text-white shadow-lg shadow-blue-200'
-              : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'
+              ? 'bg-blue-600 text-white shadow-md shadow-blue-100 border border-blue-700'
+              : 'text-slate-500 hover:text-blue-600 hover:bg-white/50'
           }`}
         >
-          {item.label}
+          {item.label.toUpperCase()}
         </button>
       ))}
     </nav>
   );
 };
+
 
 export default Navbar;

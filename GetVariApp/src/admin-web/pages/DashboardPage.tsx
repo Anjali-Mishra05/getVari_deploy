@@ -10,6 +10,7 @@ import { SupabaseAdminService } from '../services/SupabaseAdminService';
 const DashboardPage: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  const [logs, setLogs] = useState(mockLogs);
 
   useEffect(() => {
     const loadData = async () => {
@@ -57,70 +58,72 @@ const DashboardPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-7 animate-fadeIn">
       {/* KPI Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard
-          label="Total"
+          label="Fleet Size"
           value={stats.total}
           sublabel="Registered Users"
-          icon={<Users size={20} />}
+          icon={<Users size={24} />}
+          iconColor="text-slate-400"
         />
         <StatCard
-          label="Syncing"
+          label="Live Sync"
           value={stats.active}
           sublabel="Active Today"
-          icon={<Activity size={20} />}
+          icon={<Activity size={24} />}
           color="text-emerald-400"
         />
         <StatCard
-          label="BLE Nodes"
+          label="Hardware"
           value={stats.connected}
           sublabel="Linked Wearables"
-          icon={<Cpu size={20} />}
-          color="text-teal-400"
+          icon={<Cpu size={24} />}
+          color="text-cyan-400"
         />
         <StatCard
           label="Avg Risk"
           value={`--%`}
-          sublabel="Data Not Persisted"
-          icon={<TrendingUp size={20} />}
-          color="text-slate-500"
+          sublabel="Historical Data Not Persisted"
+          icon={<TrendingUp size={24} />}
+          color="text-amber-400"
         />
         <StatCard
-          label="Critical"
+          label="Hazards"
           value={stats.critical}
           sublabel="Users at Risk"
-          icon={<AlertTriangle size={20} />}
-          color="text-red-500"
+          icon={<AlertTriangle size={24} />}
+          color="text-red-400"
         />
         <StatCard
           label="Intake"
           value={`${stats.totalWater}L`}
           sublabel="Fleet Total Today"
-          icon={<Droplets size={20} />}
+          icon={<Droplets size={24} />}
           color="text-blue-400"
         />
       </div>
 
       {/* Main Panels */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-        <div className="lg:col-span-3">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
+        <div className="xl:col-span-7">
           <AlertPanel
             alerts={alerts}
             onInvestigate={(name) => console.log('Investigating', name)}
           />
         </div>
-        <div className="lg:col-span-2">
+        <div className="xl:col-span-5">
           <Terminal
-            logs={mockLogs}
-            onClear={() => console.log('Logs cleared')}
+            logs={logs}
+            onClear={() => setLogs([])}
           />
         </div>
       </div>
     </div>
   );
 };
+
 
 
 export default DashboardPage;

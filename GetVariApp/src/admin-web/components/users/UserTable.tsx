@@ -11,38 +11,46 @@ interface UserTableProps {
 
 const UserTable: React.FC<UserTableProps> = ({ users, onUserClick }) => {
   return (
-    <GlassCard className="p-0 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-left">
+    <GlassCard className="p-0 overflow-hidden border-slate-200 shadow-md rounded-xl">
+      <div className="overflow-hidden">
+        <table className="w-full table-fixed border-collapse text-left">
+          <colgroup>
+            <col className="w-[24%]" />
+            <col className="w-[14%]" />
+            <col className="w-[18%]" />
+            <col className="w-[14%]" />
+            <col className="w-[18%]" />
+            <col className="w-[12%]" />
+          </colgroup>
           <thead>
-            <tr className="border-b border-slate-200 bg-slate-50">
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Identification</th>
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Risk Profile</th>
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Telemetry</th>
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Hydration</th>
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Hardware</th>
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 text-right">Actions</th>
+            <tr className="border-b border-slate-100 bg-slate-50/50">
+              <th className="px-6 py-5 text-[11px] font-bold uppercase tracking-widest text-slate-500">Identification</th>
+              <th className="px-6 py-5 text-[11px] font-bold uppercase tracking-widest text-slate-500">System Risk Profile</th>
+              <th className="px-6 py-5 text-[11px] font-bold uppercase tracking-widest text-slate-500">Biometric Sync</th>
+              <th className="px-6 py-5 text-[11px] font-bold uppercase tracking-widest text-slate-500">Hydration Intake</th>
+              <th className="px-6 py-5 text-[11px] font-bold uppercase tracking-widest text-slate-500">Hardware Status</th>
+              <th className="px-4 py-5 text-[11px] font-bold uppercase tracking-widest text-slate-500 text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {users.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-center p-12 text-slate-400 italic text-sm font-medium">No users found matching current filters.</td>
+                <td colSpan={6} className="text-center p-16 text-slate-400 italic text-sm font-medium bg-white">No users found matching current filters.</td>
               </tr>
             ) : (
               users.map(u => (
                 <tr
                   key={u.id}
-                  className="hover:bg-slate-50 transition-colors cursor-pointer group"
+                  className="hover:bg-blue-50/30 transition-all cursor-pointer group bg-white"
                   onClick={() => onUserClick(u)}
                 >
-                  <td className="p-6">
+                  <td className="px-6 py-5 align-middle">
                     <div className="flex flex-col">
-                      <span className="font-black text-sm text-slate-900 tracking-tight">{u.name}</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400 mt-1 uppercase tracking-widest">{u.id} | {u.workload}</span>
+                      <span className="font-bold text-sm text-slate-900 tracking-tight">{u.name}</span>
+                      <span className="text-xs font-medium text-slate-400 mt-1 uppercase tracking-wider">{u.id} | {u.workload}</span>
                     </div>
                   </td>
-                  <td className="p-6">
+                  <td className="px-6 py-5 align-middle">
                     <Badge
                       variant={
                         u.status === 'Critical' ? 'red' :
@@ -50,35 +58,38 @@ const UserTable: React.FC<UserTableProps> = ({ users, onUserClick }) => {
                         u.status === 'Mild Risk' ? 'cyan' : 'emerald'
                       }
                       dot
+                      className="px-2.5 py-1 text-[11px]"
                     >
-                      {u.status} ({u.riskScore})
+                      {u.status}
                     </Badge>
                   </td>
-                  <td className="p-6">
-                    <div className="flex flex-col">
-                      <span className="text-xs font-black text-slate-900 tracking-tight">{u.heartRate} BPM</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400 mt-1 uppercase tracking-widest">Load: {u.activityLoad}%</span>
+                  <td className="px-6 py-5 align-middle">
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-sm font-bold text-slate-800">{u.heartRate || '--'} bpm</span>
+                      <span className="text-xs font-medium text-slate-500">Exertion: {u.activityLoad || 0}% | GSR: {u.sweatGSR || 0}µS</span>
                     </div>
                   </td>
-                  <td className="p-6">
-                    <div className="flex flex-col">
-                      <span className="text-xs font-black text-blue-600 tracking-tight">{u.waterIntakeMl} ML</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400 mt-1 uppercase tracking-widest">Target: {u.targetDailyMl} ML</span>
+                  <td className="px-6 py-5 align-middle">
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-sm font-bold text-blue-600 tracking-tight">{u.waterIntakeMl} ML</span>
+                      <span className="text-xs font-medium text-slate-500">Target: {u.targetDailyMl} ML</span>
                     </div>
                   </td>
-                  <td className="p-6">
-                    <div className="flex items-center gap-4 text-[10px] font-mono font-black">
-                      <span className={`flex items-center gap-1.5 ${u.batteryLevel < 20 ? 'text-red-600 animate-pulse' : 'text-slate-500'}`}>
-                        <Battery size={14} /> {u.batteryLevel}%
-                      </span>
-                      <span className="flex items-center gap-1.5 text-slate-500">
-                        <Wifi size={14} className="text-blue-600" /> {u.rssi} dBm
-                      </span>
+                  <td className="px-6 py-5 align-middle">
+                    <div className="flex items-center gap-6 text-xs font-bold whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <span className={`flex items-center gap-1.5 ${u.batteryLevel < 20 ? 'text-rose-600 animate-pulse' : 'text-slate-600'}`}>
+                          <Battery size={14} className={u.batteryLevel < 20 ? 'fill-rose-50' : 'fill-slate-50'} /> {u.batteryLevel}%
+                        </span>
+                        <span className="flex items-center gap-1.5 text-slate-500">
+                          <Wifi size={14} className="text-blue-500" /> {u.rssi} dBm
+                        </span>
+                      </div>
                     </div>
                   </td>
-                  <td className="p-6 text-right">
-                    <button className="bg-blue-50 text-blue-600 border border-blue-100 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all duration-200 shadow-sm">
-                      View Dossier
+                  <td className="px-4 py-5 align-middle text-right">
+                    <button className="whitespace-nowrap bg-white text-blue-600 border border-blue-200 px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-[0.12em] hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all duration-200 shadow-sm group-hover:shadow-md">
+                      View Details
                     </button>
                   </td>
                 </tr>
@@ -90,5 +101,6 @@ const UserTable: React.FC<UserTableProps> = ({ users, onUserClick }) => {
     </GlassCard>
   );
 };
+
 
 export default UserTable;

@@ -20,25 +20,26 @@ const UserFilters: React.FC<UserFiltersProps> = ({
   onWorkloadFilterChange
 }) => {
   return (
-    <div className="bg-white rounded-2xl p-5 border border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-6 shadow-sm mb-8">
-      <div className="flex-1 max-w-lg">
+    <div className="bg-white rounded-xl p-4 border border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-sm mb-6">
+      <div className="flex-1 max-w-xl">
         <Input
           icon="search"
-          placeholder="Search user catalog by name or serial ID..."
+          placeholder="Filter user directory by name, ID or status..."
           value={searchQuery}
           onChange={(e) => onSearchChange((e.target as HTMLInputElement).value)}
+          className="py-2.5 text-sm"
         />
       </div>
 
-      <div className="flex gap-4 flex-wrap">
-        <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 px-4 py-2 rounded-xl focus-within:border-blue-600 transition-all">
+      <div className="flex gap-3 items-center flex-wrap lg:flex-nowrap">
+        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all shadow-sm">
           <Filter className="w-4 h-4 text-slate-400" />
           <select
             value={riskFilter}
             onChange={(e) => onRiskFilterChange((e.target as HTMLSelectElement).value)}
-            className="bg-transparent text-xs font-black text-slate-700 border-none outline-none cursor-pointer uppercase tracking-widest"
+            className="bg-transparent text-sm font-bold text-slate-600 border-none outline-none cursor-pointer pr-4"
           >
-            <option value="all">All Risks</option>
+            <option value="all">System Risk: All</option>
             <option value="critical">Critical Risk</option>
             <option value="high">High Risk</option>
             <option value="mild">Mild Risk</option>
@@ -46,23 +47,24 @@ const UserFilters: React.FC<UserFiltersProps> = ({
           </select>
         </div>
 
-        <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 px-4 py-2 rounded-xl focus-within:border-blue-600 transition-all">
+        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all shadow-sm">
           <Sliders className="w-4 h-4 text-slate-400" />
           <select
             value={workloadFilter}
             onChange={(e) => onWorkloadFilterChange((e.target as HTMLSelectElement).value)}
-            className="bg-transparent text-xs font-black text-slate-700 border-none outline-none cursor-pointer uppercase tracking-widest"
+            className="bg-transparent text-sm font-bold text-slate-600 border-none outline-none cursor-pointer pr-4"
           >
-            <option value="all">All Workloads</option>
-            <option value="office">Office Worker</option>
-            <option value="commuter">Commuter</option>
-            <option value="gym">Gym Workload</option>
-            <option value="field">Field Worker</option>
+            <option value="all">Workload: All</option>
+            <option value="office">Office Protocol</option>
+            <option value="commuter">Commuter Flow</option>
+            <option value="gym">Gym Exertion</option>
+            <option value="field">Field Ops</option>
           </select>
         </div>
       </div>
     </div>
   );
 };
+
 
 export default UserFilters;

@@ -54,7 +54,7 @@ const AlertsPage: React.FC = () => {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 items-stretch">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 items-stretch">
       <AlertCategory
         title="Critical Hazards"
         icon={<ShieldAlert size={16} className="animate-pulse" />}

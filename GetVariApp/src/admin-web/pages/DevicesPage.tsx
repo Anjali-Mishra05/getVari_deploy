@@ -25,14 +25,7 @@ const DevicesPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h3 className="text-2xl font-black text-slate-900 tracking-tight">Active Hardware Nodes</h3>
-          <p className="text-xs text-slate-400 mt-1 uppercase tracking-widest font-black">Real-time status of all deployed peripherals</p>
-        </div>
-      </div>
-
+    <div>
       <DeviceTable
         users={users}
         onUpdate={(id, name) => console.log('Updating', name)}

@@ -11,56 +11,61 @@ interface FeedbackTableProps {
 
 const FeedbackTable: React.FC<FeedbackTableProps> = ({ feedbacks, onViewDetails }) => {
   return (
-    <GlassCard className="p-0 overflow-hidden">
+    <GlassCard className="p-0 overflow-hidden border-slate-200 shadow-md rounded-xl">
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-left">
           <thead>
-            <tr className="border-b border-slate-200 bg-slate-50">
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">User Details</th>
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 w-1/3">Feedback Preview</th>
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Rating</th>
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Timestamp</th>
-              <th className="p-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 text-right">Actions</th>
+            <tr className="border-b border-slate-100 bg-slate-50/50">
+              <th className="p-4 text-[11px] font-bold uppercase tracking-widest text-slate-500">User Identification</th>
+              <th className="p-4 text-[11px] font-bold uppercase tracking-widest text-slate-500 w-2/5">Feedback Narrative</th>
+              <th className="p-4 text-[11px] font-bold uppercase tracking-widest text-slate-500">Satisfaction</th>
+              <th className="p-4 text-[11px] font-bold uppercase tracking-widest text-slate-500">Log Temporal</th>
+              <th className="p-4 text-[11px] font-bold uppercase tracking-widest text-slate-500 text-right">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-slate-100 bg-white">
             {feedbacks.length === 0 ? (
               <tr>
-                <td colSpan={5} className="text-center p-12 text-slate-400 italic text-sm font-medium">No feedback records found.</td>
+                <td colSpan={5} className="text-center p-16 text-slate-400 italic text-sm font-medium">No feedback records found in telemetry store.</td>
               </tr>
             ) : (
               feedbacks.map(fb => (
                 <tr
                   key={fb.id}
-                  className="hover:bg-slate-50 transition-colors group"
+                  className="hover:bg-blue-50/30 transition-all group"
                 >
-                  <td className="p-6">
-                    <div className="flex flex-col">
-                      <span className="font-black text-sm text-slate-900 tracking-tight">{fb.userName}</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400 mt-1 uppercase tracking-widest">{fb.email}</span>
+                  <td className="p-4">
+                    <div className="flex flex-col gap-1">
+                      <span className="font-bold text-sm text-slate-900 tracking-tight">{fb.userName}</span>
+                      <span className="text-xs font-medium text-slate-400 uppercase tracking-tight">{fb.email}</span>
                     </div>
                   </td>
-                  <td className="p-6">
-                    <p className="text-xs text-slate-500 line-clamp-1 leading-relaxed font-medium">{fb.preview}</p>
-                  </td>
-                  <td className="p-6">
-                    <div className="flex items-center gap-1 text-orange-500">
-                      <Star size={12} fill="currentColor" />
-                      <span className="text-xs font-black font-mono">{fb.rating || 'N/A'}</span>
+                  <td className="p-4">
+                    <div className="relative group">
+                       <p className="text-sm text-slate-600 line-clamp-2 leading-relaxed font-medium group-hover:text-slate-900 transition-colors">{fb.preview}</p>
+                       <div className="w-10 h-0.5 bg-blue-500 rounded-full mt-2 scale-x-0 group-hover:scale-x-100 transition-transform origin-left duration-300"></div>
                     </div>
                   </td>
-                  <td className="p-6">
-                    <div className="flex flex-col">
-                      <span className="text-xs font-black text-slate-700 tracking-tight">{fb.date}</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400 mt-1">{fb.time}</span>
+                  <td className="p-4">
+                    <div className="flex items-center gap-1.5 bg-orange-50 px-2.5 py-1 rounded-md border border-orange-100 w-fit">
+                      <Star size={14} className="text-orange-500 fill-orange-500" />
+                      <span className="text-sm font-bold text-orange-700 font-mono">{fb.rating || 'N/A'}</span>
                     </div>
                   </td>
-                  <td className="p-6 text-right">
+                  <td className="p-4">
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-sm font-bold text-slate-700 tracking-tight flex items-center gap-2">
+                         <span className="w-2 h-2 rounded-full bg-slate-300"></span> {fb.date}
+                      </span>
+                      <span className="text-xs font-medium text-slate-400 pl-4">{fb.time}</span>
+                    </div>
+                  </td>
+                  <td className="p-4 text-right">
                     <button
                       onClick={() => onViewDetails(fb)}
-                      className="bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-600 font-black text-[10px] px-4 py-2 rounded-xl border border-blue-100 transition-all duration-200 flex items-center gap-2 ml-auto uppercase tracking-widest shadow-sm"
+                      className="bg-white hover:bg-blue-600 hover:text-white text-blue-600 font-bold text-xs px-4 py-2 rounded-lg border border-blue-200 transition-all duration-200 flex items-center gap-1.5 ml-auto uppercase tracking-wider shadow-sm group-hover:shadow-md"
                     >
-                      View Details <ArrowRight size={14} />
+                      Audit Details <ArrowRight size={15} />
                     </button>
                   </td>
                 </tr>
@@ -72,5 +77,6 @@ const FeedbackTable: React.FC<FeedbackTableProps> = ({ feedbacks, onViewDetails 
     </GlassCard>
   );
 };
+
 
 export default FeedbackTable;
