@@ -13,15 +13,27 @@ import {
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
-import { AuthService } from '../services/AuthService';
+import { AuthService, AuthChallenge } from '../services/AuthService';
 import NotificationService from '../services/NotificationService';
 import { Cpu } from 'lucide-react-native';
+import { cssInterop } from 'react-native-css-interop';
 import GlassCard from '../components/GlassCard';
+
+// Add CSS Interop for Lucide icons to support className in NativeWind v4
+cssInterop(Cpu, {
+  className: {
+    target: 'style',
+    nativeStyleToProp: {
+      color: true,
+      size: true,
+    },
+  },
+});
 
 const { width } = Dimensions.get('window');
 
 const OtpScreen = ({ route, navigation }: any) => {
-  const { challenge, phoneNumber } = route.params;
+  const { confirmation, phoneNumber } = route.params;
   const [otpCode, setOtpCode] = useState('');
   const [countdown, setCountdown] = useState(60);
   const [loading, setLoading] = useState(false);
@@ -35,8 +47,8 @@ const OtpScreen = ({ route, navigation }: any) => {
   }, [countdown]);
 
   const handleVerifyOtp = async () => {
-    if (otpCode.length < 4) {
-      setError('Please enter the verification code.');
+    if (otpCode.length < 6) {
+      setError('Please enter the 6-digit verification code.');
       return;
     }
 
@@ -44,11 +56,10 @@ const OtpScreen = ({ route, navigation }: any) => {
     setError('');
 
     try {
-      await AuthService.verifyOtp(challenge, otpCode);
+      await AuthService.verifyOtp(confirmation, otpCode);
       // Trigger welcome notification
       await NotificationService.showWelcomeNotification();
-      // A returning user who already onboarded goes straight to the dashboard.
-      navigation.replace(await AuthService.resolveStartupRoute());
+      navigation.replace('Onboarding');
     } catch (err: any) {
       setError(err.message || 'Invalid authorization code.');
     } finally {
@@ -60,8 +71,8 @@ const OtpScreen = ({ route, navigation }: any) => {
     if (countdown > 0) return;
     setLoading(true);
     try {
-      const newChallenge = await AuthService.sendOtp(phoneNumber);
-      navigation.setParams({ challenge: newChallenge });
+      const newConfirmation = await AuthService.sendOtp(phoneNumber);
+      navigation.setParams({ confirmation: newConfirmation });
       setCountdown(60);
       setError('');
     } catch (err: any) {
@@ -213,7 +224,7 @@ const OtpScreen = ({ route, navigation }: any) => {
                   <Text className="text-[10px] text-[#00f2fe] font-black uppercase font-mono tracking-[0.18em]">DEMO / INVESTOR TESTING KEY</Text>
                 </View>
                 <Text className="text-[11px] text-neutral-400 leading-6 font-medium">
-                  Enter any Indian mobile number, check the Terms &amp; Conditions checkbox, and submit. The demo verification passcode is <Text className="text-[#00f2fe] font-black">884200</Text>.
+                  Enter any Indian mobile number, check the Terms &amp; Conditions checkbox, and submit. The demo verification passcode is <Text className="text-[#00f2fe] font-black">123456</Text>.
                 </Text>
               </View>
 

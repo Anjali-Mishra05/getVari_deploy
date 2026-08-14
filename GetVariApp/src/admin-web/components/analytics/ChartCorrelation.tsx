@@ -13,20 +13,20 @@ const ChartCorrelation: React.FC = () => {
 
   return (
     <GlassCard className="space-y-6">
-      <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-neutral-400">Exertion vs Risk Vector</h3>
+      <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Exertion vs Risk Vector</h3>
 
-      <div className="h-48 border-l border-b border-white/10 relative mx-4 mt-8">
-        <span className="absolute bottom-[-20px] left-0 text-[8px] text-neutral-600 uppercase font-mono font-bold tracking-widest">Low Load</span>
-        <span className="absolute bottom-[-20px] right-0 text-[8px] text-neutral-600 uppercase font-mono font-bold tracking-widest">Max Load</span>
-        <span className="absolute top-0 left-[-35px] text-[8px] text-red-500 uppercase font-mono font-bold tracking-widest rotate-[-90deg] origin-top-right">High Risk</span>
+      <div className="h-48 border-l border-b border-slate-200 relative mx-4 mt-8">
+        <span className="absolute bottom-[-20px] left-0 text-[8px] text-slate-400 uppercase font-mono font-black tracking-widest">Low Load</span>
+        <span className="absolute bottom-[-20px] right-0 text-[8px] text-slate-400 uppercase font-mono font-black tracking-widest">Max Load</span>
+        <span className="absolute top-0 left-[-35px] text-[8px] text-red-500 uppercase font-mono font-black tracking-widest rotate-[-90deg] origin-top-right">High Risk</span>
 
         {points.map((p, i) => (
           <div
             key={i}
-            className={`absolute w-3 h-3 rounded-full ${p.color} transition-all duration-500 hover:scale-150 hover:shadow-[0_0_15px_rgba(255,255,255,0.3)] cursor-help group`}
+            className={`absolute w-3 h-3 rounded-full ${p.color} transition-all duration-500 hover:scale-150 hover:shadow-[0_0_10px_rgba(0,0,0,0.1)] cursor-help group`}
             style={{ bottom: p.y, left: p.x }}
           >
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-neutral-900 border border-white/10 px-2 py-1 rounded text-[8px] font-mono text-white opacity-0 group-hover:opacity-100 whitespace-nowrap z-20 pointer-events-none transition-opacity">
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-900 border border-slate-800 px-2 py-1 rounded text-[8px] font-mono text-white opacity-0 group-hover:opacity-100 whitespace-nowrap z-20 pointer-events-none transition-opacity font-bold uppercase tracking-widest">
               {p.label}
             </div>
             {(p.color === 'bg-red-500' || p.color === 'bg-orange-400') && (

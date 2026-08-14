@@ -1,8 +1,30 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityEvent, User } from '../../types';
 import ActivityService from '../../services/ActivityService';
-import { Cpu, Server, AlertTriangle, CheckCircle, Search as SearchIcon, Activity, Droplet, TrendingUp, Calendar } from 'lucide-react';
+import {
+  Cpu,
+  Server,
+  AlertTriangle,
+  CheckCircle,
+  Search as SearchIcon,
+  Activity,
+  Droplet,
+  TrendingUp,
+  Calendar,
+  X,
+  BarChart3,
+  PieChart,
+  LineChart as LineChartIcon,
+  ChevronRight,
+  TrendingDown,
+  Target,
+  Percent
+} from 'lucide-react';
 import Badge from '../shared/Badge';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  LineChart, Line, ScatterChart, Scatter, ZAxis, ComposedChart
+} from 'recharts';
 
 interface Props { user: User }
 
@@ -16,46 +38,39 @@ const actorBadge = (actor: string) => {
 
 const categoryIcon = (category: string) => {
   switch (category) {
-    case 'AI': return <Cpu className="w-4 h-4 text-cyan-400" />;
-    case 'Telemetry': return <Server className="w-4 h-4 text-neutral-400" />;
-    case 'Intake': return <CheckCircle className="w-4 h-4 text-emerald-400" />;
-    case 'Error': return <AlertTriangle className="w-4 h-4 text-red-400" />;
-    default: return <Server className="w-4 h-4 text-neutral-400" />;
+    case 'AI': return <Cpu className="w-4 h-4 text-blue-600" />;
+    case 'Telemetry': return <Server className="w-4 h-4 text-slate-400" />;
+    case 'Intake': return <CheckCircle className="w-4 h-4 text-emerald-600" />;
+    case 'Error': return <AlertTriangle className="w-4 h-4 text-red-600" />;
+    default: return <Server className="w-4 h-4 text-slate-400" />;
   }
 };
 
 const humanizeEvent = (ev: ActivityEvent) => {
-  // Convert metadata into readable text
   switch (ev.eventType) {
     case 'account_created':
       return { title: 'Account created', desc: ev.description || `Account created for ${ev.userId}` };
     case 'onboarding_completed':
-      return { title: 'Onboarding completed', desc: ev.description || 'User finished the onboarding flow and is ready to use GetVari.' };
+      return { title: 'Onboarding completed', desc: ev.description || 'User finished the onboarding flow.' };
     case 'profile_set':
-      return { title: 'Profile details saved', desc: ev.description || 'Age, weight, and gender were recorded for hydration personalization.' };
+      return { title: 'Profile details saved', desc: ev.description || 'Personal hydration baseline set.' };
     case 'ble_device_found':
-      return { title: 'BLE device discovered', desc: ev.description || 'Nearby GetVari sensor found during a scan.' };
+      return { title: 'BLE device discovered', desc: ev.description || 'Nearby GetVari sensor found.' };
     case 'ble_connected':
-      return { title: 'Device connected', desc: ev.description || 'User paired their BLE sensor successfully.' };
+      return { title: 'Device connected', desc: ev.description || 'User paired their sensor successfully.' };
     case 'telemetry_received':
-      return { title: 'Telemetry received', desc: ev.description || 'Live sensor metrics were captured from the device.' };
+      return { title: 'Telemetry received', desc: ev.description || 'Live sensor metrics captured.' };
     case 'water_intake_added':
       return { title: 'Water intake recorded', desc: `Logged ${ev.metadata?.amount ?? '0'} mL of water.` };
     case 'ai_recommendation':
       return {
-        title: 'AI hydration recommendation',
+        title: 'AI Recommendation',
         desc: ev.metadata?.recommendation || ev.description || 'AI suggested a hydration action.',
-        extra: {
-          recommendation: ev.metadata?.recommendation,
-          reason: ev.metadata?.reason,
-          userResponse: ev.metadata?.userResponse,
-          outcome: ev.metadata?.outcome,
-        }
       };
     case 'sync_failed':
-      return { title: 'Sync failed', desc: ev.description || 'Device synchronization failed due to timeout or connectivity issues.' };
+      return { title: 'Sync failed', desc: ev.description || 'Device synchronization failed.' };
     default:
-      return { title: ev.title || ev.eventType, desc: ev.description || 'No additional details available.' };
+      return { title: ev.title || ev.eventType, desc: ev.description || 'Activity recorded.' };
   }
 };
 
@@ -65,8 +80,8 @@ const formatDateHeading = (dateStr: string) => {
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
 
-  if (d.toDateString() === today.toDateString()) return `Today — ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}`;
-  if (d.toDateString() === yesterday.toDateString()) return `Yesterday — ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}`;
+  if (d.toDateString() === today.toDateString()) return `Today — ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}`;
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday — ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}`;
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
 };
 
@@ -76,9 +91,10 @@ const UserJourney: React.FC<Props> = ({ user }) => {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [query, setQuery] = useState('');
   const [actorFilter, setActorFilter] = useState<'All' | 'User' | 'AI' | 'System' | 'Admin'>('All');
-  const [range, setRange] = useState<'7'|'30'|'all'|'1'>('all');
+  const [range, setRange] = useState<'7' | '30' | 'all' | '1'>('all');
   const [customDate, setCustomDate] = useState<string>('');
   const [openEventId, setOpenEventId] = useState<string | null>(null);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -92,16 +108,14 @@ const UserJourney: React.FC<Props> = ({ user }) => {
     const now = new Date();
     const startOfToday = new Date(now);
     startOfToday.setHours(0, 0, 0, 0);
-
     const startOf7DaysAgo = new Date(startOfToday);
     startOf7DaysAgo.setDate(startOfToday.getDate() - 6);
-
     const startOf30DaysAgo = new Date(startOfToday);
     startOf30DaysAgo.setDate(startOfToday.getDate() - 29);
 
     const cutoff = range === '7' ? startOf7DaysAgo.getTime()
-                 : range === '30' ? startOf30DaysAgo.getTime()
-                 : range === '1' ? startOfToday.getTime() : 0;
+      : range === '30' ? startOf30DaysAgo.getTime()
+        : range === '1' ? startOfToday.getTime() : 0;
 
     const customCutoff = customDate ? new Date(customDate).setHours(0, 0, 0, 0) : null;
 
@@ -114,7 +128,7 @@ const UserJourney: React.FC<Props> = ({ user }) => {
       } else if (cutoff && new Date(e.timestamp).getTime() < cutoff) return false;
       if (query) {
         const q = query.toLowerCase();
-        return (e.title || '').toLowerCase().includes(q) || (e.description || '').toLowerCase().includes(q) || (e.eventType || '').toLowerCase().includes(q) || (JSON.stringify(e.metadata || {}).toLowerCase().includes(q));
+        return (e.title || '').toLowerCase().includes(q) || (e.description || '').toLowerCase().includes(q) || (e.eventType || '').toLowerCase().includes(q);
       }
       return true;
     });
@@ -122,7 +136,8 @@ const UserJourney: React.FC<Props> = ({ user }) => {
 
   const byDateGroups = useMemo(() => {
     const groups: Record<string, ActivityEvent[]> = {};
-    filtered.forEach(ev => {
+    const sorted = [...filtered].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    sorted.forEach(ev => {
       const key = new Date(ev.timestamp).toDateString();
       groups[key] = groups[key] || [];
       groups[key].push(ev);
@@ -130,225 +145,337 @@ const UserJourney: React.FC<Props> = ({ user }) => {
     return groups;
   }, [filtered]);
 
-  // Insights
-  const insights = useMemo(() => {
-    const total = events.length;
-    const aiCount = events.filter(e => e.category === 'AI').length;
-    const aiFollowed = events.filter(e => e.category === 'AI' && e.metadata?.userResponse === 'Completed').length;
-    const waterLogged = events.filter(e => e.eventType === 'water_intake_added').reduce((s, e) => s + (e.metadata?.amount || 0), 0);
-    const alerts = events.filter(e => e.category === 'Error').length;
-    const riskStart = user.riskHistory && user.riskHistory.length > 0 ? user.riskHistory[0] : null;
-    const riskEnd = user.riskHistory && user.riskHistory.length > 0 ? user.riskHistory[user.riskHistory.length - 1] : null;
-    const riskChange = (riskStart !== null && riskEnd !== null) ? riskEnd - riskStart : null;
-    return { total, aiCount, aiFollowed, waterLogged, alerts, riskStart, riskEnd, riskChange };
-  }, [events, user.riskHistory]);
+  const stats = useMemo(() => {
+    const intakeEvents = filtered.filter(e => e.eventType === 'water_intake_added');
+    const aiEvents = filtered.filter(e => e.category === 'AI');
+    const followedAi = aiEvents.filter(e => e.metadata?.userResponse === 'Completed');
+    const errorEvents = filtered.filter(e => e.category === 'Error');
+
+    const waterConsumed = intakeEvents.reduce((acc, e) => acc + (e.metadata?.amount || 0), 0);
+    const waterRecommended = user.targetDailyMl;
+    const compliance = waterRecommended > 0 ? Math.min(100, Math.round((waterConsumed / waterRecommended) * 100)) : 0;
+
+    // Sort filtered events by timestamp to get range trend
+    const telemetryEvents = filtered
+      .filter(e => e.eventType === 'telemetry_received' && e.metadata?.risk !== undefined)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    const riskStart = telemetryEvents.length > 0 ? telemetryEvents[0].metadata?.risk : (user.riskHistory[0] || 0);
+    const riskEnd = telemetryEvents.length > 0 ? telemetryEvents[telemetryEvents.length - 1].metadata?.risk : user.riskScore;
+    const riskTrend = riskEnd - riskStart;
+
+    return {
+      waterRecommended,
+      waterConsumed,
+      compliance,
+      aiRecommendations: aiEvents.length,
+      recommendationsFollowed: followedAi.length,
+      riskStart,
+      riskEnd,
+      riskTrend,
+      alertCount: errorEvents.length
+    };
+  }, [filtered, user]);
+
+  const chartData = useMemo(() => {
+    const dailyData: Record<string, any> = {};
+    filtered.forEach(e => {
+      const date = new Date(e.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      if (!dailyData[date]) {
+        dailyData[date] = { date, consumed: 0, recommended: user.targetDailyMl, risk: 0, riskCount: 0, aiRecs: 0, aiFollowed: 0 };
+      }
+      if (e.eventType === 'water_intake_added') dailyData[date].consumed += (e.metadata?.amount || 0);
+      if (e.eventType === 'telemetry_received' && e.metadata?.risk !== undefined) {
+        dailyData[date].risk += e.metadata.risk;
+        dailyData[date].riskCount++;
+      }
+      if (e.category === 'AI') {
+        dailyData[date].aiRecs++;
+        if (e.metadata?.userResponse === 'Completed') dailyData[date].aiFollowed++;
+      }
+    });
+
+    const timeline = Object.values(dailyData).map(d => ({
+      ...d,
+      risk: d.riskCount > 0 ? Math.round(d.risk / d.riskCount) : 0
+    })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    const scatter = filtered
+      .filter(e => e.eventType === 'water_intake_added' && e.metadata?.riskSnapshot !== undefined)
+      .map(e => ({ consumed: e.metadata?.amount, risk: e.metadata?.riskSnapshot, name: e.title }));
+
+    return { timeline, scatter };
+  }, [filtered, user]);
 
   const accountCreated = events.find(e => e.eventType === 'account_created')?.timestamp;
   const lastActive = events.length ? events[0].timestamp : null;
 
   const formatIndianPhone = (phone?: string) => {
     if (phone && phone.trim().length > 0) {
-      // Extract digits
       const digits = phone.replace(/\D/g, '');
-      if (digits.length === 10) {
-        return `+91 ${digits.slice(0,5)} ${digits.slice(5)}`;
-      }
-      if (digits.length === 12 && digits.startsWith('91')) {
-        return `+91 ${digits.slice(2,7)} ${digits.slice(7)}`;
-      }
-      if (phone.startsWith('+91')) return phone;
-      return phone; // fallback
+      if (digits.length === 10) return `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
+      return phone;
     }
-
-    // Fallback deterministic mock from user id
-    const sum = Array.from(user.id).reduce((s, ch) => s + ch.charCodeAt(0), 0);
-    const last10 = String(1000000000 + (sum % 9000000000)).slice(-10);
-    return `+91 ${last10.slice(0,5)} ${last10.slice(5)}`;
+    return '+91 98765 43210';
   };
 
   return (
-    <div className="space-y-3">
-      {/* Summary + Filters */}
-      <div className="space-y-4">
-        <div className="bg-neutral-950/50 p-3 rounded-xl border border-white/5 mb-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-12 h-12 bg-neutral-900/40 rounded-md flex items-center justify-center text-white font-bold text-lg">{user.name.split(' ').map(s=>s[0]).slice(0,2).join('')}</div>
-              <div className="min-w-0">
-                <div className="text-base font-extrabold text-white truncate">{user.name}</div>
-                <div className="text-xs text-neutral-400 font-mono mt-0.5 truncate">{formatIndianPhone(user.phone)}</div>
-              </div>
+    <div className="space-y-6">
+      {/* Profile & KPI Summary - Tightened Layout */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+        <div className="flex flex-col lg:flex-row items-center justify-between pb-4">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-blue-100">
+              {user.name.split(' ').map(s => s[0]).slice(0, 2).join('')}
             </div>
-
-            <div className="flex flex-wrap items-center gap-4 text-xs text-neutral-400">
-              <div className="min-w-[120px]">
-                <div className="font-mono uppercase tracking-[0.16em] text-[10px]">Account created</div>
-                <div className="text-sm text-white">{accountCreated ? new Date(accountCreated).toLocaleDateString() : '—'}</div>
-              </div>
-              <div className="min-w-[120px]">
-                <div className="font-mono uppercase tracking-[0.16em] text-[10px]">Last active</div>
-                <div className="text-sm text-white">{lastActive ? new Date(lastActive).toLocaleDateString() : '—'}</div>
-              </div>
-              <div className="min-w-[110px]">
-                <div className="font-mono uppercase tracking-[0.16em] text-[10px]">Daily goal</div>
-                <div className="text-sm text-cyan-300 font-bold">{user.targetDailyMl} mL</div>
-              </div>
+            <div>
+              <h1 className="text-xl font-black text-slate-900 leading-tight">{user.name}</h1>
+              <p className="text-[11px] font-bold text-slate-400">{formatIndianPhone(user.phone)}</p>
             </div>
           </div>
 
-          <div className="mt-3 overflow-x-auto">
-            <div className="min-w-full rounded-2xl border border-white/10 bg-neutral-950/40 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
-              <div className="grid grid-cols-6 divide-x divide-white/10 text-white text-[10px]">
-                <div className="flex flex-col justify-center gap-1 px-3 py-2 whitespace-nowrap">
-                  <div className="flex items-center gap-2 text-cyan-400"><Activity className="w-4 h-4" /><span className="text-neutral-400 uppercase tracking-[0.24em]">Activities</span></div>
-                  <div className="text-sm font-semibold leading-none">{insights.total}</div>
-                </div>
-
-                <div className="flex flex-col justify-center gap-1 px-3 py-2 whitespace-nowrap min-w-[96px]">
-                  <div className="flex items-center gap-2 text-cyan-400"><Cpu className="w-4 h-4" /><span className="text-neutral-400 uppercase tracking-[0.24em] truncate">AI recommendation</span></div>
-                  <div className="text-sm font-semibold leading-none">{insights.aiCount}</div>
-                </div>
-
-                <div className="flex flex-col justify-center gap-1 px-3 py-2 whitespace-nowrap">
-                  <div className="flex items-center gap-2 text-emerald-400"><CheckCircle className="w-4 h-4" /><span className="text-neutral-400 uppercase tracking-[0.24em]">Followed</span></div>
-                  <div className="text-sm font-semibold leading-none">{insights.aiFollowed}</div>
-                </div>
-
-                <div className="flex flex-col justify-center gap-1 px-3 py-2 whitespace-nowrap">
-                  <div className="flex items-center gap-2 text-cyan-400"><Droplet className="w-4 h-4" /><span className="text-neutral-400 uppercase tracking-[0.24em]">Water</span></div>
-                  <div className="text-sm font-semibold leading-none">{insights.waterLogged} mL / {user.targetDailyMl} mL</div>
-                </div>
-
-                <div className="flex flex-col justify-center gap-1 px-3 py-2 whitespace-nowrap">
-                  <div className="flex items-center gap-2 text-red-400"><AlertTriangle className="w-4 h-4" /><span className="text-neutral-400 uppercase tracking-[0.24em]">Alert</span></div>
-                  <div className="text-sm font-semibold leading-none">{insights.alerts}</div>
-                </div>
-
-                <div className="flex flex-col justify-center gap-1 px-3 py-2 whitespace-nowrap">
-                  <div className="flex items-center gap-2 text-red-400"><TrendingUp className="w-4 h-4" /><span className="text-neutral-400 uppercase tracking-[0.24em]">Risk trend</span></div>
-                  <div className="text-sm font-semibold leading-none">{insights.riskStart !== null && insights.riskEnd !== null ? `${insights.riskStart} → ${insights.riskEnd} ${insights.riskChange !== null && insights.riskChange > 0 ? '↑' : insights.riskChange !== null && insights.riskChange < 0 ? '↓' : ''}` : '—'}</div>
-                  {insights.riskChange !== null && (
-                    <div className={`text-[10px] ${insights.riskChange > 0 ? 'text-red-400' : insights.riskChange < 0 ? 'text-emerald-400' : 'text-neutral-400'}`}>
-                      {insights.riskChange > 0 ? `+${insights.riskChange} points` : `${insights.riskChange} points`}
-                    </div>
-                  )}
-                </div>
-              </div>
+          <div className="flex gap-10 text-right">
+            <div>
+              <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Account Created</div>
+              <div className="text-[15px] font-black text-slate-800">{accountCreated ? new Date(accountCreated).toLocaleDateString() : '—'}</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Last Active</div>
+              <div className="text-[15px] font-black text-slate-800">{lastActive ? new Date(lastActive).toLocaleDateString() : '—'}</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Daily Goal</div>
+              <div className="text-[15px] font-black text-blue-600">{user.targetDailyMl} mL</div>
             </div>
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 mt-12 w-full lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex-1 min-w-0 flex items-center gap-3 rounded-2xl bg-neutral-900/50 p-3 border border-transparent focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400/25 transition-all duration-150">
-            <SearchIcon className="w-5 h-5 text-cyan-300" />
-            <input placeholder="Search journey..." className="bg-transparent outline-none text-sm text-white placeholder:text-neutral-500 flex-1 min-w-0" value={query} onChange={e => setQuery(e.target.value)} />
-          </div>
+        {/* 6-Column Divider KPI Row - Compact */}
+        <div className="border-t border-slate-100 pt-5 mt-1">
+          <div className="flex divide-x divide-slate-100 items-start">
+            <div className="flex-1 pr-4">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Activity className="w-3.5 h-3.5 text-blue-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Activities</span>
+              </div>
+              <div className="text-lg font-black text-slate-900 leading-none">{filtered.length}</div>
+            </div>
 
-          <select className="bg-neutral-900/50 border border-white/10 text-sm text-white p-3 rounded-2xl min-w-[150px] w-full lg:w-auto" value={actorFilter} onChange={e => setActorFilter(e.target.value as any)}>
-            <option value="All">All actors</option>
+            <div className="flex-1 px-5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Cpu className="w-3.5 h-3.5 text-blue-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400 truncate">AI Recomm...</span>
+              </div>
+              <div className="text-lg font-black text-slate-900 leading-none">{stats.aiRecommendations}</div>
+            </div>
+
+            <div className="flex-1 px-5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Followed</span>
+              </div>
+              <div className="text-lg font-black text-slate-900 leading-none">{stats.recommendationsFollowed}</div>
+            </div>
+
+            <div className="flex-[1.4] px-5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Droplet className="w-3.5 h-3.5 text-blue-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Water</span>
+              </div>
+              <div className="text-lg font-black text-slate-900 leading-none whitespace-nowrap">
+                {stats.waterConsumed} mL <span className="text-slate-400 font-bold text-[11px]">/ {stats.waterRecommended} mL</span>
+              </div>
+            </div>
+
+            <div className="flex-1 px-5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-red-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Alert</span>
+              </div>
+              <div className="text-lg font-black text-slate-900 leading-none">{stats.alertCount}</div>
+            </div>
+
+            <div className="flex-[1.2] pl-5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <TrendingUp className="w-3.5 h-3.5 text-red-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Risk Trend</span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <div className="text-lg font-black text-slate-900 leading-none whitespace-nowrap">
+                  {stats.riskStart} <span className="text-slate-300 mx-1">→</span> {stats.riskEnd}
+                  <span className="ml-1 text-slate-400 font-bold">{stats.riskTrend > 0 ? '↑' : stats.riskTrend < 0 ? '↓' : ''}</span>
+                </div>
+                {stats.riskTrend !== 0 && (
+                  <div className={`text-[9px] font-black uppercase tracking-tight ${stats.riskTrend > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                    {stats.riskTrend > 0 ? `+${stats.riskTrend}` : stats.riskTrend} points
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col lg:flex-row gap-4 items-center justify-between">
+        <div className="flex-1 w-full lg:max-w-md flex items-center gap-3 rounded-2xl bg-white p-3 border border-slate-200 focus-within:border-blue-600 transition-all shadow-sm">
+          <SearchIcon className="w-5 h-5 text-slate-400" />
+          <input placeholder="Filter journey events..." className="bg-transparent border-none outline-none text-sm text-slate-900 placeholder:text-slate-400 flex-1" value={query} onChange={e => setQuery(e.target.value)} />
+        </div>
+
+        <div className="flex items-center gap-3 w-full lg:w-auto">
+          <button
+            onClick={() => setAnalyticsOpen(!analyticsOpen)}
+            className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-2xl font-bold text-sm transition-all shadow-sm border ${analyticsOpen ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-slate-200 hover:bg-slate-50'}`}
+          >
+            {analyticsOpen ? <><X size={18} /> Close Analytics</> : <><BarChart3 size={18} /> View Analytics</>}
+          </button>
+
+          <select className="flex-1 lg:flex-none bg-white border border-slate-200 text-sm font-bold text-slate-700 p-3 rounded-2xl shadow-sm outline-none" value={actorFilter} onChange={e => setActorFilter(e.target.value as any)}>
+            <option value="All">All Actors</option>
             <option value="User">User</option>
             <option value="AI">AI</option>
             <option value="System">System</option>
             <option value="Admin">Admin</option>
           </select>
 
-          <div className="flex items-center gap-3 rounded-2xl bg-neutral-900/50 border border-white/10 px-4 py-3 w-full lg:w-auto">
-            <Calendar className="w-5 h-5 text-cyan-300" />
-            <input type="date" value={customDate} onChange={e => { setCustomDate(e.target.value); setRange('all'); }} className="bg-transparent outline-none text-sm text-white placeholder:text-neutral-500 flex-1" />
+          <div className="flex-1 lg:flex-none flex items-center gap-3 rounded-2xl bg-white border border-slate-200 px-4 py-3 shadow-sm">
+            <Calendar className="w-5 h-5 text-blue-600" />
+            <select value={range} onChange={e => setRange(e.target.value as any)} className="bg-transparent border-none outline-none text-sm font-bold text-slate-700 cursor-pointer">
+              <option value="all">All Time</option>
+              <option value="1">Today</option>
+              <option value="7">Last 7 Days</option>
+              <option value="30">Last 30 Days</option>
+            </select>
           </div>
         </div>
       </div>
 
-      {/* Timeline */}
-      <div className="relative mt-2">
-        <div className="absolute left-4 sm:left-6 top-0 bottom-0 w-px bg-white/6" />
-
-        <div className="space-y-6 pl-10 sm:pl-12">
-          {Object.entries(byDateGroups).length === 0 && (
-            <div className="text-sm text-neutral-500">No events in selected range.</div>
-          )}
-
-          {Object.entries(byDateGroups).map(([date, evs], idx) => (
-            <div key={date} className={`${idx > 0 ? 'mt-8' : ''} space-y-6`}>
-              <div className="text-sm font-mono text-neutral-400">{formatDateHeading(evs[0].timestamp)}</div>
-
-              <div className="space-y-4">
-                {evs.map(ev => {
-                  const human = humanizeEvent(ev);
-                  return (
-                    <div key={ev.eventId} className="flex items-start gap-4">
-                      <div className="relative">
-                        <div className="w-4 h-4 rounded-full bg-neutral-800 flex items-center justify-center ring-2 ring-white/5">
-                          {categoryIcon(ev.category)}
-                        </div>
-                      </div>
-
-                      <div className="flex-1 bg-neutral-950/40 p-3 rounded-lg border border-white/5">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-bold text-white">{human.title}</div>
-                            <div className="text-xs text-neutral-400 mt-1">{human.desc}</div>
+      <div className="min-h-[400px]">
+        {!analyticsOpen ? (
+          <div className="relative">
+            <div className="absolute left-6 top-0 bottom-0 w-px bg-slate-200" />
+            <div className="space-y-8 pl-12">
+              {Object.entries(byDateGroups).map(([date, evs]) => (
+                <div key={date} className="space-y-4">
+                  <div className="sticky top-24 z-20">
+                    <span className="bg-slate-100 text-slate-600 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border border-slate-200">
+                      {formatDateHeading(evs[0].timestamp)}
+                    </span>
+                  </div>
+                  <div className="space-y-4">
+                    {evs.map(ev => {
+                      const human = humanizeEvent(ev);
+                      return (
+                        <div key={ev.eventId} className="group relative bg-white p-5 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all hover:border-blue-200">
+                          <div className="absolute -left-[37px] top-6 w-3 h-3 rounded-full bg-white border-2 border-blue-600 z-10" />
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex gap-4">
+                              <div className="mt-1 p-2 bg-slate-50 rounded-lg">{categoryIcon(ev.category)}</div>
+                              <div>
+                                <h4 className="font-bold text-slate-900">{human.title}</h4>
+                                <p className="text-xs text-slate-500 mt-1">{human.desc}</p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-[10px] font-black text-slate-400 uppercase">{formatTime(ev.timestamp)}</div>
+                              <div className="mt-2">{actorBadge(ev.actor)}</div>
+                            </div>
                           </div>
-                          <div className="text-right">
-                            <div className="text-xs text-neutral-400">{formatTime(ev.timestamp)}</div>
-                            <div className="mt-2">{actorBadge(ev.actor)}</div>
+                          <div className="mt-4 flex items-center justify-between pt-4 border-t border-slate-50">
+                            <div className="text-[11px] font-bold text-slate-400 uppercase tracking-tighter">
+                              Status: <span className={ev.status === 'success' ? 'text-emerald-500' : 'text-red-500'}>{ev.status?.toUpperCase()}</span>
+                            </div>
+                            <button onClick={() => setOpenEventId(openEventId === ev.eventId ? null : ev.eventId)} className="text-xs font-bold text-blue-600 flex items-center gap-1">
+                              {openEventId === ev.eventId ? 'Close Data' : 'View Data'} <ChevronRight size={14} className={openEventId === ev.eventId ? 'rotate-90' : ''} />
+                            </button>
                           </div>
+                          {openEventId === ev.eventId && (
+                            <div className="mt-4 p-4 bg-slate-50 rounded-xl border border-slate-100 animate-fadeIn">
+                              <pre className="text-[10px] font-mono text-slate-600 overflow-x-auto">{JSON.stringify(ev.metadata || { note: "No additional metadata" }, null, 2)}</pre>
+                            </div>
+                          )}
                         </div>
-
-                        {/* condensed details */}
-                        <div className="mt-3 flex items-center justify-between">
-                          <div className="text-[13px] text-neutral-300">Status: <span className={`font-bold ${ev.status === 'success' ? 'text-emerald-400' : ev.status === 'failed' ? 'text-red-400' : 'text-neutral-300'}`}>{ev.status}</span></div>
-                          <button onClick={() => setOpenEventId(openEventId === ev.eventId ? null : ev.eventId)} className="text-xs text-cyan-300">{openEventId === ev.eventId ? 'Hide details' : 'View details'}</button>
-                        </div>
-
-                        {openEventId === ev.eventId && (
-                          <div className="mt-3 text-sm text-neutral-300 space-y-2">
-                            {ev.eventType === 'ai_recommendation' && (
-                              <>
-                                {human.extra?.recommendation && <div><span className="font-mono text-neutral-400">Recommendation:</span> {human.extra.recommendation}</div>}
-                                {human.extra?.reason && <div><span className="font-mono text-neutral-400">Reason:</span> {human.extra.reason}</div>}
-                                {human.extra?.userResponse && <div><span className="font-mono text-neutral-400">User response:</span> {human.extra.userResponse}</div>}
-                                {human.extra?.outcome && (
-                                  <div><span className="font-mono text-neutral-400">Projected risk:</span> {human.extra.outcome.oldRisk} → {human.extra.outcome.newRisk} {human.extra.outcome.newRisk > human.extra.outcome.oldRisk ? '↑' : human.extra.outcome.newRisk < human.extra.outcome.oldRisk ? '↓' : ''}</div>
-                                )}
-                              </>
-                            )}
-
-                            {ev.eventType === 'water_intake_added' && (
-                              <>
-                                <div><span className="font-mono text-neutral-400">Amount:</span> {ev.metadata?.amount ?? '0'} mL</div>
-                              </>
-                            )}
-
-                            {ev.eventType === 'telemetry_received' && (
-                              <>
-                                {ev.metadata?.heartRate && <div><span className="font-mono text-neutral-400">Heart rate:</span> {ev.metadata.heartRate} BPM</div>}
-                                {ev.description && <div><span className="font-mono text-neutral-400">Telemetry:</span> {ev.description}</div>}
-                              </>
-                            )}
-
-                            {ev.eventType === 'sync_failed' && ev.description && (
-                              <div><span className="font-mono text-neutral-400">Error:</span> {ev.description}</div>
-                            )}
-
-                            {ev.eventType === 'profile_set' && ev.description && (
-                              <div><span className="font-mono text-neutral-400">Profile details:</span> {ev.description}</div>
-                            )}
-
-                            {!['ai_recommendation', 'water_intake_added', 'telemetry_received', 'sync_failed', 'profile_set'].includes(ev.eventType) && ev.description && (
-                              <div><span className="font-mono text-neutral-400">Details:</span> {ev.description}</div>
-                            )}
-
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-fadeIn">
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-6">
+                <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">Daily Water Consumption</h4>
+                <BarChart3 className="text-blue-600 w-5 h-5" />
+              </div>
+              <div className="h-[250px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData.timeline}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="date" fontSize={10} tickLine={false} axisLine={false} />
+                    <YAxis fontSize={10} tickLine={false} axisLine={false} unit="ml" />
+                    <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
+                    <Bar dataKey="consumed" fill="#2563EB" radius={[4, 4, 0, 0]} barSize={30} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </div>
-          ))}
-        </div>
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-6">
+                <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">Risk Trend Over Time</h4>
+                <LineChartIcon className="text-blue-600 w-5 h-5" />
+              </div>
+              <div className="h-[250px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData.timeline}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="date" fontSize={10} tickLine={false} axisLine={false} />
+                    <YAxis fontSize={10} tickLine={false} axisLine={false} domain={[0, 100]} />
+                    <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
+                    <Line type="monotone" dataKey="risk" stroke="#EF4444" strokeWidth={3} dot={{ r: 4, fill: '#EF4444' }} activeDot={{ r: 6 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-6">
+                <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">Water Intake vs Risk Score</h4>
+                <TrendingUp className="text-blue-600 w-5 h-5" />
+              </div>
+              <div className="h-[250px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ScatterChart>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis type="number" dataKey="consumed" name="Water" unit="ml" fontSize={10} tickLine={false} axisLine={false} />
+                    <YAxis type="number" dataKey="risk" name="Risk" fontSize={10} tickLine={false} axisLine={false} />
+                    <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                    <Scatter name="Logs" data={chartData.scatter} fill="#2563EB" />
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-6">
+                <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">AI Recommendation Effectiveness</h4>
+                <Cpu className="text-blue-600 w-5 h-5" />
+              </div>
+              <div className="h-[250px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={chartData.timeline}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="date" fontSize={10} tickLine={false} axisLine={false} />
+                    <YAxis fontSize={10} tickLine={false} axisLine={false} />
+                    <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
+                    <Bar dataKey="aiRecs" name="Recs Given" fill="#CBD5E1" barSize={20} />
+                    <Bar dataKey="aiFollowed" name="Recs Followed" fill="#2563EB" barSize={20} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

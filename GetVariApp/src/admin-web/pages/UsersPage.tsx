@@ -1,19 +1,29 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import UserFilters from '../components/users/UserFilters';
 import UserTable from '../components/users/UserTable';
-import { mockUsers } from '../data/mockData';
 import { User } from '../types';
-
 import UserDetailDrawer from '../components/users/UserDetailDrawer';
+import { SupabaseAdminService } from '../services/SupabaseAdminService';
 
 const UsersPage: React.FC = () => {
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [riskFilter, setRiskFilter] = useState('all');
   const [workloadFilter, setWorkloadFilter] = useState('all');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
 
+  useEffect(() => {
+    const loadUsers = async () => {
+      const data = await SupabaseAdminService.fetchAllUsers();
+      setUsers(data);
+      setLoading(false);
+    };
+    loadUsers();
+  }, []);
+
   const filteredUsers = useMemo(() => {
-    return mockUsers.filter(user => {
+    return users.filter(user => {
       const matchSearch = user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           user.id.toLowerCase().includes(searchQuery.toLowerCase());
 
@@ -25,11 +35,19 @@ const UsersPage: React.FC = () => {
 
       return matchSearch && matchRisk && matchWorkload;
     });
-  }, [searchQuery, riskFilter, workloadFilter]);
+  }, [users, searchQuery, riskFilter, workloadFilter]);
 
   const handleUserSelect = (user: User) => {
     setSelectedUser(user);
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-slate-400 font-mono text-sm animate-pulse">QUERYING USER DATABASE...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -56,5 +74,6 @@ const UsersPage: React.FC = () => {
     </div>
   );
 };
+
 
 export default UsersPage;

@@ -30,15 +30,15 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab, onTabChange }) => {
   ];
 
   return (
-    <nav className="inline-flex bg-neutral-900/50 p-1.5 rounded-2xl border border-white/5 backdrop-blur-md mb-8">
+    <nav className="inline-flex bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm mb-12">
       {navItems.map((item) => (
         <button
           key={item.id}
           onClick={() => onTabChange(item.id)}
-          className={`px-6 py-2 rounded-xl text-xs font-bold tracking-widest transition-all duration-200 ${
+          className={`px-6 py-2.5 rounded-xl text-[10px] font-black tracking-[0.2em] transition-all duration-200 ${
             activeTab === item.id
-              ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/40 shadow-[0_0_15px_rgba(6,182,212,0.1)]'
-              : 'text-neutral-500 hover:text-neutral-300 border border-transparent'
+              ? 'bg-blue-600 text-white shadow-lg shadow-blue-200'
+              : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'
           }`}
         >
           {item.label}

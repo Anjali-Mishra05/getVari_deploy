@@ -15,9 +15,30 @@ import {
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
-import { AuthService } from '../services/AuthService';
+import { AuthService, AuthChallenge } from '../services/AuthService';
 import { AlertTriangle, Cpu } from 'lucide-react-native';
+import { cssInterop } from 'react-native-css-interop';
 import GlassCard from '../components/GlassCard';
+
+// Add CSS Interop for Lucide icons to support className in NativeWind v4
+cssInterop(AlertTriangle, {
+  className: {
+    target: 'style',
+    nativeStyleToProp: {
+      color: true,
+      size: true,
+    },
+  },
+});
+cssInterop(Cpu, {
+  className: {
+    target: 'style',
+    nativeStyleToProp: {
+      color: true,
+      size: true,
+    },
+  },
+});
 
 const { width } = Dimensions.get('window');
 
@@ -43,10 +64,8 @@ const LoginScreen = ({ navigation }: any) => {
 
     try {
       const fullPhone = `+91${phoneNumber}`;
-      // Never throws for an unconfigured SMS provider — it falls back to the
-      // demo passcode, which is what the panel below this form promises.
-      const challenge = await AuthService.sendOtp(fullPhone);
-      navigation.navigate('OtpVerification', { challenge, phoneNumber: fullPhone });
+      const confirmation: AuthChallenge = await AuthService.sendOtp(fullPhone);
+      navigation.navigate('OtpVerification', { confirmation, phoneNumber: fullPhone });
     } catch (err: any) {
       setError(err.message || 'Verification system busy. Please try again.');
     } finally {
@@ -229,7 +248,7 @@ const LoginScreen = ({ navigation }: any) => {
                     <Text className="text-[10px] text-[#00f2fe] font-black uppercase font-mono tracking-[0.18em]">DEMO / INVESTOR TESTING KEY</Text>
                   </View>
                   <Text className="text-[11px] text-neutral-500 leading-6 font-medium">
-                    Enter any Indian mobile number, check the Terms & Conditions checkbox, and submit. The demo verification passcode is <Text className="text-[#00f2fe] font-black">884200</Text>.
+                    Enter any Indian mobile number, check the Terms & Conditions checkbox, and submit. The demo verification passcode is <Text className="text-[#00f2fe] font-black">123456</Text>.
                   </Text>
                 </View>
               </View>

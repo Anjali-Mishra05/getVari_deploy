@@ -1,42 +1,60 @@
-import React from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { Users, Activity, Cpu, TrendingUp, AlertTriangle, Droplets } from 'lucide-react';
 import StatCard from '../components/dashboard/StatCard';
 import Terminal from '../components/dashboard/Terminal';
 import AlertPanel from '../components/dashboard/AlertPanel';
-import { mockUsers, mockLogs } from '../data/mockData';
-import { Alert } from '../types';
+import { mockLogs } from '../data/mockData';
+import { Alert, User, DashboardStats } from '../types';
+import { SupabaseAdminService } from '../services/SupabaseAdminService';
 
 const DashboardPage: React.FC = () => {
-  const stats = {
-    total: mockUsers.length,
-    active: mockUsers.filter(u => u.lastSyncedMinutes < 60).length,
-    connected: mockUsers.filter(u => u.lastSyncedMinutes < 120).length,
-    avgRisk: Math.round(mockUsers.reduce((acc, u) => acc + u.riskScore, 0) / mockUsers.length),
-    critical: mockUsers.filter(u => u.riskScore >= 75).length,
-    totalWater: Math.round(mockUsers.reduce((acc, u) => acc + u.waterIntakeMl, 0) / 1000 * 10) / 10,
-  };
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const alerts: Alert[] = mockUsers.reduce((acc: Alert[], u) => {
-    if (u.riskScore >= 75) {
-      acc.push({
-        id: `alert_risk_${u.id}`,
-        title: 'Critical Dehydration',
-        desc: `Risk score ${u.riskScore}/100. Heart rate elevated at ${u.heartRate} bpm.`,
-        user: u.name,
-        type: 'critical'
-      });
-    }
-    if (u.waterIntakeMl < 300 && u.activityLoad > 50) {
-      acc.push({
-        id: `alert_water_${u.id}`,
-        title: 'Hydration Deficit',
-        desc: `Only ${u.waterIntakeMl}ml intake despite high physical exertion.`,
-        user: u.name,
-        type: 'warn'
-      });
-    }
-    return acc;
+  useEffect(() => {
+    const loadData = async () => {
+      const data = await SupabaseAdminService.fetchAllUsers();
+      setUsers(data);
+      setLoading(false);
+    };
+    loadData();
   }, []);
+
+  const stats: DashboardStats = useMemo(() => {
+    if (users.length === 0) return { total: 0, active: 0, connected: 0, avgRisk: 0, critical: 0, totalWater: 0 };
+
+    const total = users.length;
+    const active = users.filter(u => u.lastSyncedMinutes < 60).length;
+    const connected = users.filter(u => u.lastSyncedMinutes < 120).length;
+    const avgRisk = 0; // Not persisted in DB
+    const critical = users.filter(u => u.status === 'Critical').length;
+    const totalWater = Math.round(users.reduce((acc, u) => acc + u.waterIntakeMl, 0) / 1000 * 10) / 10;
+
+    return { total, active, connected, avgRisk, critical, totalWater };
+  }, [users]);
+
+  const alerts: Alert[] = useMemo(() => {
+    return users.reduce((acc: Alert[], u) => {
+      if (u.status === 'Critical') {
+        acc.push({
+          id: `alert_risk_${u.id}`,
+          title: 'Critical Dehydration',
+          desc: `User has significant hydration deficit. Intake: ${u.waterIntakeMl}ml / Goal: ${u.targetDailyMl}ml.`,
+          user: u.name,
+          type: 'critical'
+        });
+      }
+      return acc;
+    }, []);
+  }, [users]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-slate-400 font-mono text-sm animate-pulse">SYNCING FLEET TELEMETRY...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-10">
@@ -54,7 +72,6 @@ const DashboardPage: React.FC = () => {
           sublabel="Active Today"
           icon={<Activity size={20} />}
           color="text-emerald-400"
-          trend="+12%"
         />
         <StatCard
           label="BLE Nodes"
@@ -65,10 +82,10 @@ const DashboardPage: React.FC = () => {
         />
         <StatCard
           label="Avg Risk"
-          value={`${stats.avgRisk}%`}
-          sublabel="Fleet Mean Index"
+          value={`--%`}
+          sublabel="Data Not Persisted"
           icon={<TrendingUp size={20} />}
-          color="text-amber-500"
+          color="text-slate-500"
         />
         <StatCard
           label="Critical"
@@ -104,5 +121,6 @@ const DashboardPage: React.FC = () => {
     </div>
   );
 };
+
 
 export default DashboardPage;

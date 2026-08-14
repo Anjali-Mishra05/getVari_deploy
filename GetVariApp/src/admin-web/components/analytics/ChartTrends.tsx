@@ -12,17 +12,17 @@ const ChartTrends: React.FC = () => {
 
   return (
     <GlassCard className="space-y-6">
-      <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-neutral-400">Hourly Intake Volume</h3>
+      <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Hourly Intake Volume</h3>
 
-      <div className="flex items-end justify-between h-48 gap-3 pt-10 border-b border-white/10 px-4">
+      <div className="flex items-end justify-between h-48 gap-3 pt-10 border-b border-slate-100 px-4">
         {data.map(h => (
           <div key={h.hr} className="flex-1 flex flex-col items-center gap-3 h-full justify-end group">
-            <span className="text-[8px] font-mono font-bold text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity">{h.vol}</span>
+            <span className="text-[8px] font-mono font-black text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-widest">{h.vol}</span>
             <div
-              className="bg-cyan-500/40 w-full rounded-t-xl transition-all duration-300 group-hover:bg-cyan-500 group-hover:shadow-[0_0_20px_rgba(6,182,212,0.3)]"
+              className="bg-blue-600/20 w-full rounded-t-xl transition-all duration-300 group-hover:bg-blue-600 group-hover:shadow-[0_0_15px_rgba(37,99,235,0.2)]"
               style={{ height: h.pct }}
             ></div>
-            <span className="text-[9px] font-mono font-bold text-neutral-500 group-hover:text-white transition-colors">{h.hr}</span>
+            <span className="text-[9px] font-mono font-bold text-slate-400 group-hover:text-slate-900 transition-colors">{h.hr}</span>
           </div>
         ))}
       </div>

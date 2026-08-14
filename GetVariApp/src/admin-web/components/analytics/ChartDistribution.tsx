@@ -4,10 +4,10 @@ import GlassCard from '../shared/GlassCard';
 const ChartDistribution: React.FC = () => {
   return (
     <GlassCard className="space-y-6">
-      <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-neutral-400">Hydration Risk Distribution</h3>
+      <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Hydration Risk Distribution</h3>
 
-      <div className="flex items-end justify-between h-48 gap-4 pt-10 border-b border-white/10 px-4 relative">
-        <div className="absolute left-0 top-0 text-[8px] font-mono text-neutral-600 uppercase border-l border-white/5 pl-2">Users Count</div>
+      <div className="flex items-end justify-between h-48 gap-4 pt-10 border-b border-slate-100 px-4 relative">
+        <div className="absolute left-0 top-0 text-[8px] font-mono text-slate-400 uppercase border-l border-slate-200 pl-2 font-bold tracking-widest">Users Count</div>
 
         <div className="flex-1 flex flex-col items-center gap-3 h-full justify-end group">
           <div className="bg-emerald-500 w-full rounded-t-xl transition-all duration-300 group-hover:brightness-125 group-hover:shadow-[0_0_20px_rgba(16,185,129,0.3)]" style={{ height: '35%' }}></div>

@@ -31,23 +31,23 @@ const Modal: React.FC<ModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/80 backdrop-blur-sm animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fadeIn">
       <div
         className="fixed inset-0"
         onClick={onClose}
       ></div>
 
-      <div className={`relative w-full ${maxWidth} bg-[#121212] border border-white/10 rounded-[32px] shadow-2xl overflow-hidden animate-slideIn`}>
+      <div className={`relative w-full ${maxWidth} bg-white border border-slate-200 rounded-[32px] shadow-2xl overflow-hidden animate-slideIn`}>
         {/* Header */}
         <div className="px-10 pt-10 pb-6">
           <div className="flex justify-between items-start">
             <div>
-              {subtitle && <span className="text-sm font-mono text-cyan-400 tracking-widest block mb-1">{subtitle}</span>}
-              <h2 className="text-3xl font-extrabold text-white">{title}</h2>
+              {subtitle && <span className="text-sm font-mono text-blue-600 font-black tracking-widest block mb-1 uppercase">{subtitle}</span>}
+              <h2 className="text-3xl font-black text-slate-900">{title}</h2>
             </div>
             <button
               onClick={onClose}
-              className="p-2.5 bg-white/5 hover:bg-white/10 rounded-full transition border border-white/5 text-neutral-400 hover:text-white"
+              className="p-2.5 bg-slate-50 hover:bg-slate-100 rounded-full transition border border-slate-200 text-slate-400 hover:text-slate-600"
             >
               <X className="w-6 h-6" />
             </button>
@@ -55,7 +55,7 @@ const Modal: React.FC<ModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="px-10 pb-10">
+        <div className="px-10 pb-10 text-slate-600 font-medium">
           {children}
 
           {/* Footer inside the same container to match the image better */}

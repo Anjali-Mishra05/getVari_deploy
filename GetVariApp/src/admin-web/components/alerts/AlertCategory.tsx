@@ -12,47 +12,47 @@ interface AlertCategoryProps {
 
 const AlertCategory: React.FC<AlertCategoryProps> = ({ title, icon, color, alerts }) => {
   const borderColors = {
-    red: 'border-red-500/20 bg-red-950/5',
-    amber: 'border-amber-500/20 bg-amber-950/5',
-    neutral: 'border-white/10 bg-neutral-900/40',
+    red: 'border-red-100 bg-red-50',
+    amber: 'border-orange-100 bg-orange-50',
+    neutral: 'border-slate-200 bg-slate-50',
   };
 
   const textColors = {
-    red: 'text-red-400',
-    amber: 'text-amber-400',
-    neutral: 'text-neutral-300',
+    red: 'text-red-600',
+    amber: 'text-orange-600',
+    neutral: 'text-slate-600',
   };
 
   return (
-    <div className={`p-8 rounded-[32px] border ${borderColors[color]} space-y-6 h-full flex flex-col backdrop-blur-sm`}>
+    <div className={`p-8 rounded-[32px] border ${borderColors[color]} space-y-6 h-full flex flex-col`}>
       <h3 className={`text-xs font-black uppercase tracking-[0.2em] flex items-center gap-2.5 ${textColors[color]}`}>
         {icon} {title}
       </h3>
 
-      <div className="space-y-4 flex-1 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10">
+      <div className="space-y-4 flex-1 overflow-y-auto pr-2">
         {alerts.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center p-8 text-neutral-600 italic text-[10px] font-mono uppercase tracking-widest border border-dashed border-white/5 rounded-2xl">
+          <div className="flex-1 flex items-center justify-center p-8 text-slate-400 italic text-[10px] font-mono uppercase tracking-widest border border-dashed border-slate-200 rounded-2xl">
             No active alerts in this sector
           </div>
         ) : (
           alerts.map(al => (
-            <div key={al.id} className="bg-neutral-950/60 border border-white/5 p-5 rounded-2xl space-y-3 transition-all hover:border-white/10 group">
+            <div key={al.id} className="bg-white border border-black/5 p-5 rounded-2xl space-y-3 shadow-sm transition-all hover:shadow-md group">
               <div className="flex justify-between items-start">
-                <span className="text-xs font-black text-white tracking-tight group-hover:text-cyan-400 transition-colors">{al.user}</span>
+                <span className="text-sm font-black text-slate-900 tracking-tight group-hover:text-blue-600 transition-colors">{al.user}</span>
                 <Badge variant={color === 'neutral' ? 'neutral' : color}>
                   {al.score}
                 </Badge>
               </div>
-              <p className="text-[11px] text-neutral-500 leading-relaxed">{al.desc}</p>
+              <p className="text-[11px] text-slate-500 font-medium leading-relaxed">{al.desc}</p>
               {al.time && (
-                <div className="flex items-center gap-1.5 text-[9px] text-neutral-600 font-mono font-bold uppercase">
+                <div className="flex items-center gap-1.5 text-[9px] text-slate-400 font-mono font-bold uppercase tracking-widest">
                   <Clock size={10} /> {al.time}
                 </div>
               )}
               <Button
                 variant={color === 'red' ? 'danger' : color === 'amber' ? 'outline' : 'secondary'}
                 size="sm"
-                className="w-full text-[9px] py-2"
+                className="w-full text-[9px] py-2 font-black tracking-widest"
               >
                 Resolve Anomaly
               </Button>

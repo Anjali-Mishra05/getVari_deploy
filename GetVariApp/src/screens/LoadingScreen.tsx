@@ -55,7 +55,7 @@ const LoadingScreen = ({ navigation }: any) => {
     try {
       route = await AuthService.resolveStartupRoute();
     } catch (error) {
-      console.error('Session check failed:', error);
+      console.log('Session check failed:', error);
     }
 
     // A reminder tap should reach the chat quickly; only a normal launch gets

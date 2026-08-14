@@ -13,7 +13,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { Activity, LogOut, Phone, Target, User, X } from 'lucide-react-native';
 
-import AuthService, { StoredSession } from '../services/AuthService';
+import { AuthService, StoredSession } from '../services/AuthService';
 import NotificationService from '../services/NotificationService';
 import NotificationHistory from '../services/NotificationHistory';
 import HydrationPromptSession from '../services/HydrationPromptSession';
