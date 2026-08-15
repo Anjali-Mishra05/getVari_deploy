@@ -1,39 +1,22 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  Dimensions,
-  Platform,
-  AppState,
-} from 'react-native';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  Heart,
   Activity,
   Droplets,
-  Sparkles,
   Bell,
   Plus,
   Battery,
   TrendingUp,
   Cpu,
 } from 'lucide-react-native';
-import Svg, { Circle, Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
-import Animated, {
-  useSharedValue,
-  useAnimatedProps,
-  withTiming,
-  interpolateColor,
-  useAnimatedStyle
-} from 'react-native-reanimated';
+import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
 import BrandLogo from '../components/BrandLogo';
 import GlassCard from '../components/GlassCard';
 import { supabase } from '../services/SupabaseClient';
 import { AuthService } from '../services/AuthService';
-import { HydrationLog } from '../types';
+import { AIInsight, HydrationLog, UserProfile } from '../types';
 import AquaSageChat from '../chatbot/AquaSageChat';
 import NotificationService from '../services/NotificationService';
 import NotificationHistory from '../services/NotificationHistory';
@@ -42,20 +25,54 @@ import QuickLogSheet from '../components/QuickLogSheet';
 import ProfileSheet from '../components/ProfileSheet';
 import ChatBus from '../services/ChatBus';
 import HydrationService from '../services/HydrationService';
+import useHydrationTelemetry from '../hooks/useHydrationTelemetry';
+import generateInsights from '../utils/hydrationInsights';
+import nextHydrationTip from '../utils/hydrationTips';
 
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
-const { width } = Dimensions.get('window');
+import RiskScoreCard from '../components/dashboard/RiskScoreCard';
+import VitalsRow from '../components/dashboard/VitalsRow';
+import AmbientCard from '../components/dashboard/AmbientCard';
+import QuickFluidLogStation from '../components/dashboard/QuickFluidLogStation';
+import CoreAIInsights from '../components/dashboard/CoreAIInsights';
+import FluidLoggingFeed from '../components/dashboard/FluidLoggingFeed';
+import WhyThisScoreCard from '../components/dashboard/WhyThisScoreCard';
+import RecoveryTelemetryPanel from '../components/dashboard/RecoveryTelemetryPanel';
+import FluidLogConfirmModal from '../components/dashboard/FluidLogConfirmModal';
+import FluidLogSuccessModal from '../components/dashboard/FluidLogSuccessModal';
 
 const HomeScreen = ({ navigation }: any) => {
-  const [score, setScore] = useState(24);
   const [waterLogs, setWaterLogs] = useState<HydrationLog[]>([]);
-  const [userProfile, setUserProfile] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [userProfile, setUserProfile] = useState<UserProfile | undefined>(undefined);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [quickLogOpen, setQuickLogOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [unseenNotifications, setUnseenNotifications] = useState(0);
-  const progress = useSharedValue(0);
+  const [telemetryExpanded, setTelemetryExpanded] = useState(false);
+
+  // The quick-log station's three-step flow: propose an amount, confirm it
+  // against the predicted recovery, then show the receipt. Nothing is written
+  // until the middle step is accepted.
+  const [pendingAmountMl, setPendingAmountMl] = useState<number | null>(null);
+  const [savingLog, setSavingLog] = useState(false);
+  const [logError, setLogError] = useState<string | null>(null);
+  const [loggedAmountMl, setLoggedAmountMl] = useState<number | null>(null);
+  const [successMessage, setSuccessMessage] = useState('');
+
+  const [insights, setInsights] = useState<AIInsight[]>([]);
+
+  const targetMl = userProfile?.targetDailyMl || 2500;
+  const totalWaterConsumed = waterLogs.reduce((acc, curr) => acc + curr.amountMl, 0);
+
+  const telemetry = useHydrationTelemetry(userProfile, waterLogs);
+
+  // The mount-only effect below subscribes for the life of the screen, so it
+  // reaches the recovery model through a ref rather than closing over a
+  // `telemetry` object that is rebuilt on every sensor tick.
+  const ingestFluidRef = useRef(telemetry.ingestFluid);
+  ingestFluidRef.current = telemetry.ingestFluid;
+
+  /** Entry ids already poured into the recovery model, to keep it idempotent. */
+  const ingestedLogIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     fetchUserData();
@@ -93,15 +110,25 @@ const HomeScreen = ({ navigation }: any) => {
     };
     replayPendingPrompts();
 
-    // An entry logged from the chat updates this screen's totals.
+    // Every successful write announces itself here — the quick-log station,
+    // the sheet and the chat alike — so this is the one place that updates the
+    // day's list and pours the water into the recovery model. Doing it at the
+    // call site instead would double-count, since the writer emits regardless
+    // of who called it.
     const loggedSub = ChatBus.onHydrationLogged(result => {
-      if (result.entry) {
-        setWaterLogs(prev =>
-          prev.some(log => log.id === result.entry!.id) ? prev : [result.entry!, ...prev]
-        );
-      } else {
+      const entry = result.entry;
+      if (!entry) {
         refreshTodayLogs();
+        return;
       }
+
+      // Dedupe on the entry id rather than on the list, so a re-delivery can
+      // never pour the same drink into the model twice.
+      if (ingestedLogIds.current.has(entry.id)) return;
+      ingestedLogIds.current.add(entry.id);
+
+      ingestFluidRef.current(entry.amountMl);
+      setWaterLogs(prev => (prev.some(log => log.id === entry.id) ? prev : [entry, ...prev]));
     });
 
     // Returning to the app restarts the reminder countdown from now.
@@ -168,8 +195,6 @@ const HomeScreen = ({ navigation }: any) => {
       setWaterLogs(logs);
     } catch (error) {
       console.error('[Supabase] Fatal error fetching data:', error);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -186,11 +211,22 @@ const HomeScreen = ({ navigation }: any) => {
     }
   };
 
-  const totalWaterConsumed = waterLogs.reduce((acc, curr) => acc + curr.amountMl, 0);
-  const targetMl = userProfile?.targetDailyMl || 2500;
-  const targetPercent = Math.min(100, Math.round((totalWaterConsumed / targetMl) * 100));
   const profileInitial =
     (typeof userProfile?.gender === 'string' && userProfile.gender.charAt(0).toUpperCase()) || 'U';
+
+  const newestLog = useMemo(
+    () =>
+      waterLogs.reduce<HydrationLog | null>(
+        (latest, log) => (latest === null || log.timestamp > latest.timestamp ? log : latest),
+        null
+      ),
+    [waterLogs]
+  );
+
+  /** Real hours since the newest entry — what the "Last Intake" tile reports. */
+  const hoursSinceLastLog = newestLog
+    ? (Date.now() - new Date(newestLog.timestamp).getTime()) / 3_600_000
+    : 0;
 
   /**
    * After a sign-out, `reset` rather than `navigate`: the back gesture must not
@@ -201,43 +237,89 @@ const HomeScreen = ({ navigation }: any) => {
   };
 
   /**
-   * The "+" button. Writes through the shared hydration service so it obeys
-   * the same idempotency and reminder-reset rules as the chat. The local list
-   * is updated by the `onHydrationLogged` subscription above.
+   * The single write path for every entry point on this screen.
+   *
+   * Goes through the shared hydration service so it obeys the same idempotency
+   * and reminder-reset rules as the chat. The local list and the recovery
+   * model are both updated by the `onHydrationLogged` subscription above, not
+   * from here — that is what keeps one drink from being counted twice.
    */
-  const logDrink = async (
-    amountMl: number,
-    source: HydrationLog['source'] = 'manual'
-  ): Promise<boolean> => {
-    const result = await HydrationService.logWater({
-      amountMl,
-      source,
-      requestId: HydrationService.generateRequestId('home'),
-    });
+  const logDrink = useCallback(
+    async (amountMl: number, source: HydrationLog['source'] = 'manual'): Promise<boolean> => {
+      const result = await HydrationService.logWater({
+        amountMl,
+        source,
+        requestId: HydrationService.generateRequestId('home'),
+      });
 
-    if (result.status === 'error' || result.status === 'unauthenticated') {
-      console.warn('[Supabase] Could not log drink:', result.status, result.error ?? '');
-      return false;
+      if (result.status === 'error' || result.status === 'unauthenticated') {
+        console.warn('[Supabase] Could not log drink:', result.status, result.error ?? '');
+        return false;
+      }
+      return true;
+    },
+    []
+  );
+
+  /** Confirmation accepted: write it, then swap the modal for the receipt. */
+  const confirmPendingLog = async () => {
+    if (pendingAmountMl === null || savingLog) return;
+
+    setSavingLog(true);
+    setLogError(null);
+    try {
+      const ok = await logDrink(pendingAmountMl);
+      if (!ok) {
+        setLogError("Couldn't save that entry. Check your connection and try again.");
+        return;
+      }
+      setSuccessMessage(nextHydrationTip());
+      setLoggedAmountMl(pendingAmountMl);
+      setPendingAmountMl(null);
+    } catch (error) {
+      console.error('[Hydration] Confirmed log failed:', error);
+      setLogError("Couldn't save that entry. Check your connection and try again.");
+    } finally {
+      setSavingLog(false);
     }
-    return true;
   };
 
-  useEffect(() => {
-    progress.value = withTiming(score / 100, { duration: 1500 });
-  }, [score]);
+  const openConfirmation = useCallback((amountMl: number) => {
+    setLogError(null);
+    setPendingAmountMl(amountMl);
+  }, []);
 
-  const animatedProps = useAnimatedProps(() => ({
-    strokeDashoffset: 477 - (477 * progress.value),
-  }));
+  // The sensor stream re-renders this screen every couple of seconds, and the
+  // quick-log sheet closes itself on a timer keyed to its `onClose` prop — an
+  // inline arrow would restart that timer on every tick. These stay stable.
+  const closeQuickLog = useCallback(() => setQuickLogOpen(false), []);
+  const closeNotifications = useCallback(() => setNotificationsOpen(false), []);
+  const closeProfile = useCallback(() => setProfileOpen(false), []);
+  const dismissSuccess = useCallback(() => setLoggedAmountMl(null), []);
+  const cancelConfirmation = useCallback(() => {
+    setPendingAmountMl(null);
+    setLogError(null);
+  }, []);
 
-  const animatedScoreStyle = useAnimatedStyle(() => {
-    const color = interpolateColor(
-      progress.value,
-      [0, 0.5, 1],
-      ['#10b981', '#eab308', '#f43f5e']
+  // Insights are derived from the current solve, so they are regenerated when
+  // the risk band moves rather than on every sensor tick — a card that rewrote
+  // itself twice a second would be unreadable.
+  const refreshInsights = useCallback(() => {
+    setInsights(
+      generateInsights({
+        sensorData: telemetry.sensorData,
+        risk: telemetry.solvedRisk,
+        hoursSinceDrink: telemetry.effectiveHoursSinceDrink,
+        totalMl: totalWaterConsumed,
+        targetMl,
+      })
     );
-    return { color };
-  });
+  }, [telemetry, totalWaterConsumed, targetMl]);
+
+  useEffect(() => {
+    refreshInsights();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [telemetry.solvedRisk.status, totalWaterConsumed]);
 
   return (
     <View className="flex-1 bg-[#02050e]">
@@ -255,14 +337,14 @@ const HomeScreen = ({ navigation }: any) => {
       </View>
 
       <SafeAreaView className="flex-1" edges={['top', 'left', 'right']}>
-        <ScrollView className="flex-1 px-6 pt-4" showsVerticalScrollIndicator={false}>
+        <ScrollView className="flex-1 px-5 pt-4" showsVerticalScrollIndicator={false}>
 
           {/* Header */}
-          <View className="flex-row justify-between items-center mb-8">
+          <View className="flex-row justify-between items-center mb-6">
             <View>
               <BrandLogo size={32} fillProgress={1} withText={true} textSize="sm" />
               <Text className="text-[9px] uppercase tracking-[0.3em] text-cyan-400 font-mono font-black mt-2">
-                TELEMETRY ACTIVE
+                AI-Powered Hydration Intelligence
               </Text>
             </View>
             <View className="flex-row gap-3">
@@ -287,180 +369,108 @@ const HomeScreen = ({ navigation }: any) => {
               </TouchableOpacity>
               <TouchableOpacity
                 className="w-11 h-11 rounded-2xl bg-[#00f2fe] items-center justify-center shadow-xl shadow-cyan-500/30"
-                onPress={() => logDrink(250)}
+                onPress={() => setQuickLogOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Log water"
               >
                 <Plus color="#020617" size={24} strokeWidth={3} />
               </TouchableOpacity>
             </View>
           </View>
 
-          {/* Hero Score Widget */}
-          <GlassCard className="items-center py-12 mb-6 bg-white/[0.01]">
-            <View className="absolute top-6 left-8">
-              <Text className="text-[10px] uppercase tracking-widest text-neutral-500 font-mono font-bold">SYSTEMIC RISK</Text>
-              <View className="flex-row items-center gap-2 mt-1.5">
-                <View className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-lg shadow-emerald-500/50" />
-                <Text className="text-xs font-black text-white uppercase tracking-wider">STABLE</Text>
-              </View>
-            </View>
+          <RiskScoreCard
+            risk={telemetry.solvedRisk}
+            totalMl={totalWaterConsumed}
+            targetMl={targetMl}
+            hoursSinceDrink={hoursSinceLastLog}
+            lastIntakeMl={newestLog?.amountMl ?? null}
+            absorbing={telemetry.stomachVolume > 0}
+          />
 
-            <View className="relative w-52 h-52 items-center justify-center">
-               <Svg width="100%" height="100%" viewBox="0 0 160 160">
-                  <Circle
-                    cx="80"
-                    cy="80"
-                    r="76"
-                    stroke="rgba(255,255,255,0.03)"
-                    strokeWidth="8"
-                    fill="none"
-                  />
-                  <AnimatedCircle
-                    cx="80"
-                    cy="80"
-                    r="76"
-                    stroke="#00f2fe"
-                    strokeWidth="8"
-                    fill="none"
-                    strokeDasharray="477"
-                    animatedProps={animatedProps}
-                    strokeLinecap="round"
-                    transform="rotate(-90 80 80)"
-                  />
-                </Svg>
-                <View className="absolute items-center justify-center">
-                  <Animated.Text
-                    style={[{ fontSize: 64, fontWeight: '900', letterSpacing: -2 }, animatedScoreStyle]}
-                  >
-                    {score}
-                  </Animated.Text>
-                  <Text className="text-[10px] uppercase tracking-[0.4em] text-neutral-500 font-mono font-black mt-[-5]">INDEX</Text>
-                </View>
-            </View>
+          <VitalsRow sensorData={telemetry.sensorData} />
 
-            <View className="mt-10 px-6 w-full">
-              <View className="bg-black/40 p-5 rounded-3xl border border-white/[0.05]">
-                <Text className="text-[11px] text-neutral-400 leading-relaxed font-medium italic text-center">
-                  {userProfile
-                    ? `Physiological markers for ${userProfile.gender}, ${userProfile.weightKg}kg indicate stable recovery. Dynamic target synced at ${targetMl}ml.`
-                    : `"Physiological markers indicate optimal recovery. Cellular hydration pool is currently synced at 92% efficiency."`}
-                </Text>
-              </View>
-            </View>
-          </GlassCard>
+          <AmbientCard
+            location={userProfile?.location}
+            temperature={telemetry.sensorData.temperature}
+            humidity={telemetry.sensorData.humidity}
+          />
 
-          {/* Vital Grid */}
-          <View className="flex-row gap-4 mb-6">
-            <GlassCard className="flex-1 p-5 bg-white/[0.01]">
-              <View className="flex-row items-center justify-between mb-3">
-                <View className="flex-row items-center gap-2">
-                  <Droplets color="#00f2fe" size={14} />
-                  <Text className="text-[10px] font-black text-neutral-500 uppercase font-mono tracking-widest">Hydration</Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => setQuickLogOpen(true)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Log water"
-                  className="w-6 h-6 rounded-lg bg-cyan-500/10 border border-cyan-500/25 items-center justify-center"
-                >
-                  <Plus color="#00f2fe" size={13} strokeWidth={3.5} />
-                </TouchableOpacity>
-              </View>
-              <View className="flex-row items-baseline gap-1.5">
-                <Text className="text-3xl font-black text-white font-mono">{totalWaterConsumed}</Text>
-                <Text className="text-[10px] text-neutral-500 font-mono font-bold">ML</Text>
-              </View>
-              <Text className="text-[9px] text-neutral-600 font-mono mt-1">{targetPercent}% OF GOAL</Text>
-            </GlassCard>
-            <GlassCard className="flex-1 p-5 bg-white/[0.01]">
-              <View className="flex-row items-center gap-2 mb-3">
-                <TrendingUp color="#a78bfa" size={14} />
-                <Text className="text-[10px] font-black text-neutral-500 uppercase font-mono tracking-widest">Target</Text>
-              </View>
-              <View className="flex-row items-baseline gap-1.5">
-                <Text className="text-3xl font-black text-white font-mono">{targetMl}</Text>
-                <Text className="text-[10px] text-neutral-500 font-mono font-bold">ML</Text>
-              </View>
-              <Text className="text-[9px] text-neutral-600 font-mono mt-1 uppercase">{userProfile?.activityLevel || 'MODERATE'} LOAD</Text>
-            </GlassCard>
-          </View>
+          <QuickFluidLogStation onSelectAmount={openConfirmation} disabled={savingLog} />
 
-          {/* AI Insights Section */}
-          <View className="mb-10">
-            <View className="flex-row items-center justify-between mb-5 px-1">
-               <View className="flex-row items-center gap-2.5">
-                 <Sparkles color="#00f2fe" size={18} />
-                 <Text className="text-[11px] font-black text-white uppercase tracking-[0.2em] font-mono">Core Insights</Text>
-               </View>
-               <TouchableOpacity>
-                 <Text className="text-[10px] text-cyan-400 font-black font-mono tracking-widest">RE-SYNTHESIZE</Text>
-               </TouchableOpacity>
-            </View>
+          <CoreAIInsights insights={insights} onRefresh={refreshInsights} />
 
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} className="-mx-6 px-6">
-              <GlassCard className="w-[290px] p-6 mr-4 border-cyan-500/20 bg-cyan-950/10 rounded-[32px]">
-                <View className="flex-row items-center gap-3 mb-4">
-                  <View className="p-2 bg-cyan-500/10 rounded-xl border border-cyan-500/20">
-                    <Droplets color="#00f2fe" size={16} />
-                  </View>
-                  <Text className="text-sm font-black text-white tracking-tight">Recovery Loop</Text>
-                </View>
-                <Text className="text-[12px] text-neutral-400 leading-relaxed font-medium">
-                  Metabolic clearance is at peak efficiency. Maintain current fluid intake to buffer upcoming cardiac workload.
-                </Text>
-              </GlassCard>
-              <GlassCard className="w-[290px] p-6 mr-4 border-violet-500/20 bg-violet-950/10 rounded-[32px]">
-                <View className="flex-row items-center gap-3 mb-4">
-                  <View className="p-2 bg-violet-500/10 rounded-xl border border-violet-500/20">
-                    <TrendingUp color="#a78bfa" size={16} />
-                  </View>
-                  <Text className="text-sm font-black text-white tracking-tight">Strain Alert</Text>
-                </View>
-                <Text className="text-[12px] text-neutral-400 leading-relaxed font-medium">
-                  Atmospheric thermal stress is rising. Adjust electrolyte balance to offset potential perspiration rate spikes.
-                </Text>
-              </GlassCard>
-            </ScrollView>
-          </View>
+          <FluidLoggingFeed logs={waterLogs} />
+
+          <WhyThisScoreCard risk={telemetry.solvedRisk} />
+
+          <RecoveryTelemetryPanel
+            stomachVolume={telemetry.stomachVolume}
+            absorbedHydration={telemetry.absorbedHydration}
+            absorptionRate={telemetry.absorptionRate}
+            sweatLossRate={telemetry.sweatLossRate}
+            totalMl={totalWaterConsumed}
+            targetMl={targetMl}
+            expanded={telemetryExpanded}
+            onToggle={() => setTelemetryExpanded(prev => !prev)}
+          />
 
           {/* Hardware Status */}
-          <GlassCard className="flex-row items-center justify-between p-5 mb-12 border-white/5 bg-black/60 rounded-[32px]">
-            <View className="flex-row items-center gap-4">
+          <GlassCard
+            className="flex-row items-center justify-between mb-4 border-white/5 bg-black/60 rounded-[28px]"
+            style={{ padding: 16 }}
+          >
+            <View className="flex-row items-center gap-3.5">
               <View className="p-2.5 bg-neutral-900 rounded-2xl border border-white/5">
-                <Cpu color="#00f2fe" size={18} />
+                <Cpu color="#00f2fe" size={17} />
               </View>
               <View>
-                <Text className="text-[10px] font-black text-white uppercase tracking-widest font-mono">ESP32 Core Link</Text>
+                <Text className="text-[10px] font-black text-white uppercase tracking-widest font-mono">
+                  ESP32 Core Link
+                </Text>
                 <View className="flex-row items-center gap-1.5 mt-1">
-                  <View className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <Text className="text-[9px] text-neutral-500 font-mono font-bold uppercase tracking-widest">STREAMING ENCRYPTED</Text>
+                  <View className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  <Text className="text-[9px] text-neutral-500 font-mono font-bold uppercase tracking-widest">
+                    Streaming encrypted
+                  </Text>
                 </View>
               </View>
             </View>
             <View className="flex-row items-center gap-2.5 bg-white/[0.03] px-3 py-1.5 rounded-xl">
               <Battery color="#10b981" size={16} />
-              <Text className="text-[11px] font-black text-emerald-500 font-mono">84%</Text>
+              <Text className="text-[11px] font-black text-emerald-500 font-mono">
+                {telemetry.sensorData.batteryLevel}%
+              </Text>
             </View>
           </GlassCard>
 
           <View className="h-28" />
         </ScrollView>
 
-        {/* Persistent Navigation Bar - Pixel Perfect Match */}
-        <View className="absolute bottom-8 left-8 right-8 h-20 bg-neutral-950/90 border border-white/10 rounded-[28px] flex-row items-center justify-around px-4 shadow-2xl backdrop-blur-3xl">
+        {/* Persistent Navigation Bar */}
+        <View className="absolute bottom-8 left-8 right-8 h-20 bg-neutral-950/90 border border-white/10 rounded-[28px] flex-row items-center justify-around px-4 shadow-2xl">
           <TouchableOpacity className="items-center">
             <View className="w-12 h-12 rounded-2xl bg-neutral-800 border border-white/5 items-center justify-center">
               <TrendingUp color="#00f2fe" size={22} strokeWidth={2.5} />
             </View>
           </TouchableOpacity>
-          <TouchableOpacity className="items-center">
+          <TouchableOpacity
+            className="items-center"
+            onPress={() => setQuickLogOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Log water"
+          >
             <View className="w-12 h-12 items-center justify-center">
               <Droplets color="#475569" size={22} />
             </View>
           </TouchableOpacity>
-          <TouchableOpacity className="items-center">
+          <TouchableOpacity
+            className="items-center"
+            onPress={() => setTelemetryExpanded(prev => !prev)}
+            accessibilityRole="button"
+            accessibilityLabel="Toggle recovery engine telemetry"
+          >
             <View className="w-12 h-12 items-center justify-center">
-              <Activity color="#475569" size={22} />
+              <Activity color={telemetryExpanded ? '#00f2fe' : '#475569'} size={22} />
             </View>
           </TouchableOpacity>
           <TouchableOpacity
@@ -479,20 +489,36 @@ const HomeScreen = ({ navigation }: any) => {
 
         <NotificationCenter
           visible={notificationsOpen}
-          onClose={() => setNotificationsOpen(false)}
+          onClose={closeNotifications}
         />
 
         <QuickLogSheet
           visible={quickLogOpen}
-          onClose={() => setQuickLogOpen(false)}
+          onClose={closeQuickLog}
           onLog={logDrink}
           totalMl={totalWaterConsumed}
           targetMl={targetMl}
         />
 
+        <FluidLogConfirmModal
+          amountMl={pendingAmountMl}
+          currentRisk={telemetry.solvedRisk.score}
+          profile={userProfile}
+          saving={savingLog}
+          error={logError}
+          onCancel={cancelConfirmation}
+          onConfirm={confirmPendingLog}
+        />
+
+        <FluidLogSuccessModal
+          amountMl={loggedAmountMl}
+          message={successMessage}
+          onDismiss={dismissSuccess}
+        />
+
         <ProfileSheet
           visible={profileOpen}
-          onClose={() => setProfileOpen(false)}
+          onClose={closeProfile}
           userProfile={userProfile}
           targetMl={targetMl}
           onLoggedOut={handleLoggedOut}
