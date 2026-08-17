@@ -264,6 +264,8 @@ const OnboardingScreen = ({ navigation }: any) => {
   const totalSteps = 5;
 
   // State for Step 2
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
   const [age, setAge] = useState(26);
   const [gender, setGender] = useState('Male');
   const [weight, setWeight] = useState(75);
@@ -404,6 +406,8 @@ const OnboardingScreen = ({ navigation }: any) => {
           targetMl = Math.min(4500, Math.max(1500, targetMl));
 
           const profileData = {
+            fullName,
+            email,
             age,
             gender,
             weightKg: weight,
@@ -644,6 +648,31 @@ const OnboardingScreen = ({ navigation }: any) => {
                   <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
                     <Text className="text-2xl font-black text-white mb-1">Biometric Blueprint</Text>
                     <Text className="text-[12px] text-neutral-400 mb-8">Provide basic values to adjust hydration metabolic models.</Text>
+
+                    <View className="mb-6">
+                      <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">Full Name</Text>
+                      <TextInput
+                        className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        placeholder="e.g. John Doe"
+                        placeholderTextColor="#475569"
+                        value={fullName}
+                        onChangeText={setFullName}
+                      />
+                    </View>
+
+                    <View className="mb-8">
+                      <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">Email Address</Text>
+                      <TextInput
+                        className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        placeholder="e.g. john@example.com"
+                        placeholderTextColor="#475569"
+                        value={email}
+                        onChangeText={setEmail}
+                        keyboardType="email-address"
+                        autoCapitalize="none"
+                      />
+                    </View>
+
                     <CustomSlider label="Age (years)" min={14} max={90} value={age} onChange={setAge} />
                     <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Gender</Text>
                     <View className="flex-row gap-2 mb-8">

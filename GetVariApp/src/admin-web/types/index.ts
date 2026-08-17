@@ -6,6 +6,7 @@ export type AlertType = 'critical' | 'warn' | 'info';
 export interface User {
   id: string;
   name: string;
+  email?: string;
   age: number;
   gender: string;
   weightKg: number;

@@ -41,12 +41,16 @@ function hostFromMetro(): string | null {
 export function backendCandidates(): string[] {
   const candidates: string[] = [];
 
-  if (MANUAL_OVERRIDE) candidates.push(MANUAL_OVERRIDE);
+  if (MANUAL_OVERRIDE) {
+    candidates.push(MANUAL_OVERRIDE);
+  }
 
   // The dev machine, as reported by Metro. Works for physical devices on any
   // network without per-machine edits.
   const metroHost = hostFromMetro();
-  if (metroHost) candidates.push(`http://${metroHost}:${BACKEND_PORT}`);
+  if (metroHost) {
+    candidates.push(`http://${metroHost}:${BACKEND_PORT}`);
+  }
 
   // Covers the iOS simulator, and any device running
   // `adb reverse tcp:8000 tcp:8000`. Fails fast elsewhere.
@@ -58,5 +62,7 @@ export function backendCandidates(): string[] {
     candidates.push(`http://10.0.2.2:${BACKEND_PORT}`);
   }
 
-  return [...new Set(candidates)];
+  const unique = [...new Set(candidates)];
+  console.log('[AquaSage] Backend candidates generated:', unique);
+  return unique;
 }

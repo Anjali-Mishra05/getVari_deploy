@@ -11,6 +11,8 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const totalSteps = 5;
 
   // Form State
+  const [fullName, setFullName] = useState<string>('');
+  const [email, setEmail] = useState<string>('');
   const [age, setAge] = useState<number>(26);
   const [gender, setGender] = useState<string>('Male');
   const [weight, setWeight] = useState<number>(75);
@@ -149,6 +151,8 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       targetMl = Math.min(4500, Math.max(1500, targetMl)); // bound healthy intake limits
 
       const completedProfile: UserProfile = {
+        fullName,
+        email,
         age,
         gender,
         weightKg: weight,
@@ -250,6 +254,28 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             </div>
 
             <div className="space-y-4">
+              <div>
+                <label className="text-xs text-neutral-400 font-mono block mb-2">Full Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. John Doe"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  className="w-full bg-[#050c18] border border-white/10 rounded-xl px-3 py-2 text-xs text-neutral-200 focus:border-cyan-400 focus:outline-none transition font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-neutral-400 font-mono block mb-2">Email Address</label>
+                <input
+                  type="email"
+                  placeholder="e.g. john@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-[#050c18] border border-white/10 rounded-xl px-3 py-2 text-xs text-neutral-200 focus:border-cyan-400 focus:outline-none transition font-medium"
+                />
+              </div>
+
               <div>
                 <label className="text-xs text-neutral-400 font-mono block mb-2">Age (years)</label>
                 <div className="flex gap-3 items-center">

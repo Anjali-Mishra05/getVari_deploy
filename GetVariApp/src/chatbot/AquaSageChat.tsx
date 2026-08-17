@@ -278,23 +278,25 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   // Server Discovery Logic
   const discoverServer = async () => {
     const candidates = backendCandidates();
+    const startTime = Date.now();
 
     for (const base of candidates) {
       try {
         const controller = new AbortController();
-        const id = setTimeout(() => controller.abort(), 2500);
+        // Increase timeout to 6s to account for slow cold-starts on some dev machines
+        const id = setTimeout(() => controller.abort(), 6000);
         const res = await fetch(`${base}/ping`, { signal: controller.signal });
         clearTimeout(id);
         if (res.ok) {
-          console.log('[AquaSage] Backend found at', base);
+          console.log(`[AquaSage] Backend discovered at ${base} in ${Date.now() - startTime}ms`);
           setServerUrl(base);
           return base;
         }
       } catch (e: any) {
-        console.log(`[AquaSage] No backend at ${base}: ${e?.message ?? e}`);
+        console.log(`[AquaSage] Probing ${base} failed: ${e?.message ?? e}`);
       }
     }
-    console.warn('[AquaSage] No backend found on any candidate address.');
+    console.warn('[AquaSage] No backend found on any candidate address:', candidates);
     return null;
   };
 
@@ -461,9 +463,14 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
       appendAssistant(data.answer || 'No response from AI.');
     } catch (error: any) {
       console.error('[AquaSage] Chat request failed:', error?.message ?? error);
+
+      const candidates = backendCandidates();
+      const triedList = candidates.join(', ');
+      const androidHint = Platform.OS === 'android' ? '\n\nOn Android? Run: adb reverse tcp:8000 tcp:8000' : '';
+
       appendMessage(
         'assistant',
-        `Error: Unable to reach AI server (${error?.message ?? 'unknown error'}). Ensure your backend is running.`
+        `Error: Unable to reach AI server (${error?.message ?? 'unknown error'}).\n\nTried addresses: ${triedList}${androidHint}`
       );
     } finally {
       setIsLoading(false);

@@ -158,6 +158,7 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
   };
 
   const initial =
+    (typeof userProfile?.fullName === 'string' && userProfile.fullName.charAt(0).toUpperCase()) ||
     (typeof userProfile?.gender === 'string' && userProfile.gender.charAt(0).toUpperCase()) ||
     'U';
 
@@ -262,7 +263,7 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
                     marginTop: 14,
                   }}
                 >
-                  {formatPhone(session?.phoneNumber)}
+                  {userProfile?.fullName || formatPhone(session?.phoneNumber)}
                 </Text>
                 {!!userProfile && (
                   <Text style={{ color: '#64748b', fontSize: 11, marginTop: 5 }}>

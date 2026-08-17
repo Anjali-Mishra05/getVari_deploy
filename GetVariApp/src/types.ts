@@ -3,6 +3,8 @@ export type FitnessGoal = 'optimize_health' | 'athletic_performance' | 'cognitiv
 export type HabitRating = 'low' | 'moderate' | 'high';
 
 export interface UserProfile {
+  fullName?: string;
+  email?: string;
   age: number;
   gender: string;
   weightKg: number;

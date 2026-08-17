@@ -94,18 +94,36 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
                 <span className="text-[10px] uppercase font-black tracking-widest text-slate-400 block">PHONE NUMBER</span>
                 <p className="text-sm font-black text-slate-900 mt-1">{user.phone ? user.phone : formatMockPhone(user.id).replace('+1', '+91')}</p>
               </div>
-              <p className="text-[10px] font-bold text-slate-500 mt-3 uppercase tracking-wider">Weight baseline: {user.weightKg} Kg</p>
+              <div className="mt-3">
+                <span className="text-[10px] uppercase font-black tracking-widest text-slate-400 block">EMAIL ADDRESS</span>
+                <p className="text-sm font-black text-slate-900 mt-1 truncate">{user.email || 'Not provided'}</p>
+              </div>
+              <div className="mt-3">
+                <span className="text-[10px] uppercase font-black tracking-widest text-slate-400 block">WEIGHT BASELINE</span>
+                <p className="text-sm font-black text-slate-900 mt-1">{user.weightKg} Kg</p>
+              </div>
             </div>
             <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 shadow-sm">
               <span className="text-[9px] uppercase font-black tracking-widest text-blue-600">Fluid Intake (Today)</span>
-              <p className="text-sm font-black text-blue-700 mt-1">{user.waterIntakeMl} ml Ingested</p>
-              <div className="w-full h-1.5 bg-blue-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-600"
-                  style={{ width: `${Math.min(100, (user.waterIntakeMl / user.targetDailyMl) * 100)}%` }}
-                ></div>
+
+              <div className="mt-3">
+                <span className="text-[10px] uppercase font-black tracking-widest text-blue-400 block">INGESTED VOLUME</span>
+                <p className="text-sm font-black text-blue-700 mt-1">{user.waterIntakeMl} ml</p>
               </div>
-              <p className="text-[10px] font-bold text-blue-500 mt-1 uppercase tracking-wider">Daily Target: {user.targetDailyMl} ml</p>
+
+              <div className="mt-2 mb-3">
+                <div className="w-full h-1.5 bg-blue-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-600"
+                    style={{ width: `${Math.min(100, (user.waterIntakeMl / user.targetDailyMl) * 100)}%` }}
+                  ></div>
+                </div>
+              </div>
+
+              <div className="mt-3">
+                <span className="text-[10px] uppercase font-black tracking-widest text-blue-400 block">DAILY TARGET</span>
+                <p className="text-sm font-black text-blue-700 mt-1">{user.targetDailyMl} ml</p>
+              </div>
             </div>
           </div>
 

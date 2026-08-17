@@ -52,7 +52,8 @@ export class SupabaseAdminService {
 
         return {
           id: p.id,
-          name: profile.name || `User ${p.id.substring(0, 5)}`, // Fallback since name is not in real profile
+          name: profile.fullName || profile.name || `User ${p.id.substring(0, 5)}`,
+          email: profile.email,
           age: profile.age || 0,
           gender: profile.gender || 'Unknown',
           weightKg: profile.weightKg || 0,
