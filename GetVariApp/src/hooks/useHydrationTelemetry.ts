@@ -2,6 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { HydrationLog, HydrationRiskDetails, SensorData, UserProfile } from '../types';
 import { runHydrationRiskSolver } from '../utils/hydrationModel';
+import {
+  SleepSchedule,
+  awakeHoursBetween,
+  awakeHoursPerDay,
+  isAsleepAt,
+  mlPerAwakeHour,
+  normaliseSleepSchedule,
+} from '../utils/sleepWindow';
 
 /**
  * The physiological loop behind the home dashboard.
@@ -67,6 +75,12 @@ export interface HydrationTelemetry {
   absorptionRate: number;
   /** Current perspiration + respiration loss, ml/min. */
   sweatLossRate: number;
+  /** True while the user's sleep window is open — the app's quiet state. */
+  isSleeping: boolean;
+  /** Hours the user is awake on an ordinary day, from their sleep window. */
+  awakeHoursPerDay: number;
+  /** Daily goal spread across waking hours only, ml/h. */
+  targetMlPerAwakeHour: number;
   /** Pushes a logged amount into the gut so the recovery model can absorb it. */
   ingestFluid: (amountMl: number) => void;
   /** Seam for a real BLE stream to overwrite simulated readings. */
@@ -94,13 +108,23 @@ export const sweatLossRateFor = (sensors: SensorData): number =>
   (sensors.activityLoad / 100) * 8.6 +
   (heatStress(sensors.temperature, sensors.humidity) / 100) * 5.0;
 
-/** Real hours between now and the newest entry, or the no-log assumption. */
-const gapFromLogs = (logs: HydrationLog[]): number => {
+/**
+ * Hours between now and the newest entry, or the no-log assumption.
+ *
+ * Only *waking* hours count. A user who drinks at 22:30, sleeps eight hours
+ * and opens the app at 07:15 has not neglected their hydration for nine hours
+ * — they were asleep for eight of them, and scoring it that way put every
+ * morning at the top of the risk band before the day had started.
+ */
+const gapFromLogs = (logs: HydrationLog[], schedule: SleepSchedule | null): number => {
   if (logs.length === 0) return NO_LOG_ASSUMED_GAP_HOURS;
   const newest = logs.reduce((latest, log) =>
     new Date(log.timestamp) > new Date(latest.timestamp) ? log : latest
   );
-  const hours = (Date.now() - new Date(newest.timestamp).getTime()) / 3_600_000;
+  const since = new Date(newest.timestamp).getTime();
+  const hours = schedule
+    ? awakeHoursBetween(schedule, since, Date.now())
+    : (Date.now() - since) / 3_600_000;
   return Math.max(0, Math.min(MAX_GAP_HOURS, hours));
 };
 
@@ -114,10 +138,20 @@ export const useHydrationTelemetry = (
   profile: UserProfile | undefined,
   logs: HydrationLog[]
 ): HydrationTelemetry => {
+  // The window is read straight off the profile blob, so a user still on an
+  // older profile (or one who has not reached that onboarding step) simply
+  // gets the previous, sleep-blind behaviour rather than a broken screen.
+  const sleepSchedule = useMemo(() => normaliseSleepSchedule(profile), [profile]);
+
   const [sensorData, setSensorData] = useState<SensorData>(INITIAL_SENSORS);
   const [stomachVolume, setStomachVolume] = useState(0);
   const [absorbedHydration, setAbsorbedHydration] = useState(180);
-  const [effectiveHoursSinceDrink, setEffectiveHoursSinceDrink] = useState(() => gapFromLogs(logs));
+  const [effectiveHoursSinceDrink, setEffectiveHoursSinceDrink] = useState(() =>
+    gapFromLogs(logs, sleepSchedule)
+  );
+  const [isSleeping, setIsSleeping] = useState(() =>
+    sleepSchedule ? isAsleepAt(sleepSchedule) : false
+  );
 
   // The tick reads current values without re-subscribing every render, which
   // would otherwise restart the interval ~30 times a minute and stall it.
@@ -128,6 +162,8 @@ export const useHydrationTelemetry = (
   sensorRef.current = sensorData;
   const stomachRef = useRef(stomachVolume);
   stomachRef.current = stomachVolume;
+  const sleepScheduleRef = useRef(sleepSchedule);
+  sleepScheduleRef.current = sleepSchedule;
 
   // A new entry restarts the gap from its real timestamp. Keyed on the newest
   // timestamp so re-fetching the same list does not reset a gap mid-tick.
@@ -136,9 +172,9 @@ export const useHydrationTelemetry = (
     null
   );
   useEffect(() => {
-    setEffectiveHoursSinceDrink(gapFromLogs(logs));
+    setEffectiveHoursSinceDrink(gapFromLogs(logs, sleepSchedule));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newestLogAt]);
+  }, [newestLogAt, sleepSchedule]);
 
   // Sensor stream + physiological step.
   useEffect(() => {
@@ -190,9 +226,19 @@ export const useHydrationTelemetry = (
 
       // 3. The hydration gap grows with the clock but is bought back by fluid
       //    that has actually been absorbed — 250ml is worth 1.5 hours.
+      //
+      //    Inside the sleep window the clock term is dropped: the user is not
+      //    ignoring a nudge they were never sent, so the night must not push
+      //    them into the red. Absorption credit still applies, so a glass
+      //    drunk at 3am counts.
+      const schedule = sleepScheduleRef.current;
+      const asleep = !!schedule && isAsleepAt(schedule);
+      setIsSleeping(asleep);
+
       setEffectiveHoursSinceDrink(prev => {
         const credit = (absorbed / 250) * 1.5;
-        const next = prev + SIM_MINUTES_PER_TICK / 60 - credit;
+        const elapsed = asleep ? 0 : SIM_MINUTES_PER_TICK / 60;
+        const next = prev + elapsed - credit;
         return Number(Math.max(0, Math.min(MAX_GAP_HOURS, next)).toFixed(2));
       });
     }, TICK_MS);
@@ -214,6 +260,9 @@ export const useHydrationTelemetry = (
     setSensorData(prev => ({ ...prev, ...patch, lastUpdated: new Date().toISOString() }));
   }, []);
 
+  const awakeHours = sleepSchedule ? awakeHoursPerDay(sleepSchedule) : 24;
+  const targetMl = profile?.targetDailyMl ?? 0;
+
   return {
     sensorData,
     solvedRisk,
@@ -222,6 +271,13 @@ export const useHydrationTelemetry = (
     absorbedHydration,
     absorptionRate: absorptionRateFor(sensorData),
     sweatLossRate: sweatLossRateFor(sensorData),
+    isSleeping,
+    awakeHoursPerDay: awakeHours,
+    // Averages are per waking hour: spreading the goal over 24 would quietly
+    // set a pace the user could only hit by drinking in their sleep.
+    targetMlPerAwakeHour: sleepSchedule
+      ? Math.round(mlPerAwakeHour(targetMl, sleepSchedule))
+      : Math.round(targetMl / 24),
     ingestFluid,
     applySensorPatch,
   };

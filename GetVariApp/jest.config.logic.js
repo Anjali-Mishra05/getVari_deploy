@@ -1,6 +1,6 @@
 /**
  * Config for the pure-logic test suites (hydration parsing, idempotent
- * logging, notification prompt state).
+ * logging, notification prompt state, the sleep window, profile edits).
  *
  * The default `jest.config.js` boots the React Native preset for component
  * tests; these suites mock every native module they touch, so they run in a
@@ -14,5 +14,7 @@ module.exports = {
     '<rootDir>/__tests__/hydrationLogging.test.ts',
     '<rootDir>/__tests__/authSession.test.ts',
     '<rootDir>/__tests__/notificationHistory.test.ts',
+    '<rootDir>/__tests__/sleepWindow.test.ts',
+    '<rootDir>/__tests__/profileEditing.test.ts',
   ],
 };

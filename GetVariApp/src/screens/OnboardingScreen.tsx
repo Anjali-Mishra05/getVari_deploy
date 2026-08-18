@@ -1,17 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   SafeAreaView,
   Platform,
-  Dimensions,
   ScrollView,
   ActivityIndicator,
   Alert,
   Linking,
   NativeModules,
-  Modal,
   TextInput,
 } from 'react-native';
 import {
@@ -25,7 +23,9 @@ import {
   CircleAlert,
   Bluetooth,
   ChevronDown,
-  Search,
+  Moon,
+  Sunrise,
+  BellOff,
 } from 'lucide-react-native';
 import Animated, {
   FadeInRight,
@@ -38,230 +38,28 @@ import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import Geolocation from '@react-native-community/geolocation';
 
 import GlassCard from '../components/GlassCard';
+import CustomSlider from '../components/CustomSlider';
+import TimeField from '../components/TimeField';
+import CityPickerModal from '../components/CityPickerModal';
 import { supabase } from '../services/SupabaseClient';
 import { AuthService } from '../services/AuthService';
+import NotificationService from '../services/NotificationService';
+import { getClosestCity } from '../data/indianCities';
+import { computeTargetDailyMl } from '../utils/hydrationTarget';
+import {
+  DEFAULT_SLEEP_SCHEDULE,
+  awakeHoursPerDay,
+  formatClockLabel,
+  sleepDurationMinutes,
+} from '../utils/sleepWindow';
 
-const { width } = Dimensions.get('window');
 const manager = new BleManager();
 const GETVARI_SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
 
-const popularCities = [
-  "Mumbai", "Delhi", "Bengaluru", "Hyderabad", "Ahmedabad", "Chennai", "Kolkata", "Surat", "Pune", "Jaipur",
-  "Lucknow", "Kanpur", "Nagpur", "Indore", "Thane", "Bhopal", "Visakhapatnam", "Pimpri-Chinchwad", "Patna", "Vadodara",
-  "Ghaziabad", "Ludhiana", "Agra", "Nashik", "Faridabad", "Meerut", "Rajkot", "Kalyan-Dombivli", "Vasai-Virar", "Varanasi",
-  "Srinagar", "Aurangabad", "Dhanbad", "Amritsar", "Navi Mumbai", "Prayagraj", "Howrah", "Ranchi", "Gwalior", "Jabalpur",
-  "Coimbatore", "Vijayawada", "Jodhpur", "Madurai", "Raipur", "Kota", "Guwahati", "Chandigarh", "Solapur", "Hubballi-Dharwad",
-  "Bareilly", "Moradabad", "Mysuru", "Gurugram", "Aligarh", "Jalandhar", "Tiruchirappalli", "Bhubaneswar", "Salem", "Mira-Bhayandar",
-  "Warangal", "Thiruvananthapuram", "Guntur", "Bhiwandi", "Saharanpur", "Gorakhpur", "Bikaner", "Amravati", "Noida", "Jamshedpur",
-  "Bhilai", "Cuttack", "Firozabad", "Kochi", "Nellore", "Bhavnagar", "Dehradun", "Durgapur", "Asansol", "Rourkela",
-  "Nanded", "Kolhapur", "Ajmer", "Akola", "Kalaburagi", "Jamnagar", "Ujjain", "Loni", "Siliguri", "Jhansi",
-  "Ulhasnagar", "Jammu", "Sangli-Miraj & Kupwad", "Belagavi", "Mangaluru", "Ambattur", "Tirunelveli", "Malegaon", "Gaya", "Jalgaon"
-];
-
-const CITY_COORDINATES: { [key: string]: { lat: number; lon: number } } = {
-  'Mumbai': { lat: 19.0760, lon: 72.8777 },
-  'Delhi': { lat: 28.6139, lon: 77.2090 },
-  'Bengaluru': { lat: 12.9716, lon: 77.5946 },
-  'Hyderabad': { lat: 17.3850, lon: 78.4867 },
-  'Ahmedabad': { lat: 23.0225, lon: 72.5714 },
-  'Chennai': { lat: 13.0827, lon: 80.2707 },
-  'Kolkata': { lat: 22.5726, lon: 88.3639 },
-  'Surat': { lat: 21.1702, lon: 72.8311 },
-  'Pune': { lat: 18.5204, lon: 73.8567 },
-  'Jaipur': { lat: 26.9124, lon: 75.7873 },
-  'Lucknow': { lat: 26.8467, lon: 80.9462 },
-  'Kanpur': { lat: 26.4499, lon: 80.3319 },
-  'Nagpur': { lat: 21.1458, lon: 79.0882 },
-  'Indore': { lat: 22.7196, lon: 75.8577 },
-  'Thane': { lat: 19.2183, lon: 72.9781 },
-  'Bhopal': { lat: 23.2599, lon: 77.4126 },
-  'Visakhapatnam': { lat: 17.6868, lon: 83.2185 },
-  'Pimpri-Chinchwad': { lat: 18.6298, lon: 73.7997 },
-  'Patna': { lat: 25.5941, lon: 85.1376 },
-  'Vadodara': { lat: 22.3072, lon: 73.1812 },
-  'Ghaziabad': { lat: 28.6692, lon: 77.4538 },
-  'Ludhiana': { lat: 30.9010, lon: 75.8573 },
-  'Agra': { lat: 27.1767, lon: 78.0081 },
-  'Nashik': { lat: 19.9975, lon: 73.7898 },
-  'Faridabad': { lat: 28.4089, lon: 77.3178 },
-  'Meerut': { lat: 28.9845, lon: 77.7064 },
-  'Rajkot': { lat: 22.3039, lon: 70.8022 },
-  'Kalyan-Dombivli': { lat: 19.2437, lon: 73.1352 },
-  'Vasai-Virar': { lat: 19.3919, lon: 72.8397 },
-  'Varanasi': { lat: 25.3176, lon: 82.9739 },
-  'Srinagar': { lat: 34.0837, lon: 74.7973 },
-  'Aurangabad': { lat: 19.8762, lon: 75.3433 },
-  'Dhanbad': { lat: 23.7957, lon: 86.4304 },
-  'Amritsar': { lat: 31.6340, lon: 74.8723 },
-  'Navi Mumbai': { lat: 19.0330, lon: 73.0297 },
-  'Prayagraj': { lat: 25.4358, lon: 81.8463 },
-  'Howrah': { lat: 22.5958, lon: 88.2636 },
-  'Ranchi': { lat: 23.3441, lon: 85.3096 },
-  'Gwalior': { lat: 26.2124, lon: 78.1772 },
-  'Jabalpur': { lat: 23.1815, lon: 79.9864 },
-  'Coimbatore': { lat: 11.0168, lon: 76.9558 },
-  'Vijayawada': { lat: 16.5062, lon: 80.6480 },
-  'Jodhpur': { lat: 26.2389, lon: 73.0243 },
-  'Madurai': { lat: 9.9252, lon: 78.1198 },
-  'Raipur': { lat: 21.2514, lon: 81.6296 },
-  'Kota': { lat: 25.2138, lon: 75.8648 },
-  'Guwahati': { lat: 26.1445, lon: 91.7362 },
-  'Chandigarh': { lat: 30.7333, lon: 76.7794 },
-  'Solapur': { lat: 17.6599, lon: 75.9064 },
-  'Hubballi-Dharwad': { lat: 15.3647, lon: 75.1240 },
-  'Bareilly': { lat: 28.3670, lon: 79.4304 },
-  'Moradabad': { lat: 28.8351, lon: 78.7733 },
-  'Mysuru': { lat: 12.2958, lon: 76.6394 },
-  'Gurugram': { lat: 28.4595, lon: 77.0266 },
-  'Aligarh': { lat: 27.8974, lon: 78.0880 },
-  'Jalandhar': { lat: 31.3260, lon: 75.5762 },
-  'Tiruchirappalli': { lat: 10.7905, lon: 78.7047 },
-  'Bhubaneswar': { lat: 20.2961, lon: 85.8245 },
-  'Salem': { lat: 11.6643, lon: 78.1460 },
-  'Mira-Bhayandar': { lat: 19.2906, lon: 72.8550 },
-  'Warangal': { lat: 17.9689, lon: 79.5941 },
-  'Thiruvananthapuram': { lat: 8.5241, lon: 76.9366 },
-  'Guntur': { lat: 16.3067, lon: 80.4365 },
-  'Bhiwandi': { lat: 19.2813, lon: 73.0483 },
-  'Saharanpur': { lat: 29.9640, lon: 77.5460 },
-  'Gorakhpur': { lat: 26.7606, lon: 83.3731 },
-  'Bikaner': { lat: 28.0229, lon: 73.3119 },
-  'Amravati': { lat: 20.9320, lon: 77.7523 },
-  'Noida': { lat: 28.5355, lon: 77.3910 },
-  'Jamshedpur': { lat: 22.8046, lon: 86.2029 },
-  'Bhilai': { lat: 21.1938, lon: 81.3509 },
-  'Cuttack': { lat: 20.4625, lon: 85.8830 },
-  'Firozabad': { lat: 27.1508, lon: 78.4000 },
-  'Kochi': { lat: 9.9312, lon: 76.2673 },
-  'Nellore': { lat: 14.4426, lon: 79.9865 },
-  'Bhavnagar': { lat: 21.7645, lon: 72.1519 },
-  'Dehradun': { lat: 30.3165, lon: 78.0322 },
-  'Durgapur': { lat: 23.5204, lon: 87.3119 },
-  'Asansol': { lat: 23.6739, lon: 86.9524 },
-  'Rourkela': { lat: 22.2604, lon: 84.8536 },
-  'Nanded': { lat: 19.1628, lon: 77.3183 },
-  'Kolhapur': { lat: 16.7050, lon: 74.2433 },
-  'Ajmer': { lat: 26.4499, lon: 74.6399 },
-  'Akola': { lat: 20.7002, lon: 77.0082 },
-  'Kalaburagi': { lat: 17.3297, lon: 76.8343 },
-  'Jamnagar': { lat: 22.4707, lon: 70.0577 },
-  'Ujjain': { lat: 23.1760, lon: 75.7885 },
-  'Loni': { lat: 28.7505, lon: 77.2889 },
-  'Siliguri': { lat: 26.7271, lon: 88.3953 },
-  'Jhansi': { lat: 25.4484, lon: 78.5685 },
-  'Ulhasnagar': { lat: 19.2215, lon: 73.1645 },
-  'Jammu': { lat: 32.7266, lon: 74.8570 },
-  'Sangli-Miraj & Kupwad': { lat: 16.8524, lon: 74.5815 },
-  'Belagavi': { lat: 15.8497, lon: 74.4977 },
-  'Mangaluru': { lat: 12.9141, lon: 74.8560 },
-  'Ambattur': { lat: 13.1143, lon: 80.1480 },
-  'Tirunelveli': { lat: 8.7139, lon: 77.7567 },
-  'Malegaon': { lat: 20.5517, lon: 74.5085 },
-  'Gaya': { lat: 24.7914, lon: 85.0002 },
-  'Jalgaon': { lat: 21.0077, lon: 75.5626 }
-};
-
-const INDIAN_CITIES = popularCities.map(city => {
-  const states: { [key: string]: string } = {
-    'Mumbai': 'Maharashtra', 'Delhi': 'Delhi', 'Bengaluru': 'Karnataka', 'Hyderabad': 'Telangana', 'Ahmedabad': 'Gujarat',
-    'Chennai': 'Tamil Nadu', 'Kolkata': 'West Bengal', 'Surat': 'Gujarat', 'Pune': 'Maharashtra', 'Jaipur': 'Rajasthan',
-    'Lucknow': 'Uttar Pradesh', 'Kanpur': 'Uttar Pradesh', 'Nagpur': 'Maharashtra', 'Indore': 'Madhya Pradesh',
-    'Thane': 'Maharashtra', 'Bhopal': 'Madhya Pradesh', 'Visakhapatnam': 'Andhra Pradesh', 'Pimpri-Chinchwad': 'Maharashtra',
-    'Patna': 'Bihar', 'Vadodara': 'Gujarat', 'Ghaziabad': 'Uttar Pradesh', 'Ludhiana': 'Punjab', 'Agra': 'Uttar Pradesh',
-    'Nashik': 'Maharashtra', 'Faridabad': 'Haryana', 'Meerut': 'Uttar Pradesh', 'Rajkot': 'Gujarat', 'Kalyan-Dombivli': 'Maharashtra',
-    'Vasai-Virar': 'Maharashtra', 'Varanasi': 'Uttar Pradesh', 'Srinagar': 'Jammu & Kashmir', 'Aurangabad': 'Maharashtra',
-    'Dhanbad': 'Jharkhand', 'Amritsar': 'Punjab', 'Navi Mumbai': 'Maharashtra', 'Prayagraj': 'Uttar Pradesh',
-    'Howrah': 'West Bengal', 'Ranchi': 'Jharkhand', 'Gwalior': 'Madhya Pradesh', 'Jabalpur': 'Madhya Pradesh',
-    'Coimbatore': 'Tamil Nadu', 'Vijayawada': 'Andhra Pradesh', 'Jodhpur': 'Rajasthan', 'Madurai': 'Tamil Nadu',
-    'Raipur': 'Chhattisgarh', 'Kota': 'Rajasthan', 'Guwahati': 'Assam', 'Chandigarh': 'Chandigarh', 'Solapur': 'Maharashtra',
-    'Hubballi-Dharwad': 'Karnataka', 'Bareilly': 'Uttar Pradesh', 'Moradabad': 'Uttar Pradesh', 'Mysuru': 'Karnataka',
-    'Gurugram': 'Haryana', 'Aligarh': 'Uttar Pradesh', 'Jalandhar': 'Punjab', 'Tiruchirappalli': 'Tamil Nadu',
-    'Bhubaneswar': 'Odisha', 'Salem': 'Tamil Nadu', 'Mira-Bhayandar': 'Maharashtra', 'Warangal': 'Telangana',
-    'Thiruvananthapuram': 'Kerala', 'Guntur': 'Andhra Pradesh', 'Bhiwandi': 'Maharashtra', 'Saharanpur': 'Uttar Pradesh',
-    'Gorakhpur': 'Uttar Pradesh', 'Bikaner': 'Rajasthan', 'Amravati': 'Maharashtra', 'Noida': 'Uttar Pradesh',
-    'Jamshedpur': 'Jharkhand', 'Bhilai': 'Chhattisgarh', 'Cuttack': 'Odisha', 'Firozabad': 'Uttar Pradesh',
-    'Kochi': 'Kerala', 'Nellore': 'Andhra Pradesh', 'Bhavnagar': 'Gujarat', 'Dehradun': 'Uttarakhand', 'Durgapur': 'West Bengal',
-    'Asansol': 'West Bengal', 'Rourkela': 'Odisha', 'Nanded': 'Maharashtra', 'Kolhapur': 'Maharashtra', 'Ajmer': 'Rajasthan',
-    'Akola': 'Maharashtra', 'Kalaburagi': 'Karnataka', 'Jamnagar': 'Gujarat', 'Ujjain': 'Madhya Pradesh', 'Loni': 'Uttar Pradesh',
-    'Siliguri': 'West Bengal', 'Jhansi': 'Uttar Pradesh', 'Ulhasnagar': 'Maharashtra', 'Jammu': 'Jammu & Kashmir',
-    'Sangli-Miraj & Kupwad': 'Maharashtra', 'Belagavi': 'Karnataka', 'Mangaluru': 'Karnataka', 'Ambattur': 'Tamil Nadu',
-    'Tirunelveli': 'Tamil Nadu', 'Malegaon': 'Maharashtra', 'Gaya': 'Bihar', 'Jalgaon': 'Maharashtra'
-  };
-  return {
-    city,
-    state: states[city] || 'India',
-    lat: CITY_COORDINATES[city].lat,
-    lon: CITY_COORDINATES[city].lon
-  };
-});
-
-const getClosestCity = (lat: number, lon: number): string => {
-  let closestCity = 'Bengaluru';
-  let minDistance = Infinity;
-  for (const [city, coords] of Object.entries(CITY_COORDINATES)) {
-    const distance = Math.sqrt(Math.pow(coords.lat - lat, 2) + Math.pow(coords.lon - lon, 2));
-    if (distance < minDistance) {
-      minDistance = distance;
-      closestCity = city;
-    }
-  }
-  return closestCity;
-};
-
-const CustomSlider = ({ min, max, value, onChange, label, unit = '' }: any) => {
-  const sliderWidth = width - 120;
-  const position = ((value - min) / (max - min)) * sliderWidth;
-
-  const handleTouch = (event: any) => {
-    const touchX = event.nativeEvent.locationX;
-    let newValue = Math.round(((touchX / sliderWidth) * (max - min)) + min);
-    newValue = Math.max(min, Math.min(max, newValue));
-    onChange(newValue);
-  };
-
-  return (
-    <View className="w-full mb-6">
-      <View className="flex-row justify-between items-center mb-3">
-        <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider">{label}</Text>
-        <Text className="text-xl font-black text-[#00f2fe] font-mono">{value}{unit}</Text>
-      </View>
-      <View
-        className="h-6 justify-center"
-        onStartShouldSetResponder={() => true}
-        onResponderMove={handleTouch}
-        onResponderRelease={handleTouch}
-      >
-        <View className="h-1 w-full bg-white/10 rounded-full">
-          <View
-            style={{ width: position }}
-            className="h-full bg-[#00f2fe] rounded-full"
-          />
-        </View>
-        <View
-          style={{
-            position: 'absolute',
-            left: position - 10,
-            width: 20,
-            height: 20,
-            borderRadius: 10,
-            backgroundColor: '#00f2fe',
-            borderWidth: 4,
-            borderColor: '#01040a',
-            shadowColor: '#00f2fe',
-            shadowOffset: { width: 0, height: 0 },
-            shadowOpacity: 0.8,
-            shadowRadius: 10,
-            elevation: 5,
-          }}
-        />
-      </View>
-    </View>
-  );
-};
 
 const OnboardingScreen = ({ navigation }: any) => {
   const [step, setStep] = useState(1);
-  const totalSteps = 5;
+  const totalSteps = 6;
 
   // State for Step 2
   const [fullName, setFullName] = useState('');
@@ -275,20 +73,27 @@ const OnboardingScreen = ({ navigation }: any) => {
   const [isLocating, setIsLocating] = useState(false);
   const [locationErrorMsg, setLocationErrorMsg] = useState('');
   const [showCityPicker, setShowCityPicker] = useState(false);
-  const [citySearchQuery, setCitySearchQuery] = useState('');
 
   // State for Step 3
   const [medicalConditions, setMedicalConditions] = useState<string[]>([]);
 
   // State for Step 4
-  const [activityLevel, setActivityLevel] = useState('moderate');
+  const [sleepStart, setSleepStart] = useState(DEFAULT_SLEEP_SCHEDULE.sleepStart);
+  const [wakeUp, setWakeUp] = useState(DEFAULT_SLEEP_SCHEDULE.wakeUp);
 
   // State for Step 5
+  const [activityLevel, setActivityLevel] = useState('moderate');
+
+  // State for Step 6
   const [bleState, setBleState] = useState<'idle' | 'checking' | 'bluetoothOff' | 'requesting' | 'scanning' | 'devicesFound' | 'noDevicesFound' | 'connecting' | 'connected' | 'error'>('idle');
   const [devices, setDevices] = useState<Device[]>([]);
   const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  const sleepSchedule = { sleepStart, wakeUp };
+  const sleepHours = sleepDurationMinutes(sleepSchedule) / 60;
+  const awakeHours = awakeHoursPerDay(sleepSchedule);
 
   useEffect(() => {
     return () => {
@@ -380,30 +185,14 @@ const OnboardingScreen = ({ navigation }: any) => {
       try {
         const userId = await AuthService.getCurrentUserId();
         if (userId) {
-          let targetMl = weight * 35;
-          if (activityLevel === 'active') targetMl += 600;
-          if (activityLevel === 'elite') targetMl += 1200;
-
-          if (medicalConditions.includes('diabetes')) targetMl += 450;
-          if (medicalConditions.includes('kidney')) targetMl -= 250;
-          if (medicalConditions.includes('hypertension')) targetMl += 150;
-
-          // Climate coefficient adjustments based on chosen location
-          let climateModifier = 0;
-          if (selectedCity) {
-            const hotCities = ['Mumbai', 'Delhi', 'Chennai', 'Kolkata', 'Hyderabad', 'Ahmedabad', 'Jaipur'];
-            const moderateCities = ['Bengaluru', 'Pune', 'Tokyo', 'San Francisco'];
-
-            if (hotCities.some(city => selectedCity.includes(city))) {
-              climateModifier = 350; // Extra hydration allocation for tropical climate baseline
-            } else if (moderateCities.some(city => selectedCity.includes(city))) {
-              climateModifier = 100; // Mild base elevation
-            }
-          }
-          targetMl += climateModifier;
-
-          targetMl = Math.round(targetMl / 50) * 50;
-          targetMl = Math.min(4500, Math.max(1500, targetMl));
+          // Shared with the profile editor, so a later correction to weight,
+          // activity or diagnoses moves the goal by exactly these rules.
+          const targetMl = computeTargetDailyMl({
+            weightKg: weight,
+            activityLevel,
+            medicalConditions,
+            selectedCity,
+          });
 
           const profileData = {
             fullName,
@@ -412,11 +201,20 @@ const OnboardingScreen = ({ navigation }: any) => {
             gender,
             weightKg: weight,
             selectedCity,
+            // The dashboard's ambient card reads `location`; both are written
+            // so neither name can go stale against the other.
+            location: selectedCity,
             latitude: latitude || null,
             longitude: longitude || null,
             medicalConditions,
             activityLevel,
             targetDailyMl: targetMl,
+            // Local wall-clock times, not instants: a bedtime is a habit that
+            // stays 11pm wherever the user travels.
+            sleepSchedule,
+            // Stored alongside so averages and pacing never have to re-derive
+            // it — the daily goal is spread over waking hours, not 24.
+            awakeHoursPerDay: Number(awakeHours.toFixed(2)),
             connectedDeviceId: connectedDevice?.id || null,
           };
 
@@ -433,6 +231,15 @@ const OnboardingScreen = ({ navigation }: any) => {
             setErrorMsg('System busy. Syncing locally...');
             setTimeout(() => navigation.replace('Home'), 1500);
             return;
+          }
+
+          // Reminders live in the OS, so the sleep window has to be handed to
+          // the notification layer explicitly — it cannot read the profile row
+          // from a background handler or a cold start.
+          try {
+            await NotificationService.setSleepSchedule(sleepSchedule);
+          } catch (sleepError) {
+            console.error('[Onboarding] Failed to apply sleep window:', sleepError);
           }
 
           // Mark onboarding complete locally to bypass startup check next time
@@ -729,112 +536,17 @@ const OnboardingScreen = ({ navigation }: any) => {
                       )}
                     </View>
 
-                    <Modal
+                    <CityPickerModal
                       visible={showCityPicker}
-                      transparent
-                      animationType="slide"
-                      onRequestClose={() => setShowCityPicker(false)}
-                    >
-                      <View className="flex-1 bg-black/40 justify-end">
-                        <TouchableOpacity
-                          activeOpacity={1}
-                          onPress={() => {
-                            setShowCityPicker(false);
-                            setCitySearchQuery('');
-                          }}
-                          className="absolute inset-0"
-                        />
-
-                        <Animated.View
-                          entering={FadeInUp.duration(300)}
-                          className="w-full bg-[#01040a] border-t border-white/10 rounded-t-[42px] overflow-hidden h-[85%]"
-                        >
-                          <View className="items-center pt-3 pb-1">
-                            <View className="w-12 h-1 bg-white/10 rounded-full" />
-                          </View>
-
-                          <View className="p-6">
-                            <Text className="text-white font-black text-xl mb-6">Select Your City</Text>
-
-                            <View className="flex-row items-center bg-white/[0.03] border border-white/10 rounded-[24px] px-5 py-2">
-                              <Search size={20} color="#64748b" />
-                              <TextInput
-                                className="flex-1 ml-3 text-white text-[16px] font-medium h-12"
-                                placeholder="Search Indian cities..."
-                                placeholderTextColor="#475569"
-                                value={citySearchQuery}
-                                onChangeText={setCitySearchQuery}
-                                autoFocus={false}
-                                underlineColorAndroid="transparent"
-                              />
-                              {citySearchQuery.length > 0 && (
-                                <TouchableOpacity onPress={() => setCitySearchQuery('')}>
-                                  <Text className="text-[#64748b] font-bold px-2">Clear</Text>
-                                </TouchableOpacity>
-                              )}
-                            </View>
-                          </View>
-
-                          <ScrollView
-                            className="flex-1 px-4"
-                            showsVerticalScrollIndicator={false}
-                            keyboardShouldPersistTaps="handled"
-                          >
-                            {INDIAN_CITIES
-                              .filter(c =>
-                                c.city.toLowerCase().includes(citySearchQuery.toLowerCase()) ||
-                                c.state.toLowerCase().includes(citySearchQuery.toLowerCase())
-                              )
-                              .map((c) => (
-                                <TouchableOpacity
-                                  key={`${c.city}-${c.state}`}
-                                  onPress={() => {
-                                    setSelectedCity(c.city);
-                                    setLatitude(c.lat);
-                                    setLongitude(c.lon);
-                                    setShowCityPicker(false);
-                                    setCitySearchQuery('');
-                                  }}
-                                  className={`p-5 mb-2 rounded-[24px] flex-row justify-between items-center ${
-                                    selectedCity === c.city ? 'bg-[#00f2fe]/10 border border-[#00f2fe]/30' : 'bg-white/[0.02] border border-white/5'
-                                  }`}
-                                >
-                                  <View>
-                                    <Text className={`text-[15px] font-bold ${selectedCity === c.city ? 'text-[#00f2fe]' : 'text-neutral-200'}`}>
-                                      {c.city}
-                                    </Text>
-                                    <Text className="text-[10px] text-neutral-500 font-mono mt-0.5 uppercase tracking-widest">{c.state}</Text>
-                                  </View>
-                                  {selectedCity === c.city && <Check size={18} color="#00f2fe" />}
-                                </TouchableOpacity>
-                              ))}
-
-                            {INDIAN_CITIES.filter(c =>
-                                c.city.toLowerCase().includes(citySearchQuery.toLowerCase()) ||
-                                c.state.toLowerCase().includes(citySearchQuery.toLowerCase())
-                              ).length === 0 && (
-                              <View className="py-20 items-center">
-                                <Text className="text-neutral-500 text-sm text-center">No cities found matching your search</Text>
-                                <Text className="text-neutral-700 text-xs mt-2 italic">Try searching for the state or a nearby hub</Text>
-                              </View>
-                            )}
-                            <View className="h-10" />
-                          </ScrollView>
-
-                          <SafeAreaView edges={['bottom']}>
-                            <TouchableOpacity
-                              onPress={() => {
-                                setShowCityPicker(false);
-                                setCitySearchQuery('');
-                              }}
-                              className="p-6 items-center border-t border-white/5"
-                            >
-                              <Text className="text-[#64748b] text-[12px] font-black uppercase tracking-widest">Close Picker</Text>
-                            </TouchableOpacity>
-                          </SafeAreaView>
-                        </Animated.View>
-                      </View>
-                    </Modal>
+                      selectedCity={selectedCity}
+                      onSelect={(city, lat, lon) => {
+                        setSelectedCity(city);
+                        setLatitude(lat);
+                        setLongitude(lon);
+                        setShowCityPicker(false);
+                      }}
+                      onClose={() => setShowCityPicker(false)}
+                    />
                   </Animated.View>
                 )}
 
@@ -863,6 +575,62 @@ const OnboardingScreen = ({ navigation }: any) => {
 
                 {step === 4 && (
                   <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
+                    <Text className="text-2xl font-black text-white mb-1">Circadian Window</Text>
+                    <Text className="text-[12px] text-neutral-400 mb-8 leading-relaxed">
+                      Roughly when do you sleep and wake? Hours you spend asleep are excluded from your hydration averages, and GetVari stays silent through them.
+                    </Text>
+
+                    <TimeField
+                      label="Usual Sleep Time"
+                      icon={Moon}
+                      value={sleepStart}
+                      onChange={setSleepStart}
+                    />
+                    <TimeField
+                      label="Usual Wake-up Time"
+                      icon={Sunrise}
+                      value={wakeUp}
+                      onChange={setWakeUp}
+                    />
+
+                    <View className="w-full p-4 rounded-2xl border border-[#00f2fe]/20 bg-[#00f2fe]/[0.04] mb-3">
+                      <Text className="text-[10px] text-neutral-500 font-mono uppercase tracking-[2px] mb-2">Derived Baseline</Text>
+                      <View className="flex-row justify-between items-center mb-1">
+                        <Text className="text-neutral-400 text-[12px]">Sleep window</Text>
+                        <Text className="text-white text-[12px] font-black">
+                          {formatClockLabel(sleepStart)} - {formatClockLabel(wakeUp)}
+                        </Text>
+                      </View>
+                      <View className="flex-row justify-between items-center mb-1">
+                        <Text className="text-neutral-400 text-[12px]">Rest duration</Text>
+                        <Text className="text-white text-[12px] font-black">{sleepHours.toFixed(1)} h</Text>
+                      </View>
+                      <View className="flex-row justify-between items-center">
+                        <Text className="text-neutral-400 text-[12px]">Waking hours (averaging base)</Text>
+                        <Text className="text-[#00f2fe] text-[12px] font-black">{awakeHours.toFixed(1)} h</Text>
+                      </View>
+                    </View>
+
+                    {sleepHours < 3 && (
+                      <View className="flex-row items-center gap-2 mb-3">
+                        <CircleAlert size={12} color="#f59e0b" />
+                        <Text className="text-[10px] text-amber-500 font-mono flex-1">
+                          That is under 3 hours of rest. Adjust it if the times were picked by mistake.
+                        </Text>
+                      </View>
+                    )}
+
+                    <View className="flex-row items-start gap-3 p-4 rounded-2xl bg-white/[0.02] border border-white/5">
+                      <BellOff size={14} color="#64748b" />
+                      <Text className="text-neutral-500 text-[10px] leading-relaxed flex-1">
+                        Hydration reminders and alerts pause for the whole window and pick up again at your wake-up time.
+                      </Text>
+                    </View>
+                  </Animated.View>
+                )}
+
+                {step === 5 && (
+                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
                     <Text className="text-2xl font-black text-white mb-1">Metabolic Dynamics</Text>
                     <Text className="text-[12px] text-neutral-400 mb-8">Lifestyle habits dramatically update cellular sweating thresholds.</Text>
                     <Text className="text-[10px] text-neutral-500 font-mono uppercase tracking-[2px] mb-4">Daily Activity Strain</Text>
@@ -881,7 +649,7 @@ const OnboardingScreen = ({ navigation }: any) => {
                   </Animated.View>
                 )}
 
-                {step === 5 && (
+                {step === 6 && (
                   <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
                     <Text className="text-2xl font-black text-white mb-1">Sensor Synaptic Connect</Text>
                     <Text className="text-[12px] text-neutral-400 mb-10">Connect the proprietary GetVari wearable.</Text>
@@ -962,6 +730,13 @@ const OnboardingScreen = ({ navigation }: any) => {
                   </Animated.View>
                 )}
               </ScrollView>
+
+              {!!errorMsg && (
+                <View className="flex-row items-center gap-2 mt-3">
+                  <CircleAlert size={12} color="#f87171" />
+                  <Text className="text-[10px] text-red-400 font-mono flex-1">{errorMsg}</Text>
+                </View>
+              )}
 
               <View className="flex-row gap-4 mt-auto pt-6 border-t border-white/5">
                 {step > 1 && (

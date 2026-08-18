@@ -1,6 +1,6 @@
 import React from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
-import { Cpu } from 'lucide-react-native';
+import { Cpu, Moon } from 'lucide-react-native';
 
 import GlassCard from '../GlassCard';
 import { ABSORBED_POOL_CAP_ML, STOMACH_CAPACITY_ML } from '../../hooks/useHydrationTelemetry';
@@ -13,6 +13,15 @@ interface RecoveryTelemetryPanelProps {
   sweatLossRate: number;
   totalMl: number;
   targetMl: number;
+  /**
+   * Daily goal divided by waking hours, not by 24 — a pace built on the full
+   * day would only be reachable by drinking in your sleep. Optional so the
+   * panel still renders for a profile captured before the question existed.
+   */
+  targetMlPerAwakeHour?: number;
+  awakeHoursPerDay?: number;
+  /** True inside the user's sleep window, when alerts are muted. */
+  isSleeping?: boolean;
   expanded: boolean;
   onToggle: () => void;
 }
@@ -74,6 +83,9 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
   sweatLossRate,
   totalMl,
   targetMl,
+  targetMlPerAwakeHour,
+  awakeHoursPerDay,
+  isSleeping = false,
   expanded,
   onToggle,
 }) => {
@@ -168,6 +180,24 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
             {remainingMl} ml
           </Text>
         </View>
+        {!!targetMlPerAwakeHour && (
+          <View className="flex-row items-center justify-between">
+            <Text className="text-[10px] text-neutral-400 font-mono">
+              Pace / Waking Hour{awakeHoursPerDay ? ` (${awakeHoursPerDay.toFixed(0)}h awake)` : ''}:
+            </Text>
+            <Text className="text-[10px] text-white font-mono font-black">
+              {targetMlPerAwakeHour} ml / h
+            </Text>
+          </View>
+        )}
+        {isSleeping && (
+          <View className="flex-row items-center gap-2 mt-1">
+            <Moon color="#818cf8" size={12} />
+            <Text className="text-[10px] text-indigo-300 font-mono flex-1">
+              Sleep window open — alerts paused, and these hours are left out of your averages.
+            </Text>
+          </View>
+        )}
       </View>
     </GlassCard>
   );

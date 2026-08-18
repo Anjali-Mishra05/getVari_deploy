@@ -14,7 +14,6 @@ import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-s
 
 import BrandLogo from '../components/BrandLogo';
 import GlassCard from '../components/GlassCard';
-import { supabase } from '../services/SupabaseClient';
 import { AuthService } from '../services/AuthService';
 import { AIInsight, HydrationLog, UserProfile } from '../types';
 import AquaSageChat from '../chatbot/AquaSageChat';
@@ -23,11 +22,14 @@ import NotificationHistory from '../services/NotificationHistory';
 import NotificationCenter from '../components/NotificationCenter';
 import QuickLogSheet from '../components/QuickLogSheet';
 import ProfileSheet from '../components/ProfileSheet';
+import ProfileEditSheet from '../components/ProfileEditSheet';
 import ChatBus from '../services/ChatBus';
 import HydrationService from '../services/HydrationService';
+import ProfileService from '../services/ProfileService';
 import useHydrationTelemetry from '../hooks/useHydrationTelemetry';
 import generateInsights from '../utils/hydrationInsights';
 import nextHydrationTip from '../utils/hydrationTips';
+import { normaliseSleepSchedule } from '../utils/sleepWindow';
 
 import RiskScoreCard from '../components/dashboard/RiskScoreCard';
 import VitalsRow from '../components/dashboard/VitalsRow';
@@ -46,6 +48,7 @@ const HomeScreen = ({ navigation }: any) => {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [quickLogOpen, setQuickLogOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [unseenNotifications, setUnseenNotifications] = useState(0);
   const [telemetryExpanded, setTelemetryExpanded] = useState(false);
 
@@ -172,20 +175,21 @@ const HomeScreen = ({ navigation }: any) => {
       console.log('[Supabase] Fetching data for user:', userId);
       if (!userId) return;
 
-      // Fetch Profile. `maybeSingle` rather than `single`: a user who has not
-      // finished onboarding has no row yet, and `single` reports that missing
-      // row as an error.
-      const { data: profileRow, error: profileError } = await supabase
-        .from('getvari_profiles')
-        .select('*')
-        .eq('id', userId)
-        .maybeSingle();
+      // A user who has not finished onboarding simply has no row yet, which
+      // the service reports as `null` rather than as an error.
+      const profile = await ProfileService.fetchProfile(userId);
+      if (profile) {
+        console.log('[Supabase] Profile data loaded:', profile);
+        setUserProfile(profile);
 
-      if (profileError) {
-        console.error('[Supabase] Error fetching profile:', profileError.message);
-      } else if (profileRow?.profile) {
-        console.log('[Supabase] Profile data loaded:', profileRow.profile);
-        setUserProfile(profileRow.profile);
+        // Reminders are scheduled by the OS from contexts that never see this
+        // row, so the sleep window is handed to the notification layer on
+        // every load. That also picks up a window edited on another device.
+        try {
+          await NotificationService.setSleepSchedule(normaliseSleepSchedule(profile));
+        } catch (sleepError) {
+          console.error('[Notifications] Failed to apply sleep window:', sleepError);
+        }
       }
 
       // Today's hydration logs — the widget reports a *daily* total, so
@@ -295,6 +299,22 @@ const HomeScreen = ({ navigation }: any) => {
   const closeQuickLog = useCallback(() => setQuickLogOpen(false), []);
   const closeNotifications = useCallback(() => setNotificationsOpen(false), []);
   const closeProfile = useCallback(() => setProfileOpen(false), []);
+
+  /** The account sheet steps aside so the editor gets the screen to itself. */
+  const openProfileEditor = useCallback(() => {
+    setProfileOpen(false);
+    setProfileEditOpen(true);
+  }, []);
+
+  /**
+   * A save returns the merged blob, so the dashboard can adopt it directly —
+   * the goal ring, the risk solve and the sleep-aware pacing all read from
+   * this object and would otherwise show stale answers until the next fetch.
+   */
+  const handleProfileSaved = useCallback((profile: UserProfile) => {
+    setUserProfile(profile);
+    setProfileEditOpen(false);
+  }, []);
   const dismissSuccess = useCallback(() => setLoggedAmountMl(null), []);
   const cancelConfirmation = useCallback(() => {
     setPendingAmountMl(null);
@@ -408,6 +428,9 @@ const HomeScreen = ({ navigation }: any) => {
             absorbedHydration={telemetry.absorbedHydration}
             absorptionRate={telemetry.absorptionRate}
             sweatLossRate={telemetry.sweatLossRate}
+            targetMlPerAwakeHour={telemetry.targetMlPerAwakeHour}
+            awakeHoursPerDay={telemetry.awakeHoursPerDay}
+            isSleeping={telemetry.isSleeping}
             totalMl={totalWaterConsumed}
             targetMl={targetMl}
             expanded={telemetryExpanded}
@@ -522,6 +545,17 @@ const HomeScreen = ({ navigation }: any) => {
           userProfile={userProfile}
           targetMl={targetMl}
           onLoggedOut={handleLoggedOut}
+          onEditProfile={openProfileEditor}
+        />
+
+        {/* Rendered beside the account sheet rather than inside it: two RN
+            modals stacked in the same tree fight over the native window, and
+            the editor needs the full height the account sheet does not use. */}
+        <ProfileEditSheet
+          visible={profileEditOpen}
+          userProfile={userProfile}
+          onClose={() => setProfileEditOpen(false)}
+          onSaved={handleProfileSaved}
         />
 
         {/* The chat writes through HydrationService itself and reports back

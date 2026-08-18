@@ -11,12 +11,13 @@ import {
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
-import { Activity, LogOut, Phone, Target, User, X } from 'lucide-react-native';
+import { Activity, LogOut, Moon, Pencil, Phone, Target, User, X } from 'lucide-react-native';
 
 import { AuthService, StoredSession } from '../services/AuthService';
 import NotificationService from '../services/NotificationService';
 import NotificationHistory from '../services/NotificationHistory';
 import HydrationPromptSession from '../services/HydrationPromptSession';
+import { describeSleepWindow, normaliseSleepSchedule } from '../utils/sleepWindow';
 
 interface ProfileSheetProps {
   visible: boolean;
@@ -27,6 +28,12 @@ interface ProfileSheetProps {
   targetMl: number;
   /** Called once the session is gone, so the app can leave the signed-in area. */
   onLoggedOut: () => void;
+  /**
+   * Opens the profile editor. The editor is rendered by the screen rather than
+   * nested inside this sheet, so the two never fight over the same native
+   * modal window — this only asks for the swap.
+   */
+  onEditProfile: () => void;
 }
 
 const ACCENT = '#00f2fe';
@@ -96,6 +103,7 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
   userProfile,
   targetMl,
   onLoggedOut,
+  onEditProfile,
 }) => {
   const { height: windowHeight } = useWindowDimensions();
   const [session, setSession] = useState<StoredSession | null>(null);
@@ -129,6 +137,8 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
       // an account that is no longer signed in.
       await NotificationService.cancelHydrationReminders();
       await NotificationService.cancelAllNotifications();
+      // The next account on this device has its own sleep window.
+      await NotificationService.clearSleepSchedule();
       await NotificationHistory.clear();
       await HydrationPromptSession.reset();
     } catch (error) {
@@ -156,6 +166,9 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
       ]
     );
   };
+
+  const sleepSchedule = normaliseSleepSchedule(userProfile);
+  const sleepWindowLabel = sleepSchedule ? describeSleepWindow(sleepSchedule) : 'Not set';
 
   const initial =
     (typeof userProfile?.fullName === 'string' && userProfile.fullName.charAt(0).toUpperCase()) ||
@@ -273,6 +286,38 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
                       .join(' · ')}
                   </Text>
                 )}
+
+                <TouchableOpacity
+                  onPress={onEditProfile}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit personal details"
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 8,
+                    marginTop: 16,
+                    paddingVertical: 10,
+                    paddingHorizontal: 18,
+                    borderRadius: 18,
+                    backgroundColor: 'rgba(0,242,254,0.08)',
+                    borderWidth: 1,
+                    borderColor: 'rgba(0,242,254,0.25)',
+                  }}
+                >
+                  <Pencil color={ACCENT} size={13} strokeWidth={2.5} />
+                  <Text
+                    style={{
+                      color: ACCENT,
+                      fontSize: 11,
+                      fontWeight: '900',
+                      letterSpacing: 1.2,
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    Edit details
+                  </Text>
+                </TouchableOpacity>
               </View>
 
               <Row
@@ -294,6 +339,11 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
                 icon={<User color="#94a3b8" size={17} />}
                 label="Fitness goal"
                 value={userProfile?.fitnessGoal || 'Not set'}
+              />
+              <Row
+                icon={<Moon color="#818cf8" size={17} />}
+                label="Sleep window (alerts paused)"
+                value={sleepWindowLabel}
               />
 
               {/* Log out */}

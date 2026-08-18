@@ -1,6 +1,10 @@
+import type { SleepSchedule } from './utils/sleepWindow';
+
 export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'active' | 'elite';
 export type FitnessGoal = 'optimize_health' | 'athletic_performance' | 'cognitive_focus' | 'weight_management';
 export type HabitRating = 'low' | 'moderate' | 'high';
+
+export type { SleepSchedule };
 
 export interface UserProfile {
   fullName?: string;
@@ -13,6 +17,12 @@ export interface UserProfile {
   waterHabit: HabitRating;
   targetDailyMl: number;
   medicalConditions?: string[];
+  /** City chosen for the climate model. Mirrored into `location` on save. */
+  selectedCity?: string;
+  /** Approximate nightly sleep window, captured during onboarding. */
+  sleepSchedule?: SleepSchedule;
+  /** Waking hours implied by `sleepSchedule` — the denominator for averages. */
+  awakeHoursPerDay?: number;
   location?: string;
   latitude?: number;
   longitude?: number;

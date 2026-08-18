@@ -23,6 +23,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
 import NotificationHistory from './NotificationHistory';
+import {
+  SleepSchedule,
+  isAsleepAt,
+  nextAwakeAt,
+  normaliseSleepSchedule,
+  describeSleepWindow,
+} from '../utils/sleepWindow';
 import type { NotificationKind } from '../types';
 
 /**
@@ -39,6 +46,12 @@ const REMINDER_CHANNEL_ID = 'hydration-reminders-v2';
 const LEGACY_CHANNEL_IDS = ['hydration-reminders'];
 const REMINDER_ID_PREFIX = 'hydration-reminder-';
 const PENDING_PROMPT_KEY = 'getvari_pending_hydration_prompt';
+/**
+ * The sleep window is cached on the device rather than read from the profile
+ * row, because scheduling runs from places that have no Supabase session in
+ * hand — a background handler, a cold start, the headless delivery task.
+ */
+const SLEEP_SCHEDULE_KEY = 'getvari_sleep_schedule';
 /** Cap on replayable background presses, so the queue cannot grow unbounded. */
 const PENDING_PROMPT_LIMIT = 10;
 
@@ -94,6 +107,81 @@ export const readReminderEventId = (notification?: Notification | null): string 
 class NotificationService {
   /** Serialises reminder (re)scheduling so overlapping calls can't interleave. */
   private schedulingQueue: Promise<void> = Promise.resolve();
+
+  /**
+   * Last known sleep window, cached so the hot path (deciding whether to show
+   * a notification) doesn't have to await storage on every call. `undefined`
+   * means "not read yet"; `null` means "read, and the user has none".
+   */
+  private sleepSchedule: SleepSchedule | null | undefined = undefined;
+
+  /* ------------------------------------------------------------------ *
+   * Sleep window
+   *
+   * Reminders are the app's most intrusive surface, so the window the user
+   * gave during onboarding is treated as a hard mute: nothing is queued
+   * inside it and nothing is displayed during it. The queue resumes at the
+   * wake-up time rather than being dropped.
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Store the user's sleep window and re-queue reminders around it. Called
+   * when onboarding finishes and whenever the profile is (re)loaded, so a
+   * schedule edited on another device reaches this one on the next open.
+   */
+  async setSleepSchedule(schedule: SleepSchedule | null | undefined): Promise<void> {
+    const normalised = schedule ? normaliseSleepSchedule(schedule) : null;
+    const changed = JSON.stringify(normalised) !== JSON.stringify(this.sleepSchedule ?? null);
+    this.sleepSchedule = normalised;
+
+    try {
+      if (normalised) {
+        await AsyncStorage.setItem(SLEEP_SCHEDULE_KEY, JSON.stringify(normalised));
+      } else {
+        await AsyncStorage.removeItem(SLEEP_SCHEDULE_KEY);
+      }
+    } catch (error) {
+      console.error('[Reminders] Failed to persist sleep window:', error);
+    }
+
+    if (!changed) return;
+    console.log(
+      '[Reminders] Sleep window set to',
+      normalised ? describeSleepWindow(normalised) : 'none'
+    );
+    // The queue in the OS was built against the previous window.
+    await this.scheduleHydrationReminders();
+  }
+
+  /** The stored sleep window, or null when the user never gave one. */
+  async getSleepSchedule(): Promise<SleepSchedule | null> {
+    if (this.sleepSchedule !== undefined) return this.sleepSchedule;
+
+    try {
+      const raw = await AsyncStorage.getItem(SLEEP_SCHEDULE_KEY);
+      this.sleepSchedule = raw ? normaliseSleepSchedule(JSON.parse(raw)) : null;
+    } catch (error) {
+      console.error('[Reminders] Failed to read sleep window:', error);
+      this.sleepSchedule = null;
+    }
+    return this.sleepSchedule;
+  }
+
+  /** Whether the app is currently in its quiet, "user is asleep" state. */
+  async isSleeping(at: number = Date.now()): Promise<boolean> {
+    const schedule = await this.getSleepSchedule();
+    return !!schedule && isAsleepAt(schedule, at);
+  }
+
+  /** Forgets the window — used on sign-out, alongside the rest of the state. */
+  async clearSleepSchedule(): Promise<void> {
+    this.sleepSchedule = null;
+    try {
+      await AsyncStorage.removeItem(SLEEP_SCHEDULE_KEY);
+    } catch (error) {
+      console.error('[Reminders] Failed to clear sleep window:', error);
+    }
+  }
 
   /**
    * Request permission for Android 13+ and iOS.
@@ -190,8 +278,17 @@ class NotificationService {
     title: string,
     body: string,
     channelId: string = REMINDER_CHANNEL_ID,
-    kind: NotificationKind = 'local'
+    kind: NotificationKind = 'local',
+    options: { ignoreSleepWindow?: boolean } = {}
   ) {
+    // The whole app goes quiet during the user's sleep window, push messages
+    // included — a nudge that wakes someone up costs more than it earns. Only
+    // a caller that explicitly opts out gets through.
+    if (!options.ignoreSleepWindow && (await this.isSleeping())) {
+      console.log('[Notifications] Suppressed during sleep window:', title);
+      return;
+    }
+
     // Ensure permission is granted
     const hasPermission = await this.requestPermission();
     if (!hasPermission) return;
@@ -240,6 +337,10 @@ class NotificationService {
    * entry (or when the app comes back to the foreground) effectively resets
    * the countdown — a reminder only ever fires when nothing has been logged
    * for one full interval.
+   *
+   * Slots that would land inside the user's sleep window are pushed to their
+   * wake-up time, so a night produces no reminders and the cadence picks up
+   * again in the morning.
    */
   async scheduleHydrationReminders(fromMs: number = Date.now()): Promise<void> {
     this.schedulingQueue = this.schedulingQueue.then(() => this.rescheduleReminders(fromMs));
@@ -261,8 +362,25 @@ class NotificationService {
       await this.syncDeliveredFromTray();
       await this.cancelHydrationReminders();
 
+      const schedule = await this.getSleepSchedule();
+
+      // Slots are walked with a cursor rather than computed from `fromMs`,
+      // because a slot landing inside the sleep window is *moved to the
+      // wake-up time*, not dropped. That matters more than it sounds: the
+      // queue only covers a couple of hours, so simply skipping the night
+      // would leave nothing queued at all by the time the user woke up, and
+      // reminders would stay dead until they next opened the app.
+      let cursor = fromMs;
+      let sleepShifted = false;
+
       for (let slot = 1; slot <= REMINDER_SLOTS; slot++) {
-        const timestamp = fromMs + slot * REMINDER_INTERVAL_MS;
+        cursor += REMINDER_INTERVAL_MS;
+        if (schedule) {
+          const awakeAt = nextAwakeAt(schedule, cursor);
+          if (awakeAt !== cursor) sleepShifted = true;
+          cursor = awakeAt;
+        }
+        const timestamp = cursor;
         if (timestamp <= Date.now()) continue;
 
         const trigger: TimestampTrigger = {
@@ -309,7 +427,10 @@ class NotificationService {
       }
 
       console.log(
-        `[Reminders] Queued ${REMINDER_SLOTS} reminders, ${REMINDER_INTERVAL_MS / 60000} min apart.`
+        `[Reminders] Queued ${REMINDER_SLOTS} reminders, ${REMINDER_INTERVAL_MS / 60000} min apart` +
+          (sleepShifted && schedule
+            ? `, resuming at ${schedule.wakeUp} (asleep ${describeSleepWindow(schedule)}).`
+            : '.')
       );
     } catch (error) {
       console.error('[Reminders] Failed to schedule:', error);
