@@ -46,7 +46,7 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
   });
 
   const fontSizes = {
-    sm: { get: 16, vari: 20, dot: 4, gap: 8 },
+    sm: { get: 16, vari: 20, dot: 5, gap: 8 },
     md: { get: 24, vari: 30, dot: 6, gap: 12 },
     lg: { get: 32, vari: 40, dot: 8, gap: 15 },
     xl: { get: 42, vari: 48, dot: 10, gap: 18 },
@@ -92,21 +92,35 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
       </View>
 
       {withText && (
-        <View className="flex-row items-center ml-3">
+        <View className="flex-row items-center ml-2">
+          {/* Status LED: a lit indicator, so it carries a soft bloom on both
+              platforms — iOS via shadow, Android via a wider translucent halo
+              behind it, since elevation alone renders no glow there. */}
           <View
             style={{
-              width: current.dot,
-              height: current.dot,
-              borderRadius: current.dot / 2,
-              backgroundColor: '#00f2fe',
+              width: current.dot * 2.6,
+              height: current.dot * 2.6,
+              borderRadius: current.dot * 1.3,
+              backgroundColor: 'rgba(0, 242, 254, 0.18)',
               marginRight: current.gap,
-              shadowColor: '#00f2fe',
-              shadowOffset: { width: 0, height: 0 },
-              shadowOpacity: 0.8,
-              shadowRadius: 6,
-              elevation: 6,
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
-          />
+          >
+            <View
+              style={{
+                width: current.dot,
+                height: current.dot,
+                borderRadius: current.dot / 2,
+                backgroundColor: '#00f2fe',
+                shadowColor: '#00f2fe',
+                shadowOffset: { width: 0, height: 0 },
+                shadowOpacity: 0.9,
+                shadowRadius: 6,
+                elevation: 6,
+              }}
+            />
+          </View>
           <Text
             style={{
               fontSize: current.get,

@@ -31,12 +31,28 @@ const StatTile: React.FC<{ label: string; value: string; caption: string; valueC
   caption,
   valueColor = '#ffffff',
 }) => (
-  <View className="flex-1 bg-white/[0.03] rounded-2xl p-2.5 border border-white/5 min-h-[70px] justify-between">
-    <Text className="text-[8px] uppercase tracking-wider text-neutral-400 font-mono">{label}</Text>
-    <Text className="text-[11px] font-black font-mono mt-1.5" style={{ color: valueColor }} numberOfLines={1}>
+  <View className="flex-1 bg-white/[0.03] rounded-2xl px-3 py-2.5 border border-white/5 min-h-[64px] justify-between">
+    {/* Every line here is single-line by contract. Four tiles across a phone
+        left ~58px of usable width, which broke "CONSUMED" into "CONSUME"/"D"
+        and clipped the captions to "Goal baseli…". */}
+    <Text
+      className="text-[9px] uppercase tracking-wide text-neutral-400 font-mono"
+      numberOfLines={1}
+      adjustsFontSizeToFit
+      minimumFontScale={0.85}
+    >
+      {label}
+    </Text>
+    <Text
+      className="text-[13px] font-black font-mono mt-1"
+      style={{ color: valueColor }}
+      numberOfLines={1}
+      adjustsFontSizeToFit
+      minimumFontScale={0.8}
+    >
       {value}
     </Text>
-    <Text className="text-[8px] text-neutral-500 mt-1" numberOfLines={1}>
+    <Text className="text-[9px] text-neutral-500 mt-0.5" numberOfLines={1}>
       {caption}
     </Text>
   </View>
@@ -80,7 +96,7 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
   ];
 
   return (
-    <GlassCard className="mb-4 bg-white/[0.01]" style={{ padding: 20 }}>
+    <GlassCard className="my-3 bg-white/[0.01]" style={{ padding: 20 }}>
       {/* Status header */}
       <View className="flex-row items-center justify-between mb-1">
         <Text className="text-[10px] uppercase tracking-[0.2em] text-cyan-400 font-mono font-black">
@@ -103,7 +119,9 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
 
       {/* Radial score */}
       <View className="items-center justify-center my-2">
-        <View className="w-56 h-56 items-center justify-center">
+        {/* 192px rather than 224: the ring was crowding the status header above
+            it and pushing the day's totals off the first screenful. */}
+        <View className="w-48 h-48 items-center justify-center">
           <Svg width="100%" height="100%" viewBox="0 0 160 160">
             <Circle cx="80" cy="80" r="76" stroke="rgba(255,255,255,0.04)" strokeWidth="9" fill="none" />
             <AnimatedCircle
@@ -130,8 +148,12 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
         </View>
       </View>
 
-      {/* Meaning + prescription */}
-      <View className="bg-black/40 rounded-3xl p-4 border border-white/5">
+      {/* Meaning + prescription.
+
+          Radius is concentric with the card around it: the outer 36px corner
+          less the 20px of padding leaves 16px, which is what stops the inner
+          card from reading as misaligned against the parent. */}
+      <View className="bg-black/40 rounded-2xl px-4 py-4 border border-white/5">
         <Text className="text-[11.5px] text-neutral-300 leading-[18px]">{risk.meaning}</Text>
 
         <View className="border-t border-white/5 mt-3 pt-2.5">
@@ -164,27 +186,36 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
         )}
       </View>
 
-      {/* Day totals */}
-      <View className="flex-row gap-2 mt-3">
-        <StatTile label="Consumed" value={`${totalMl} ml`} caption={`(${targetPercent}%)`} />
-        <StatTile label="Daily Target" value={`${targetMl} ml`} caption="Goal baseline" />
-        <StatTile
-          label="Remaining"
-          value={`${remainingMl} ml`}
-          caption={goalMet ? 'Goal met' : 'Deficit left'}
-          valueColor={goalMet ? '#10b981' : '#ffffff'}
-        />
-        <StatTile
-          label="Last Intake"
-          value={
-            lastIntakeMl === null
-              ? '--'
-              : hoursSinceDrink < 0.1
-              ? 'Just now'
-              : `${Math.floor(hoursSinceDrink * 60)}m ago`
-          }
-          caption={lastIntakeMl === null ? 'No sync' : `${lastIntakeMl}ml logged`}
-        />
+      {/* Day totals.
+
+          Two per row rather than four: on a 360dp phone four columns left each
+          tile too narrow for its own label, so every fix short of widening the
+          column was cosmetic. Two rows give each tile ~2.5x the width and the
+          text fits at a readable size. */}
+      <View className="mt-3 gap-2">
+        <View className="flex-row gap-2">
+          <StatTile label="Consumed" value={`${totalMl} ml`} caption={`${targetPercent}% of goal`} />
+          <StatTile label="Daily Target" value={`${targetMl} ml`} caption="Goal baseline" />
+        </View>
+        <View className="flex-row gap-2">
+          <StatTile
+            label="Remaining"
+            value={`${remainingMl} ml`}
+            caption={goalMet ? 'Goal met' : 'Deficit left'}
+            valueColor={goalMet ? '#10b981' : '#ffffff'}
+          />
+          <StatTile
+            label="Last Intake"
+            value={
+              lastIntakeMl === null
+                ? '--'
+                : hoursSinceDrink < 0.1
+                ? 'Just now'
+                : `${Math.floor(hoursSinceDrink * 60)}m ago`
+            }
+            caption={lastIntakeMl === null ? 'No sync' : `${lastIntakeMl}ml logged`}
+          />
+        </View>
       </View>
 
       {/* Load breakdown */}

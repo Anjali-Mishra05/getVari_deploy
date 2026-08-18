@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -18,9 +18,13 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { MessageCircle, X, Send, Trash2, Droplets, Pencil } from 'lucide-react-native';
 import Animated, {
   FadeIn,
-  FadeOut,
+  LinearTransition,
   SlideInDown,
   SlideOutDown,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
 } from 'react-native-reanimated';
 import { backendCandidates } from '../config/backend';
 import ChatBus from '../services/ChatBus';
@@ -202,7 +206,14 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   /** Label of the quick reply currently being written, so it can show a spinner. */
   const [pendingReply, setPendingReply] = useState<string | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
-  const [teaserText, setTeaserText] = useState('I can help you! 💧');
+  /**
+   * The teaser cycles rather than sitting there permanently: one line fades in,
+   * holds long enough to read, fades out, and after a quiet beat the next one
+   * arrives. The gap matters as much as the message — it is what keeps the
+   * bubble from parking over the dashboard's lower metric cards.
+   */
+  const [teaserIndex, setTeaserIndex] = useState(0);
+  const [teaserShown, setTeaserShown] = useState(true);
   const [serverUrl, setServerUrl] = useState<string | null>(null);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
@@ -256,24 +267,51 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
     Math.min(windowHeight * 0.82, windowHeight - keyboardHeight - SHEET_TOP_GAP)
   );
 
+  /**
+   * Kept to roughly one length. The bubble holds its position while the text
+   * inside it changes, so lines of wildly different widths would make its
+   * edges twitch on every swap.
+   */
   const teasers = [
-    "I can help you! 💧",
-    "Confused about hydration?",
-    "Want to know some facts?",
-    "Ask me about getVāri!",
-    "Need hydration advice?",
+    'Can I help you? 💧',
+    'Feeling thirsty?',
+    'Ask me anything!',
+    'Water check-in?',
+    'Hydration tips?',
+    'Need a tip? 💧',
   ];
 
+  /** How long a line is readable before it hands over to the next. */
+  const TEASER_HOLD_MS = 3800;
+  /** The two halves of the cross-fade. */
+  const TEASER_FADE_OUT_MS = 420;
+  const TEASER_FADE_IN_MS = 520;
+
+  const teaserOpacity = useSharedValue(1);
+  const teaserTextStyle = useAnimatedStyle(() => ({ opacity: teaserOpacity.value }));
+
+  /** Swaps the copy while it is invisible, then brings it back up. */
+  const showNextTeaser = useCallback(() => {
+    setTeaserIndex(prev => (prev + 1) % teasers.length);
+    teaserOpacity.value = withTiming(1, { duration: TEASER_FADE_IN_MS });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teaserOpacity, teasers.length]);
+
   useEffect(() => {
+    // Nothing to say while the sheet is open — the chat is right there.
+    if (isOpen || !teaserShown) return;
+
     const interval = setInterval(() => {
-      setTeaserText(prev => {
-        const currentIndex = teasers.indexOf(prev);
-        const nextIndex = (currentIndex + 1) % teasers.length;
-        return teasers[nextIndex];
+      // Only the text dissolves. The bubble itself never leaves, so the next
+      // line arrives in the same spot rather than the whole thing fading away
+      // and reappearing.
+      teaserOpacity.value = withTiming(0, { duration: TEASER_FADE_OUT_MS }, finished => {
+        if (finished) runOnJS(showNextTeaser)();
       });
-    }, 60000);
+    }, TEASER_HOLD_MS);
+
     return () => clearInterval(interval);
-  }, []);
+  }, [isOpen, teaserShown, showNextTeaser, teaserOpacity]);
 
   // Server Discovery Logic
   const discoverServer = async () => {
@@ -313,7 +351,15 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   /** Guards against two writes overlapping (double tap, send + button). */
   const isLoggingRef = useRef(false);
 
-  const toggleChat = () => setIsOpen(!isOpen);
+  const toggleChat = () => {
+    // Closing the sheet resumes on the next line, at full opacity — the cycle
+    // may have been interrupted part-way through a fade.
+    if (isOpen) {
+      setTeaserIndex(prev => (prev + 1) % teasers.length);
+      teaserOpacity.value = 1;
+    }
+    setIsOpen(!isOpen);
+  };
 
   const clearChat = () => {
     setLogFlow('idle');
@@ -623,14 +669,22 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   return (
     <>
       {/* Floating Action Button & Teaser Bubble */}
-      <View style={{ position: 'absolute', bottom: 120, right: 24, zIndex: 1000, alignItems: 'flex-end' }}>
-        {!isOpen && (
+      {/* 124px clears the floating navbar (32px inset + 80px tall) by 12px, so
+          the button sits beside the dashboard rather than on top of it. */}
+      <View style={{ position: 'absolute', bottom: 124, right: 20, zIndex: 1000, alignItems: 'flex-end' }}>
+        {!isOpen && teaserShown && (
           <Animated.View
-            entering={FadeIn}
-            exiting={FadeOut}
+            // No `exiting` and no key: the bubble is mounted once and holds its
+            // place. `layout` absorbs the small width differences between
+            // lines so its edges ease rather than snap.
+            entering={FadeIn.duration(500)}
+            layout={LinearTransition.duration(260)}
+            onTouchEnd={() => setTeaserShown(false)}
             style={{
-              marginBottom: 16,
+              marginBottom: 14,
               marginRight: 4,
+              minWidth: 172,
+              alignItems: 'center',
               backgroundColor: '#002855',
               paddingHorizontal: 18,
               paddingVertical: 12,
@@ -644,15 +698,21 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
               elevation: 10,
             }}
           >
-            <Text style={{
-              color: '#ffffff',
-              fontSize: 13,
-              fontWeight: '900',
-              fontFamily: Platform.OS === 'android' ? 'monospace' : 'Menlo',
-              textAlign: 'center'
-            }}>
-              {teaserText}
-            </Text>
+            <Animated.Text
+              numberOfLines={1}
+              style={[
+                {
+                  color: '#ffffff',
+                  fontSize: 13,
+                  fontWeight: '900',
+                  fontFamily: Platform.OS === 'android' ? 'monospace' : 'Menlo',
+                  textAlign: 'center',
+                },
+                teaserTextStyle,
+              ]}
+            >
+              {teasers[teaserIndex]}
+            </Animated.Text>
             {/* Bubble arrow */}
             <View
               style={{
@@ -675,23 +735,23 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
           onPress={toggleChat}
           activeOpacity={0.9}
           style={{
-            width: 72,
-            height: 72,
-            borderRadius: 36,
+            width: 54,
+            height: 54,
+            borderRadius: 27,
             backgroundColor: '#00f2fe',
             alignItems: 'center',
             justifyContent: 'center',
             shadowColor: '#00f2fe',
-            shadowOffset: { width: 0, height: 10 },
-            shadowOpacity: 0.5,
-            shadowRadius: 15,
-            elevation: 15,
+            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.45,
+            shadowRadius: 12,
+            elevation: 12,
           }}
         >
           {isOpen ? (
-            <X color="#020617" size={32} strokeWidth={3} />
+            <X color="#020617" size={25} strokeWidth={3} />
           ) : (
-            <MessageCircle color="#020617" size={36} fill="#020617" fillOpacity={0.1} strokeWidth={2.5} />
+            <MessageCircle color="#020617" size={27} fill="#020617" fillOpacity={0.1} strokeWidth={2.5} />
           )}
         </TouchableOpacity>
       </View>

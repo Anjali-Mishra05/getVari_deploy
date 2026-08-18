@@ -218,7 +218,7 @@ export class HydrationRiskEngine {
     if (finalRisk <= 25) {
       status = 'Hydrated';
       meaning = 'Body signals appear stable. Hydration levels are likely sufficient.';
-      suggestedAction = 'Maintain current healthy beverage routing habits.';
+      suggestedAction = 'Maintain current healthy beverage routine habits.';
     } else if (finalRisk <= 50) {
       status = 'Mild Risk';
       meaning = 'Early signs of dehydration risk detected based on activity, heart rate, environmental conditions, or prolonged hydration gap.';

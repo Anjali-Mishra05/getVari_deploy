@@ -357,17 +357,35 @@ const HomeScreen = ({ navigation }: any) => {
       </View>
 
       <SafeAreaView className="flex-1" edges={['top', 'left', 'right']}>
-        <ScrollView className="flex-1 px-5 pt-4" showsVerticalScrollIndicator={false}>
+        <ScrollView
+          className="flex-1 px-4 pt-4"
+          showsVerticalScrollIndicator={false}
+          // The navbar floats 32px off the bottom and stands 80px tall, and the
+          // chat FAB sits above that again — so content has to clear ~184px
+          // before the last card is fully readable. Padding rather than a
+          // spacer view, so the scroll indicator and overscroll agree with it.
+          contentContainerStyle={{ paddingBottom: 200 }}
+        >
 
           {/* Header */}
-          <View className="flex-row justify-between items-center mb-6">
-            <View>
+          <View className="flex-row justify-between items-center mb-3 gap-3">
+            {/* The strapline is the widest thing in this row. Left unbounded it
+                sized the column past the screen and pushed the action buttons
+                off the right edge, clipping the "+". It now shrinks with the
+                row, and the buttons keep their intrinsic width. */}
+            <View className="flex-1">
               <BrandLogo size={32} fillProgress={1} withText={true} textSize="sm" />
-              <Text className="text-[9px] uppercase tracking-[0.3em] text-cyan-400 font-mono font-black mt-2">
+              <Text
+                className="text-[8px] uppercase tracking-[0.18em] text-cyan-400 font-mono font-black mt-2"
+                numberOfLines={1}
+              >
                 AI-Powered Hydration Intelligence
               </Text>
             </View>
-            <View className="flex-row gap-3">
+            <View className="flex-row gap-3 shrink-0">
+              {/* Both header actions share a size, radius and border weight;
+                  only the fill separates the primary action from the secondary
+                  one. */}
               <TouchableOpacity
                 className="w-11 h-11 rounded-2xl bg-white/[0.03] border border-white/10 items-center justify-center"
                 onPress={() => setNotificationsOpen(true)}
@@ -388,12 +406,12 @@ const HomeScreen = ({ navigation }: any) => {
                 )}
               </TouchableOpacity>
               <TouchableOpacity
-                className="w-11 h-11 rounded-2xl bg-[#00f2fe] items-center justify-center shadow-xl shadow-cyan-500/30"
+                className="w-11 h-11 rounded-2xl bg-[#00f2fe] border border-[#00f2fe] items-center justify-center shadow-lg shadow-cyan-500/25"
                 onPress={() => setQuickLogOpen(true)}
                 accessibilityRole="button"
                 accessibilityLabel="Log water"
               >
-                <Plus color="#020617" size={24} strokeWidth={3} />
+                <Plus color="#020617" size={20} strokeWidth={3} />
               </TouchableOpacity>
             </View>
           </View>
@@ -466,7 +484,6 @@ const HomeScreen = ({ navigation }: any) => {
             </View>
           </GlassCard>
 
-          <View className="h-28" />
         </ScrollView>
 
         {/* Persistent Navigation Bar */}
