@@ -66,7 +66,7 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
         aria-hidden
       />
       <aside
-        className="fixed top-0 right-0 h-[100dvh] w-[50vw] max-w-[820px] bg-white border-l border-slate-200 p-6 overflow-y-auto space-y-6 shadow-2xl flex flex-col justify-between animate-slideIn scroll-area"
+        className="fixed top-0 right-0 h-[100dvh] w-full sm:w-[85vw] md:w-[70vw] lg:w-[50vw] max-w-[820px] bg-white border-l border-slate-200 p-4 sm:p-6 overflow-y-auto space-y-6 shadow-2xl flex flex-col justify-between animate-slideIn scroll-area"
         role="dialog"
         aria-modal="true"
       >
@@ -169,7 +169,7 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
 
           <div className="bg-slate-50 p-5 rounded-3xl border border-slate-100 shadow-sm space-y-4">
             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block border-b border-slate-200 pb-2">Active Sensor Feeds</span>
-            <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="grid grid-cols-2 gap-2 text-center">
               <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm">
                 <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Heart rate</span>
                 <span className="text-xl font-black text-slate-900 mt-1 block">{user.heartRate} BPM</span>
@@ -177,10 +177,6 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
               <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm">
                 <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Exertion</span>
                 <span className="text-xl font-black text-slate-900 mt-1 block">{user.activityLoad}%</span>
-              </div>
-              <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm">
-                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Sweat GSR</span>
-                <span className="text-xl font-black text-slate-900 mt-1 block">{user.sweatGSR} µS</span>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2 text-center">
@@ -298,7 +294,7 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
 
           <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 shadow-sm space-y-5">
             <span className="text-xs font-black uppercase tracking-widest text-slate-400 block border-b border-slate-200 pb-3">Active Sensor Feeds</span>
-            <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="grid grid-cols-2 gap-3 text-center">
               <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
                 <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Heart rate</span>
                 <span className="text-base font-black text-slate-900 mt-1 block">{user.heartRate} BPM</span>
@@ -306,10 +302,6 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
               <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
                 <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Exertion</span>
                 <span className="text-base font-black text-slate-900 mt-1 block">{user.activityLoad}%</span>
-              </div>
-              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-                <span className="text-[10px] text-slate-400 font-black uppercase block tracking-widest">Sweat GSR</span>
-                <span className="text-base font-black text-slate-900 mt-1 block">{user.sweatGSR} µS</span>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 text-center">

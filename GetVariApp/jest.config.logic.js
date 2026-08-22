@@ -16,5 +16,8 @@ module.exports = {
     '<rootDir>/__tests__/notificationHistory.test.ts',
     '<rootDir>/__tests__/sleepWindow.test.ts',
     '<rootDir>/__tests__/profileEditing.test.ts',
+    '<rootDir>/__tests__/algoCompliance.test.ts',
+    '<rootDir>/__tests__/pbwrAlgorithm.test.ts',
+    '<rootDir>/__tests__/pbwrMock.test.ts',
   ],
 };

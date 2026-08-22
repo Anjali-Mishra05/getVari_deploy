@@ -1,8 +1,12 @@
 import type { SleepSchedule } from './utils/sleepWindow';
 
+export type WorkEnvironment = 'indoor' | 'ac_office' | 'hybrid' | 'outdoor' | 'heavy_outdoor';
+
 export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'active' | 'elite';
 export type FitnessGoal = 'optimize_health' | 'athletic_performance' | 'cognitive_focus' | 'weight_management';
 export type HabitRating = 'low' | 'moderate' | 'high';
+
+export type MockTelemetryProfile = 'sedentary' | 'active' | 'heat_stress' | 'balanced' | 'critical_risk';
 
 export type { SleepSchedule };
 
@@ -14,6 +18,8 @@ export interface UserProfile {
   weightKg: number;
   activityLevel: ActivityLevel;
   fitnessGoal: FitnessGoal;
+  workEnvironment: WorkEnvironment;
+  physicianLimitMl?: number;
   waterHabit: HabitRating;
   targetDailyMl: number;
   medicalConditions?: string[];
@@ -41,6 +47,7 @@ export interface WearableDevice {
 
 export interface SensorData {
   heartRate: number; // bpm
+  steps: number; // cumulative or interval steps
   activityLoad: number; // 0-100 score of active movement
   temperature: number; // °C ambient or skin, let's represent both
   humidity: number; // % relative humidity

@@ -1,5 +1,7 @@
 import { supabase } from '../../services/SupabaseClient';
 import { User, RiskStatus, Workload } from '../types';
+import MockTelemetryService from '../../services/MockTelemetryService';
+import { HydrationRiskEngine } from '../../utils/hydrationRiskEngine';
 
 export class SupabaseAdminService {
   /**
@@ -14,7 +16,7 @@ export class SupabaseAdminService {
 
       if (profileError) throw profileError;
 
-      // 2. Fetch all logs for today
+      // 2. Fetch all logs for today (Since Midnight Local Time)
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
 
@@ -31,6 +33,32 @@ export class SupabaseAdminService {
         const userLogs = (logs || []).filter(l => l.user_id === p.id);
         const waterIntakeMl = userLogs.reduce((sum, l) => sum + (l.amount_ml || 0), 0);
 
+        // 1. Get Mock Primary Telemetry
+        const mockTelemetry = MockTelemetryService.getMockPrimaryTelemetry(p.id);
+
+        // 2. Calculate Time Since Last Drink (REAL)
+        let hoursSinceDrink = 2.0; // Default assumption if no logs
+        if (userLogs.length > 0) {
+          const newest = userLogs.reduce((latest, log) =>
+            new Date(log.timestamp) > new Date(latest.timestamp) ? log : latest
+          );
+          hoursSinceDrink = (Date.now() - new Date(newest.timestamp).getTime()) / 3_600_000;
+          hoursSinceDrink = Math.max(0, Math.min(8, hoursSinceDrink));
+        }
+
+        // 3. Calculate Risk Score via Engine (Mock Primary + Real Secondary)
+        // We use a simplified version of activeAbsorbedHydration for the admin panel overview
+        // Higher intake today increases the active pool, lowering risk.
+        const activeAbsorbed = Math.min(1000, 200 + waterIntakeMl);
+
+        const engineResult = HydrationRiskEngine.solveRisk({
+          heartRate: mockTelemetry.heartRate,
+          activityLoad: mockTelemetry.activityLoad,
+          temperature: mockTelemetry.temperature,
+          humidity: mockTelemetry.humidity,
+          timeSinceWaterIntake: hoursSinceDrink
+        }, profile);
+
         const waterHistory = userLogs.map(l => ({
           time: new Date(l.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           amount: l.amount_ml
@@ -40,15 +68,45 @@ export class SupabaseAdminService {
         let workload: Workload = 'Office';
         if (profile.activityLevel === 'active' || profile.activityLevel === 'elite') workload = 'Gym';
         if (profile.activityLevel === 'moderate') workload = 'Commuter';
-        // Note: Field is also a valid workload, but we don't have a direct mapping from onboarding yet.
 
-        // Determine Status based on intake vs target
         const target = profile.targetDailyMl || 2500;
-        const percent = (waterIntakeMl / target) * 100;
-        let status: RiskStatus = 'Critical';
-        if (percent >= 100) status = 'Hydrated';
-        else if (percent >= 75) status = 'Mild Risk';
-        else if (percent >= 50) status = 'High Risk';
+
+        // Use the Engine's status for the dashboard
+        const status: RiskStatus = engineResult.status;
+
+        // 4. Activity Tracking Fix: Use newest of profile update or latest log
+        const profileSync = p.updated_at ? new Date(p.updated_at).getTime() : 0;
+        const lastLogAt = userLogs.length > 0
+          ? new Date(userLogs.reduce((latest, l) => l.timestamp > latest.timestamp ? l : latest).timestamp).getTime()
+          : 0;
+        const lastActiveTime = Math.max(profileSync, lastLogAt);
+        const lastSyncedMinutes = lastActiveTime > 0
+          ? Math.floor((Date.now() - lastActiveTime) / 60000)
+          : 9999;
+
+        // 5. Generate Deterministic Risk History (T-6 to T-0)
+        const riskHistory: number[] = [];
+        const nowMs = Date.now();
+        for (let i = 6; i >= 0; i--) {
+          const pointTime = nowMs - i * 3600000;
+          const logsBeforePoint = userLogs.filter(l => new Date(l.timestamp).getTime() <= pointTime);
+
+          let hoursSince = 2.0 + i; // Baseline + hours ago if no logs
+          if (logsBeforePoint.length > 0) {
+            const newest = logsBeforePoint.reduce((latest, log) =>
+              new Date(log.timestamp) > new Date(latest.timestamp) ? log : latest
+            );
+            hoursSince = (pointTime - new Date(newest.timestamp).getTime()) / 3_600_000;
+          }
+
+          // Simplified history: use same mock telemetry but different timeSince
+          const historyRisk = HydrationRiskEngine.solveRisk({
+            ...mockTelemetry,
+            timeSinceWaterIntake: Math.max(0, Math.min(8, hoursSince))
+          }, activeAbsorbed, profile);
+
+          riskHistory.push(historyRisk.score);
+        }
 
         return {
           id: p.id,
@@ -58,21 +116,20 @@ export class SupabaseAdminService {
           gender: profile.gender || 'Unknown',
           weightKg: profile.weightKg || 0,
           workload,
-          heartRate: 0, // Not persisted
-          activityLoad: 0, // Not persisted
-          temperature: 0, // Not persisted
-          humidity: 0, // Not persisted
-          sweatGSR: 0, // Not persisted
-          batteryLevel: 0, // Not persisted
-          rssi: 0, // Not persisted
+          heartRate: mockTelemetry.heartRate,
+          activityLoad: mockTelemetry.activityLoad,
+          temperature: mockTelemetry.temperature,
+          humidity: mockTelemetry.humidity,
+          batteryLevel: mockTelemetry.batteryLevel,
+          rssi: mockTelemetry.rssi,
           firmwareVersion: 'v1.0.0',
-          lastSynced: p.updated_at ? new Date(p.updated_at).toLocaleDateString() : 'Never',
-          lastSyncedMinutes: p.updated_at ? Math.floor((Date.now() - new Date(p.updated_at).getTime()) / 60000) : 9999,
-          riskScore: 0, // Not persisted
+          lastSynced: lastActiveTime > 0 ? new Date(lastActiveTime).toLocaleDateString() : 'Never',
+          lastSyncedMinutes,
+          riskScore: engineResult.score,
           status,
           waterIntakeMl,
           targetDailyMl: target,
-          riskHistory: [],
+          riskHistory,
           waterHistory,
           phone: p.phone_number || undefined
         };
@@ -80,6 +137,34 @@ export class SupabaseAdminService {
     } catch (error) {
       console.error('[SupabaseAdminService] Error fetching users:', error);
       return [];
+    }
+  }
+
+  /**
+   * Fetches fleet-wide stats for today, including users who may not have profiles yet.
+   */
+  static async fetchFleetStats(): Promise<{ totalWaterMl: number; totalUsers: number }> {
+    try {
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+
+      const [logsResponse, profilesResponse] = await Promise.all([
+        supabase
+          .from('getvari_hydration_logs')
+          .select('amount_ml')
+          .gte('timestamp', startOfToday.toISOString()),
+        supabase
+          .from('getvari_profiles')
+          .select('id', { count: 'exact', head: true })
+      ]);
+
+      const totalWaterMl = (logsResponse.data || []).reduce((sum, l) => sum + (l.amount_ml || 0), 0);
+      const totalUsers = profilesResponse.count || 0;
+
+      return { totalWaterMl, totalUsers };
+    } catch (error) {
+      console.error('[SupabaseAdminService] Error fetching fleet stats:', error);
+      return { totalWaterMl: 0, totalUsers: 0 };
     }
   }
 

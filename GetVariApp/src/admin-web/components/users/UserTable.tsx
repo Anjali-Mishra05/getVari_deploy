@@ -11,9 +11,9 @@ interface UserTableProps {
 
 const UserTable: React.FC<UserTableProps> = ({ users, onUserClick }) => {
   return (
-    <GlassCard className="p-0 overflow-hidden border-slate-200 shadow-md rounded-xl">
-      <div className="overflow-hidden">
-        <table className="w-full table-fixed border-collapse text-left">
+    <GlassCard className="p-0 border-slate-200 shadow-md rounded-xl w-full">
+      <div className="overflow-x-auto w-full scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+        <table className="w-full min-w-[1000px] lg:min-w-full table-fixed border-collapse text-left">
           <colgroup>
             <col className="w-[24%]" />
             <col className="w-[14%]" />
@@ -51,22 +51,25 @@ const UserTable: React.FC<UserTableProps> = ({ users, onUserClick }) => {
                     </div>
                   </td>
                   <td className="px-6 py-5 align-middle">
-                    <Badge
-                      variant={
-                        u.status === 'Critical' ? 'red' :
-                        u.status === 'High Risk' ? 'amber' :
-                        u.status === 'Mild Risk' ? 'cyan' : 'emerald'
-                      }
-                      dot
-                      className="px-2.5 py-1 text-[11px]"
-                    >
-                      {u.status}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant={
+                          u.status === 'Critical' ? 'red' :
+                          u.status === 'High Risk' ? 'amber' :
+                          u.status === 'Mild Risk' ? 'cyan' : 'emerald'
+                        }
+                        dot
+                        className="px-2.5 py-1 text-[11px]"
+                      >
+                        {u.status}
+                      </Badge>
+                      <span className="text-[10px] font-bold text-slate-500">{u.riskScore}</span>
+                    </div>
                   </td>
                   <td className="px-6 py-5 align-middle">
                     <div className="flex flex-col gap-1.5">
                       <span className="text-sm font-bold text-slate-800">{u.heartRate || '--'} bpm</span>
-                      <span className="text-xs font-medium text-slate-500">Exertion: {u.activityLoad || 0}% | GSR: {u.sweatGSR || 0}µS</span>
+                      <span className="text-xs font-medium text-slate-500">Exertion: {u.activityLoad || 0}%</span>
                     </div>
                   </td>
                   <td className="px-6 py-5 align-middle">

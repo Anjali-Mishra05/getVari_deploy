@@ -11,9 +11,9 @@ interface DeviceTableProps {
 
 const DeviceTable: React.FC<DeviceTableProps> = ({ users, onUpdate }) => {
   return (
-    <GlassCard className="!p-0 overflow-hidden border-slate-200 shadow-md rounded-xl">
-      <div className="overflow-hidden">
-        <table className="w-full table-fixed border-collapse text-left">
+    <GlassCard className="!p-0 border-slate-200 shadow-md rounded-xl w-full">
+      <div className="overflow-x-auto w-full scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+        <table className="w-full min-w-[900px] lg:min-w-full table-fixed border-collapse text-left">
           <colgroup>
             <col className="w-[22%]" />
             <col className="w-[14%]" />

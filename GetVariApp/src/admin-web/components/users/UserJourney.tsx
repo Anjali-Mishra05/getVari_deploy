@@ -91,7 +91,7 @@ const UserJourney: React.FC<Props> = ({ user }) => {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [query, setQuery] = useState('');
   const [actorFilter, setActorFilter] = useState<'All' | 'User' | 'AI' | 'System' | 'Admin'>('All');
-  const [range, setRange] = useState<'7' | '30' | 'all' | '1'>('all');
+  const [range, setRange] = useState<'7' | '30' | 'all' | '1'>('1');
   const [customDate, setCustomDate] = useState<string>('');
   const [openEventId, setOpenEventId] = useState<string | null>(null);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
@@ -180,9 +180,22 @@ const UserJourney: React.FC<Props> = ({ user }) => {
   const chartData = useMemo(() => {
     const dailyData: Record<string, any> = {};
     filtered.forEach(e => {
-      const date = new Date(e.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      // Group by Hour for Today, otherwise by Date
+      const date = range === '1'
+        ? new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : new Date(e.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
       if (!dailyData[date]) {
-        dailyData[date] = { date, consumed: 0, recommended: user.targetDailyMl, risk: 0, riskCount: 0, aiRecs: 0, aiFollowed: 0 };
+        dailyData[date] = {
+          date,
+          timestamp: new Date(e.timestamp).getTime(),
+          consumed: 0,
+          recommended: user.targetDailyMl,
+          risk: 0,
+          riskCount: 0,
+          aiRecs: 0,
+          aiFollowed: 0
+        };
       }
       if (e.eventType === 'water_intake_added') dailyData[date].consumed += (e.metadata?.amount || 0);
       if (e.eventType === 'telemetry_received' && e.metadata?.risk !== undefined) {
@@ -195,17 +208,25 @@ const UserJourney: React.FC<Props> = ({ user }) => {
       }
     });
 
-    const timeline = Object.values(dailyData).map(d => ({
-      ...d,
-      risk: d.riskCount > 0 ? Math.round(d.risk / d.riskCount) : 0
-    })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const timeline = Object.values(dailyData)
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map(d => ({
+        ...d,
+        risk: d.riskCount > 0 ? Math.round(d.risk / d.riskCount) : 0
+      }))
+      // Filter out points with 0 risk and no intake to avoid "dropping to zero" visual artifacts
+      .filter(d => d.risk > 0 || d.consumed > 0);
 
     const scatter = filtered
       .filter(e => e.eventType === 'water_intake_added' && e.metadata?.riskSnapshot !== undefined)
-      .map(e => ({ consumed: e.metadata?.amount, risk: e.metadata?.riskSnapshot, name: e.title }));
+      .map(e => ({
+        consumed: e.metadata?.cumulativeAmount || e.metadata?.amount,
+        risk: e.metadata?.riskSnapshot,
+        name: e.title
+      }));
 
     return { timeline, scatter };
-  }, [filtered, user]);
+  }, [filtered, user, range]);
 
   const accountCreated = events.find(e => e.eventType === 'account_created')?.timestamp;
   const lastActive = events.length ? events[0].timestamp : null;
@@ -238,12 +259,12 @@ const UserJourney: React.FC<Props> = ({ user }) => {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 w-full">
       {/* Profile & KPI Summary - Tightened Layout */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-        <div className="flex flex-col lg:flex-row items-center justify-between pb-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm w-full">
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 pb-4">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-base shadow-lg shadow-blue-100">
+            <div className="w-11 h-11 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-base shadow-lg shadow-blue-100 shrink-0">
               {user.name.split(' ').map(s => s[0]).slice(0, 2).join('')}
             </div>
             <div>
@@ -252,80 +273,81 @@ const UserJourney: React.FC<Props> = ({ user }) => {
             </div>
           </div>
 
-          <div className="flex gap-6 text-right">
+          <div className="flex flex-wrap gap-4 sm:gap-8 lg:text-right">
             <div>
-              <div className="text-xs uppercase font-black tracking-widest text-slate-400 mb-1">Account Created</div>
-              <div className="text-base font-black text-slate-800">{accountCreated ? new Date(accountCreated).toLocaleDateString() : '—'}</div>
+              <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Account Created</div>
+              <div className="text-sm sm:text-base font-black text-slate-800">{accountCreated ? new Date(accountCreated).toLocaleDateString() : '—'}</div>
             </div>
             <div>
-              <div className="text-xs uppercase font-black tracking-widest text-slate-400 mb-1">Last Active</div>
-              <div className="text-base font-black text-slate-800">{lastActive ? new Date(lastActive).toLocaleDateString() : '—'}</div>
+              <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Last Active</div>
+              <div className="text-sm sm:text-base font-black text-slate-800">{lastActive ? new Date(lastActive).toLocaleDateString() : '—'}</div>
             </div>
             <div>
-              <div className="text-xs uppercase font-black tracking-widest text-slate-400 mb-1">Daily Goal</div>
-              <div className="text-base font-black text-blue-600">{user.targetDailyMl} mL</div>
+              <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Daily Goal</div>
+              <div className="text-sm sm:text-base font-black text-blue-600">{user.targetDailyMl} mL</div>
             </div>
           </div>
         </div>
 
-        {/* 6-Column Divider KPI Row - Compact */}
+        {/* 6-Column Divider KPI Row - Compact & Responsive */}
         <div className="border-t border-slate-100 pt-5 mt-1">
-          <div className="flex divide-x divide-slate-100 items-start">
-            <div className="flex-1 pr-5">
-              <div className="flex items-center gap-2.5 mb-2">
-                <Activity className="w-4 h-4 text-blue-600" />
-                <span className="text-xs uppercase font-black tracking-widest text-slate-400">Activities</span>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-y-6 lg:divide-x lg:divide-slate-100 items-start">
+            <div className="pr-4 lg:pr-5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Activity className="w-3.5 h-3.5 text-blue-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Activities</span>
               </div>
-              <div className="text-xl font-black text-slate-900 leading-none">{filtered.length}</div>
+              <div className="text-lg font-black text-slate-900 leading-none">{filtered.length}</div>
             </div>
 
-            <div className="flex-1 px-6">
-              <div className="flex items-center gap-2.5 mb-2">
-                <Cpu className="w-4 h-4 text-blue-600" />
-                <span className="text-xs uppercase font-black tracking-widest text-slate-400 truncate">AI Recomm...</span>
+            <div className="px-4 lg:px-6">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Cpu className="w-3.5 h-3.5 text-blue-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400 truncate">AI Rec...</span>
               </div>
-              <div className="text-xl font-black text-slate-900 leading-none">{stats.aiRecommendations}</div>
+              <div className="text-lg font-black text-slate-900 leading-none">{stats.aiRecommendations}</div>
             </div>
 
-            <div className="flex-1 px-6">
-              <div className="flex items-center gap-2.5 mb-2">
-                <CheckCircle className="w-4 h-4 text-emerald-600" />
-                <span className="text-xs uppercase font-black tracking-widest text-slate-400">Followed</span>
+            <div className="px-4 lg:px-6">
+              <div className="flex items-center gap-2 mb-1.5">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Followed</span>
               </div>
-              <div className="text-xl font-black text-slate-900 leading-none">{stats.recommendationsFollowed}</div>
+              <div className="text-lg font-black text-slate-900 leading-none">{stats.recommendationsFollowed}</div>
             </div>
 
-            <div className="flex-[1.5] px-6">
-              <div className="flex items-center gap-2.5 mb-2">
-                <Droplet className="w-4 h-4 text-blue-600" />
-                <span className="text-xs uppercase font-black tracking-widest text-slate-400">Water</span>
+            <div className="px-4 lg:px-6">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Droplet className="w-3.5 h-3.5 text-blue-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">
+                  {range === '1' ? "Today's Water" : "Total Intake"}
+                </span>
               </div>
-              <div className="text-xl font-black text-slate-900 leading-none whitespace-nowrap">
-                {stats.waterConsumed} mL <span className="text-slate-400 font-bold text-sm">/ {stats.waterRecommended} mL</span>
+              <div className="text-lg font-black text-slate-900 leading-none whitespace-nowrap">
+                {stats.waterConsumed} <span className="text-slate-400 font-bold text-[10px]">/ {range === '1' ? stats.waterRecommended : '—'}</span>
               </div>
             </div>
 
-            <div className="flex-1 px-6">
-              <div className="flex items-center gap-2.5 mb-2">
-                <AlertTriangle className="w-4 h-4 text-red-600" />
-                <span className="text-xs uppercase font-black tracking-widest text-slate-400">Alert</span>
+            <div className="px-4 lg:px-6">
+              <div className="flex items-center gap-2 mb-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-red-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Alert</span>
               </div>
-              <div className="text-xl font-black text-slate-900 leading-none">{stats.alertCount}</div>
+              <div className="text-lg font-black text-slate-900 leading-none">{stats.alertCount}</div>
             </div>
 
-            <div className="flex-[1.3] pl-6">
-              <div className="flex items-center gap-2.5 mb-2">
-                <TrendingUp className="w-4 h-4 text-red-600" />
-                <span className="text-xs uppercase font-black tracking-widest text-slate-400">Risk Trend</span>
+            <div className="pl-4 lg:pl-6">
+              <div className="flex items-center gap-2 mb-1.5">
+                <TrendingUp className="w-3.5 h-3.5 text-red-600" />
+                <span className="text-[9px] uppercase font-black tracking-widest text-slate-400">Risk Trend</span>
               </div>
-              <div className="flex flex-col gap-1.5">
-                <div className="text-xl font-black text-slate-900 leading-none whitespace-nowrap">
+              <div className="flex flex-col gap-1">
+                <div className="text-lg font-black text-slate-900 leading-none whitespace-nowrap">
                   {stats.riskStart} <span className="text-slate-300 mx-1">→</span> {stats.riskEnd}
-                  <span className="ml-1 text-slate-400 font-bold">{stats.riskTrend > 0 ? '↑' : stats.riskTrend < 0 ? '↓' : ''}</span>
                 </div>
                 {stats.riskTrend !== 0 && (
-                  <div className={`text-[10px] font-black uppercase tracking-tight ${stats.riskTrend > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                    {stats.riskTrend > 0 ? `+${stats.riskTrend}` : stats.riskTrend} points
+                  <div className={`text-[8px] font-black uppercase tracking-tight ${stats.riskTrend > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                    {stats.riskTrend > 0 ? `+${stats.riskTrend}` : stats.riskTrend} pts
                   </div>
                 )}
               </div>

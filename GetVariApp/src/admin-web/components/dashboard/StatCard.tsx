@@ -33,7 +33,7 @@ const StatCard: React.FC<StatCardProps> = ({ label, value, sublabel, icon, trend
       </div>
 
       <div className="mt-auto">
-        <p className="text-[10px] text-slate-500 mt-1 font-medium whitespace-nowrap">{sublabel}</p>
+        <p className="text-[10px] text-slate-500 mt-1 font-medium sm:whitespace-nowrap">{sublabel}</p>
       </div>
     </GlassCard>
   );

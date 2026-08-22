@@ -41,10 +41,14 @@ import WhyThisScoreCard from '../components/dashboard/WhyThisScoreCard';
 import RecoveryTelemetryPanel from '../components/dashboard/RecoveryTelemetryPanel';
 import FluidLogConfirmModal from '../components/dashboard/FluidLogConfirmModal';
 import FluidLogSuccessModal from '../components/dashboard/FluidLogSuccessModal';
+import PBWRBreakdownCard from '../components/dashboard/PBWRBreakdownCard';
+import PBWRService, { PBWRBreakdown } from '../services/PBWRService';
+import TelemetryHistoryService from '../services/TelemetryHistoryService';
 
 const HomeScreen = ({ navigation }: any) => {
   const [waterLogs, setWaterLogs] = useState<HydrationLog[]>([]);
   const [userProfile, setUserProfile] = useState<UserProfile | undefined>(undefined);
+  const [userId, setUserId] = useState<string | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [quickLogOpen, setQuickLogOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -62,6 +66,7 @@ const HomeScreen = ({ navigation }: any) => {
   const [successMessage, setSuccessMessage] = useState('');
 
   const [insights, setInsights] = useState<AIInsight[]>([]);
+  const [pbwrBreakdown, setPbwrBreakdown] = useState<PBWRBreakdown | null>(null);
 
   const targetMl = userProfile?.targetDailyMl || 2500;
   const totalWaterConsumed = waterLogs.reduce((acc, curr) => acc + curr.amountMl, 0);
@@ -171,9 +176,10 @@ const HomeScreen = ({ navigation }: any) => {
 
   const fetchUserData = async () => {
     try {
-      const userId = await AuthService.getCurrentUserId();
-      console.log('[Supabase] Fetching data for user:', userId);
-      if (!userId) return;
+      const uId = await AuthService.getCurrentUserId();
+      console.log('[Supabase] Fetching data for user:', uId);
+      if (!uId) return;
+      setUserId(uId);
 
       // A user who has not finished onboarding simply has no row yet, which
       // the service reports as `null` rather than as an error.
@@ -338,8 +344,22 @@ const HomeScreen = ({ navigation }: any) => {
 
   useEffect(() => {
     refreshInsights();
+    if (userProfile && userId) {
+      PBWRService.calculatePBWR(userProfile, totalWaterConsumed, userId).then(setPbwrBreakdown);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [telemetry.solvedRisk.status, totalWaterConsumed]);
+  }, [telemetry.solvedRisk.status, totalWaterConsumed, userProfile, userId]);
+
+  useEffect(() => {
+    if (telemetry.sensorData) {
+      TelemetryHistoryService.recordSnapshot(telemetry.sensorData);
+    }
+  }, [telemetry.sensorData]);
+
+  const isPhysicianGated = useMemo(() => {
+    const gated = ['hypertension', 'ckd', 'heart'];
+    return userProfile?.medicalConditions?.some(c => gated.includes(c)) ?? false;
+  }, [userProfile]);
 
   return (
     <View className="flex-1 bg-[#02050e]">
@@ -432,6 +452,14 @@ const HomeScreen = ({ navigation }: any) => {
             temperature={telemetry.sensorData.temperature}
             humidity={telemetry.sensorData.humidity}
           />
+
+          {pbwrBreakdown && (
+            <PBWRBreakdownCard
+              breakdown={pbwrBreakdown}
+              hasPhysicianLimit={!!userProfile?.physicianLimitMl}
+              isPhysicianGated={isPhysicianGated}
+            />
+          )}
 
           <QuickFluidLogStation onSelectAmount={openConfirmation} disabled={savingLog} />
 

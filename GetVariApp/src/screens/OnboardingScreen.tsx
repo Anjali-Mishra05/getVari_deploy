@@ -46,6 +46,7 @@ import { AuthService } from '../services/AuthService';
 import NotificationService from '../services/NotificationService';
 import { getClosestCity } from '../data/indianCities';
 import { computeTargetDailyMl } from '../utils/hydrationTarget';
+import { WorkEnvironment } from '../types';
 import {
   DEFAULT_SLEEP_SCHEDULE,
   awakeHoursPerDay,
@@ -59,7 +60,7 @@ const GETVARI_SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
 
 const OnboardingScreen = ({ navigation }: any) => {
   const [step, setStep] = useState(1);
-  const totalSteps = 6;
+  const totalSteps = 7;
 
   // State for Step 2
   const [fullName, setFullName] = useState('');
@@ -83,6 +84,10 @@ const OnboardingScreen = ({ navigation }: any) => {
 
   // State for Step 5
   const [activityLevel, setActivityLevel] = useState('moderate');
+
+  // State for Step 7
+  const [workEnvironment, setWorkEnvironment] = useState<WorkEnvironment>('indoor');
+  const [physicianLimit, setPhysicianLimit] = useState('');
 
   // State for Step 6
   const [bleState, setBleState] = useState<'idle' | 'checking' | 'bluetoothOff' | 'requesting' | 'scanning' | 'devicesFound' | 'noDevicesFound' | 'connecting' | 'connected' | 'error'>('idle');
@@ -216,6 +221,8 @@ const OnboardingScreen = ({ navigation }: any) => {
             // it — the daily goal is spread over waking hours, not 24.
             awakeHoursPerDay: Number(awakeHours.toFixed(2)),
             connectedDeviceId: connectedDevice?.id || null,
+            workEnvironment,
+            physicianLimitMl: physicianLimit ? parseInt(physicianLimit, 10) : undefined,
           };
 
           const { error } = await supabase
@@ -555,10 +562,11 @@ const OnboardingScreen = ({ navigation }: any) => {
                     <Text className="text-2xl font-black text-white mb-1">Pre-existing Medical States</Text>
                     <Text className="text-[12px] text-neutral-400 mb-8 leading-relaxed">Select any active diagnoses. GetVari dynamically tunes cardiovascular fluid strain thresholds and sweat predictions accordingly.</Text>
                     {[
-                      { id: 'diabetes', title: 'Diabetes (Type I/II)', desc: 'Heightened systemic glucose requires higher osmotic dilution. (+450ml adaptive cushion)' },
-                      { id: 'hypertension', title: 'Hypertension / High BP', desc: 'Heart pressure feedback active. Micro-hydration bursts help reduce blood vessel resistance.' },
-                      { id: 'kidney', title: 'Kidney / Renal Disease', desc: 'Ensures strict clearance limit control to relieve tubules. (-250ml adaptive ceiling)' },
-                      { id: 'cardio', title: 'Cardiovascular / Heart Condition', desc: 'Prevents rapid blood volume expansion; steady, predictable intake triggers active.' },
+                      { id: 'diabetes', title: 'Diabetes (Type I/II)', desc: 'Heightened systemic glucose requires higher osmotic dilution.' },
+                      { id: 'hypertension', title: 'Hypertension / High BP', desc: 'Heart pressure feedback active. Physician limit recommended.' },
+                      { id: 'ckd', title: 'Kidney Disease / CKD', desc: 'Ensures strict clearance limit control to relieve tubules. Physician limit mandatory.' },
+                      { id: 'heart', title: 'Heart Condition', desc: 'Prevents rapid blood volume expansion. Physician limit mandatory.' },
+                      { id: 'stones', title: 'Kidney Stone History', desc: 'Prompts for higher base target to prevent crystallization.' },
                     ].map((cond) => (
                       <TouchableOpacity key={cond.id} onPress={() => toggleCondition(cond.id)} activeOpacity={0.7} className={`w-full p-4 rounded-2xl border mb-3 flex-row items-center justify-between ${medicalConditions.includes(cond.id) ? 'bg-[#00f2fe]/5 border-[#00f2fe]/50' : 'bg-white/[0.02] border-white/5'}`}>
                         <View className="flex-1 pr-4">
@@ -650,6 +658,45 @@ const OnboardingScreen = ({ navigation }: any) => {
                 )}
 
                 {step === 6 && (
+                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
+                    <Text className="text-2xl font-black text-white mb-1">Environment & Limits</Text>
+                    <Text className="text-[12px] text-neutral-400 mb-8 leading-relaxed">Where do you spend most of your day? This calibrates your PBWR baseline.</Text>
+
+                    <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Work Environment</Text>
+                    <View className="flex-row flex-wrap gap-2 mb-8">
+                      {[
+                        { id: 'indoor', label: 'Indoor/Office' },
+                        { id: 'ac_office', label: 'AC Office' },
+                        { id: 'hybrid', label: 'Hybrid' },
+                        { id: 'outdoor', label: 'Outdoor' },
+                        { id: 'heavy_outdoor', label: 'Heavy Outdoor' }
+                      ].map((env) => (
+                        <TouchableOpacity key={env.id} onPress={() => setWorkEnvironment(env.id as any)} className={`px-4 py-3 rounded-xl border items-center ${workEnvironment === env.id ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`}>
+                          <Text className={`text-[11px] font-bold ${workEnvironment === env.id ? 'text-[#00f2fe]' : 'text-neutral-400'}`}>{env.label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+
+                    {(medicalConditions.includes('hypertension') || medicalConditions.includes('ckd') || medicalConditions.includes('heart')) && (
+                      <View>
+                        <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">Physician Daily Limit (ml)</Text>
+                        <TextInput
+                          className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold mb-2"
+                          placeholder="e.g. 2000"
+                          placeholderTextColor="#475569"
+                          value={physicianLimit}
+                          onChangeText={setPhysicianLimit}
+                          keyboardType="numeric"
+                        />
+                        <Text className="text-[10px] text-amber-500/80 leading-relaxed italic">
+                          Mandatory for gated conditions to ensure safety.
+                        </Text>
+                      </View>
+                    )}
+                  </Animated.View>
+                )}
+
+                {step === 7 && (
                   <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
                     <Text className="text-2xl font-black text-white mb-1">Sensor Synaptic Connect</Text>
                     <Text className="text-[12px] text-neutral-400 mb-10">Connect the proprietary GetVari wearable.</Text>

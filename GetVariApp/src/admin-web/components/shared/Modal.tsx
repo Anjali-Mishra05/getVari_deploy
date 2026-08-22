@@ -42,29 +42,29 @@ const Modal: React.FC<ModalProps> = ({
 
       <div className={`relative w-full ${maxWidth} bg-white border border-slate-200 rounded-[40px] shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] overflow-hidden animate-modalIn flex flex-col max-h-[calc(100dvh-2rem)] sm:max-h-[calc(100dvh-5rem)]`}>
         {/* Header */}
-        <div className="px-10 pt-10 pb-6 shrink-0">
+        <div className="px-6 sm:px-10 pt-6 sm:pt-10 pb-4 sm:pb-6 shrink-0">
           <div className="flex justify-between items-start">
-            <div className="space-y-1.5">
+            <div className="space-y-1 sm:space-y-1.5">
               {subtitle && <span className="text-[10px] font-mono text-blue-600 font-black tracking-[0.3em] block uppercase">{subtitle}</span>}
-              <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">{title}</h2>
+              <h2 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tight">{title}</h2>
             </div>
             <button
               onClick={onClose}
-              className="p-2.5 bg-slate-50 hover:bg-slate-100 rounded-full transition border border-slate-200 text-slate-400 hover:text-slate-600 shadow-sm"
+              className="p-2 sm:p-2.5 bg-slate-50 hover:bg-slate-100 rounded-full transition border border-slate-200 text-slate-400 hover:text-slate-600 shadow-sm"
             >
-              <X className="w-6 h-6" />
+              <X className="w-5 h-5 sm:w-6 h-6" />
             </button>
           </div>
         </div>
 
         {/* Body */}
-        <div className={`px-10 pb-6 text-slate-600 flex-1 ${scrollBody ? 'overflow-y-auto custom-scrollbar' : 'overflow-visible'}`}>
+        <div className={`px-6 sm:px-10 pb-4 sm:pb-6 text-slate-600 flex-1 ${scrollBody ? 'overflow-y-auto custom-scrollbar' : 'overflow-visible'}`}>
           {children}
         </div>
 
         {footer && (
-          <div className="px-10 pb-8 pt-6 shrink-0 border-t border-slate-100">
-            <div className="flex justify-end gap-4">
+          <div className="px-6 sm:px-10 pb-6 sm:pb-8 pt-4 sm:pt-6 shrink-0 border-t border-slate-100">
+            <div className="flex justify-end gap-3 sm:gap-4">
               {footer}
             </div>
           </div>

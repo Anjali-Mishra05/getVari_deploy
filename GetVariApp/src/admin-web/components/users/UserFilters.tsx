@@ -31,13 +31,13 @@ const UserFilters: React.FC<UserFiltersProps> = ({
         />
       </div>
 
-      <div className="flex gap-3 items-center flex-wrap lg:flex-nowrap">
-        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all shadow-sm">
+      <div className="flex gap-3 items-center flex-wrap lg:flex-nowrap w-full lg:w-auto">
+        <div className="flex-1 lg:flex-none flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all shadow-sm">
           <Filter className="w-4 h-4 text-slate-400" />
           <select
             value={riskFilter}
             onChange={(e) => onRiskFilterChange((e.target as HTMLSelectElement).value)}
-            className="bg-transparent text-sm font-bold text-slate-600 border-none outline-none cursor-pointer pr-4"
+            className="bg-transparent text-sm font-bold text-slate-600 border-none outline-none cursor-pointer pr-4 w-full"
           >
             <option value="all">System Risk: All</option>
             <option value="critical">Critical Risk</option>
@@ -47,12 +47,12 @@ const UserFilters: React.FC<UserFiltersProps> = ({
           </select>
         </div>
 
-        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all shadow-sm">
+        <div className="flex-1 lg:flex-none flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all shadow-sm">
           <Sliders className="w-4 h-4 text-slate-400" />
           <select
             value={workloadFilter}
             onChange={(e) => onWorkloadFilterChange((e.target as HTMLSelectElement).value)}
-            className="bg-transparent text-sm font-bold text-slate-600 border-none outline-none cursor-pointer pr-4"
+            className="bg-transparent text-sm font-bold text-slate-600 border-none outline-none cursor-pointer pr-4 w-full"
           >
             <option value="all">Workload: All</option>
             <option value="office">Office Protocol</option>

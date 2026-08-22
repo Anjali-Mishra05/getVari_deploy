@@ -55,8 +55,9 @@ const GENDERS = ['Female', 'Male', 'Non-Binary'];
 const CONDITIONS = [
   { id: 'diabetes', title: 'Diabetes (Type I/II)' },
   { id: 'hypertension', title: 'Hypertension / High BP' },
-  { id: 'kidney', title: 'Kidney / Renal Disease' },
-  { id: 'cardio', title: 'Cardiovascular / Heart Condition' },
+  { id: 'ckd', title: 'Kidney Disease / CKD' },
+  { id: 'heart', title: 'Heart Condition' },
+  { id: 'stones', title: 'Kidney Stone History' },
 ];
 
 const ACTIVITY_LEVELS = [
@@ -112,6 +113,8 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
   const [longitude, setLongitude] = useState<number | null>(null);
   const [medicalConditions, setMedicalConditions] = useState<string[]>([]);
   const [activityLevel, setActivityLevel] = useState('moderate');
+  const [workEnvironment, setWorkEnvironment] = useState<WorkEnvironment>('indoor');
+  const [physicianLimit, setPhysicianLimit] = useState('');
   const [sleepStart, setSleepStart] = useState(DEFAULT_SLEEP_SCHEDULE.sleepStart);
   const [wakeUp, setWakeUp] = useState(DEFAULT_SLEEP_SCHEDULE.wakeUp);
 
@@ -138,6 +141,8 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
       Array.isArray(userProfile?.medicalConditions) ? userProfile.medicalConditions : []
     );
     setActivityLevel(userProfile?.activityLevel ?? 'moderate');
+    setWorkEnvironment(userProfile?.workEnvironment ?? 'indoor');
+    setPhysicianLimit(userProfile?.physicianLimitMl?.toString() ?? '');
     setSleepStart(schedule.sleepStart);
     setWakeUp(schedule.wakeUp);
     setErrorMsg('');
@@ -220,6 +225,8 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
       longitude,
       medicalConditions,
       activityLevel,
+      workEnvironment,
+      physicianLimitMl: physicianLimit ? parseInt(physicianLimit, 10) : undefined,
       sleepSchedule,
     });
 
@@ -431,6 +438,36 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
                 </TouchableOpacity>
               ))}
             </View>
+
+            <SectionLabel>Work Environment</SectionLabel>
+            <View className="flex-row flex-wrap gap-2 mb-6">
+              {[
+                { id: 'indoor', label: 'Indoor/Office' },
+                { id: 'ac_office', label: 'AC Office' },
+                { id: 'hybrid', label: 'Hybrid' },
+                { id: 'outdoor', label: 'Outdoor' },
+                { id: 'heavy_outdoor', label: 'Heavy Outdoor' }
+              ].map((env) => (
+                <TouchableOpacity key={env.id} onPress={() => setWorkEnvironment(env.id as any)} className={`px-4 py-3 rounded-xl border items-center ${workEnvironment === env.id ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`}>
+                  <Text className={`text-[11px] font-bold ${workEnvironment === env.id ? 'text-[#00f2fe]' : 'text-neutral-400'}`}>{env.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {(medicalConditions.includes('hypertension') || medicalConditions.includes('ckd') || medicalConditions.includes('heart')) && (
+              <View className="mb-6">
+                <FieldLabel>Physician Daily Limit (ml)</FieldLabel>
+                <TextInput
+                  className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold mb-1"
+                  placeholder="e.g. 2000"
+                  placeholderTextColor="#475569"
+                  value={physicianLimit}
+                  onChangeText={setPhysicianLimit}
+                  keyboardType="numeric"
+                />
+                <Text className="text-[9px] text-amber-500 italic">Mandatory for fluid-restricted conditions.</Text>
+              </View>
+            )}
 
             <SectionLabel>Circadian Window</SectionLabel>
 

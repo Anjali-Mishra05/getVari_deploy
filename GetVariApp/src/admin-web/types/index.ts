@@ -15,7 +15,6 @@ export interface User {
   activityLoad: number;
   temperature: number;
   humidity: number;
-  sweatGSR: number;
   batteryLevel: number;
   rssi: number;
   firmwareVersion: string;

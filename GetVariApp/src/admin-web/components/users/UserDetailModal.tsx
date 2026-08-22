@@ -72,7 +72,7 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ isOpen, onClose, user
               <div className="rounded-3xl border border-white/10 bg-[#0b1220] p-4">
                 <div className="flex items-center gap-2 text-cyan-400"><Thermometer size={16} /> Biometrics</div>
                 <p className="mt-3 text-3xl font-bold text-white">{user.temperature.toFixed(1)}°C</p>
-                <p className="mt-2 text-sm text-neutral-400">Humidity {user.humidity}% · GSR {user.sweatGSR}</p>
+                <p className="mt-2 text-sm text-neutral-400">Humidity {user.humidity}%</p>
               </div>
             </div>
           </div>

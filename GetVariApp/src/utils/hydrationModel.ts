@@ -2,8 +2,7 @@ import { SensorData, HydrationRiskDetails, UserProfile } from '../types';
 import { HydrationRiskEngine } from './hydrationRiskEngine';
 
 /**
- * Calculates physiological physiological indicator score for heart rate.
- * Lower baseline (e.g. 60-70 bpm) -> lower stress score. High bpm -> higher sweat stress.
+ * Calculates physiological indicator score for heart rate.
  */
 export function calculateHeartScore(heartRate: number): number {
   return HydrationRiskEngine.calculateHeartLoad(heartRate);
@@ -11,17 +10,16 @@ export function calculateHeartScore(heartRate: number): number {
 
 /**
  * Calculates heat score based on ambient temperature and relative humidity.
- * Elevating temp and high humidity prevents convective/evaporative cooling, amplifying fluid loss.
  */
 export function calculateHeatScore(temperature: number, humidity: number): number {
-  return Math.round((HydrationRiskEngine.calculateTemperatureLoad(temperature) * 2 + HydrationRiskEngine.calculateHumidityLoad(humidity)) / 3);
+  const tLoad = HydrationRiskEngine.calculateTemperatureLoad(temperature);
+  const hLoad = HydrationRiskEngine.calculateHumidityLoad(humidity);
+  // Using a combined index as a proxy for environmental heat stress
+  return Math.round((tLoad * 2 + hLoad) / 3);
 }
 
 /**
- * Calculates hydration risk score from distinct physiological and environmental inputs,
- * leveraging the unified HydrationRiskEngine core.
- * 
- * Returns full details for front-end styling and alert status.
+ * Calculates hydration risk score from distinct physiological and environmental inputs.
  */
 export function runHydrationRiskSolver(
   sensorData: Omit<SensorData, 'hydrationScore'>,
@@ -29,16 +27,14 @@ export function runHydrationRiskSolver(
   activeAbsorbedHydration: number = 200,
   profile?: UserProfile
 ): HydrationRiskDetails {
-  // Delegate mathematical solution directly to the newly implemented HydrationRiskEngine
   const engineOutput = HydrationRiskEngine.solveRisk({
     heartRate: sensorData.heartRate,
     activityLoad: sensorData.activityLoad,
     temperature: sensorData.temperature,
     humidity: sensorData.humidity,
     timeSinceWaterIntake: hoursSinceDrink
-  }, activeAbsorbedHydration, profile);
+  }, profile);
 
-  // Map engine status directly to gorgeous premium design tokens
   let color = 'from-emerald-400 to-teal-500';
   let bgColor = 'bg-emerald-500/10';
   let textGlow = 'shadow-emerald-500/40 text-emerald-400';
@@ -75,7 +71,6 @@ export function runHydrationRiskSolver(
     meaning: engineOutput.meaning,
     suggestedAction: engineOutput.suggestedAction,
     glassesRequired: engineOutput.glassesRequired,
-    // Intermediate Loads
     heartLoad: engineOutput.heartLoad,
     activityLoad: engineOutput.activityLoadScore,
     temperatureLoad: engineOutput.temperatureLoad,
@@ -85,70 +80,83 @@ export function runHydrationRiskSolver(
 }
 
 /**
- * Predicts the recovery window (time to absorb fluid) adjusted dynamically by weight, climate, and medical conditions.
+ * Predicts the recovery window (time to absorb fluid) adjusted dynamically.
+ * Based on Page 4 of the Hydration Risk Solver algorithm documentation.
  */
 export function calculateRecoveryEstimation(fluidMl: number, profile?: UserProfile): string {
+  // Base Timeline: <= 200ml -> 25m, <= 500ml -> 75m, > 500ml -> 100m
   let baseMinutes = fluidMl <= 200 ? 25 : fluidMl <= 500 ? 75 : 100;
   let multiplier = 1.0;
 
   if (profile) {
-    // 1. Weight impact
+    // 1. Weight Modifier: Multiplied by min(1.3, Weight/75)
     if (profile.weightKg > 75) {
       multiplier *= Math.min(1.3, profile.weightKg / 75);
     }
-    // 2. Medical Conditions
+
+    // 2. Clinical Modifiers
     if (profile.medicalConditions) {
-      if (profile.medicalConditions.includes('Diabetes')) multiplier *= 1.25; // Osmotic shift delay
-      if (profile.medicalConditions.includes('Kidney Disease')) multiplier *= 1.40; // Dialed down clearance rate
+      if (profile.medicalConditions.includes('Diabetes')) multiplier *= 1.25;
+      if (profile.medicalConditions.includes('Kidney Disease')) multiplier *= 1.40;
       if (profile.medicalConditions.includes('Hypertension')) multiplier *= 1.10;
     }
-    // 3. Location Climate impact
+
+    // 3. Hot Climate Modifier: Multiplied by 0.90
     if (profile.location) {
-      const hotCities = ['Mumbai', 'Delhi', 'Chennai', 'Kolkata', 'Hyderabad', 'Ahmedabad', 'Jaipur'];
+      const hotCities = ['Mumbai', 'Chennai', 'Delhi', 'Jaipur', 'Hyderabad', 'Ahmedabad', 'Kolkata'];
       if (hotCities.some(city => profile.location!.includes(city))) {
-        multiplier *= 0.90; // Hot environments draw fluid into blood faster due to vasodilation
+        multiplier *= 0.90;
       }
     }
   }
 
-  const finalMinutes = Math.round(baseMinutes * multiplier);
+  const finalMinutes = Math.floor(baseMinutes * multiplier);
+
+  // Format as a range for UI display
   if (finalMinutes <= 30) {
-    return `${Math.max(10, finalMinutes - 5)}-${finalMinutes + 5} mins`;
+    const start = Math.max(10, finalMinutes - 5);
+    const end = finalMinutes + 5;
+    return `${start} to ${end} mins`;
   }
   if (finalMinutes <= 60) {
-    return `${finalMinutes - 10}-${finalMinutes + 10} mins`;
+    const start = finalMinutes - 10;
+    const end = finalMinutes + 10;
+    return `${start} to ${end} mins`;
   }
-  const startHrs = Math.floor((finalMinutes - 15) / 60);
-  const startMins = (finalMinutes - 15) % 60;
-  const endHrs = Math.floor((finalMinutes + 15) / 60);
-  const endMins = (finalMinutes + 15) % 60;
-  
+
+  const startTotal = finalMinutes - 15;
+  const endTotal = finalMinutes + 15;
+
+  const startHrs = Math.floor(startTotal / 60);
+  const startMins = startTotal % 60;
+  const endHrs = Math.floor(endTotal / 60);
+  const endMins = endTotal % 60;
+
   if (startHrs === 0) {
-    return `${finalMinutes - 15} mins to ${endHrs}h ${endMins}m`;
+    return `${startTotal} mins to ${endHrs}h ${endMins}m`;
   }
   return `${startHrs}h ${startMins}m to ${endHrs}h ${endMins}m`;
 }
 
 /**
- * Predicts risk score change after fluid absorption, taking weight and health stats into account.
+ * Predicts risk score change after fluid absorption.
+ * Based on Page 4 of the Hydration Risk Solver algorithm documentation.
+ * Risk Reduction = Fluid (ml) * 0.08 * (70 / Weight) * Absorption Efficiency
  */
 export function calculatePredictedRiskAfterDrink(
   currentRisk: number,
   fluidMl: number,
   profile?: UserProfile
 ): number {
-  let weightFactor = 1.0;
+  let weightFactor = profile ? (70 / profile.weightKg) : 1.0;
   let absorptionEfficiency = 1.0;
 
-  if (profile) {
-    weightFactor = 70 / profile.weightKg; // Standardized to 70kg baseline
-    if (profile.medicalConditions) {
-      if (profile.medicalConditions.includes('Diabetes')) {
-        absorptionEfficiency = 0.90; // Reduced absorption rate efficiency due to high osmotic pressure
-      }
-      if (profile.medicalConditions.includes('Kidney Disease')) {
-        absorptionEfficiency = 0.85; // Strict bounds on circulation volume expansion
-      }
+  if (profile?.medicalConditions) {
+    if (profile.medicalConditions.includes('Diabetes')) {
+      absorptionEfficiency = 0.90;
+    }
+    if (profile.medicalConditions.includes('Kidney Disease')) {
+      absorptionEfficiency = 0.85;
     }
   }
 

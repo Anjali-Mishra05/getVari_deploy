@@ -3,16 +3,19 @@ import ChartDistribution from '../components/analytics/ChartDistribution';
 import ChartTrends from '../components/analytics/ChartTrends';
 import ChartCorrelation from '../components/analytics/ChartCorrelation';
 import { SupabaseAdminService } from '../services/SupabaseAdminService';
+import { User } from '../types';
 
 const AnalyticsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState<User[]>([]);
 
   useEffect(() => {
     const loadData = async () => {
-      await Promise.all([
+      const [_, userData] = await Promise.all([
         SupabaseAdminService.fetchAllHydrationLogs(),
         SupabaseAdminService.fetchAllUsers()
       ]);
+      setUsers(userData);
       setLoading(false);
     };
     loadData();
@@ -31,7 +34,7 @@ const AnalyticsPage: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
         <ChartDistribution />
         <ChartTrends />
-        <ChartCorrelation />
+        <ChartCorrelation users={users} loading={loading} />
       </div>
     </div>
   );

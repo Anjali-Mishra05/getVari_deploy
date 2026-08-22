@@ -11,9 +11,9 @@ interface FeedbackTableProps {
 
 const FeedbackTable: React.FC<FeedbackTableProps> = ({ feedbacks, onViewDetails }) => {
   return (
-    <GlassCard className="p-0 overflow-hidden border-slate-200 shadow-md rounded-xl">
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-left">
+    <GlassCard className="p-0 border-slate-200 shadow-md rounded-xl w-full">
+      <div className="overflow-x-auto w-full scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+        <table className="w-full min-w-[800px] lg:min-w-full border-collapse text-left">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50/50">
               <th className="p-4 text-[11px] font-bold uppercase tracking-widest text-slate-500">User Identification</th>

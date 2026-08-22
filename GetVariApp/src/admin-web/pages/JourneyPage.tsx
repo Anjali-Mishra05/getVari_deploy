@@ -33,8 +33,8 @@ const JourneyPage: React.FC = () => {
   }
 
   return (
-    <div className="grid grid-cols-12 gap-6">
-      <aside className="col-span-3">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <aside className="lg:col-span-3">
         <div className="mb-4">
           <input
             value={searchQuery}
@@ -44,21 +44,21 @@ const JourneyPage: React.FC = () => {
           />
         </div>
         <div className="bg-slate-50 border border-slate-100 p-3 rounded-2xl shadow-sm">
-          <div className="sticky top-6 max-h-[calc(100vh-160px)] overflow-y-auto pr-1">
+          <div className="lg:sticky lg:top-6 max-h-[300px] lg:max-h-[calc(100vh-160px)] overflow-y-auto pr-1 custom-scrollbar">
             <CompactUserList users={filtered} selected={selectedUser?.id ?? null} onSelect={u => setSelectedUser(u)} />
           </div>
         </div>
       </aside>
 
-      <main className="col-span-9">
+      <main className="lg:col-span-9">
         {selectedUser ? (
           <div>
             <UserJourney user={selectedUser} />
           </div>
         ) : (
-          <div className="p-24 border-2 border-dashed border-slate-200 rounded-[32px] text-center text-slate-400 font-black uppercase tracking-widest flex flex-col items-center gap-4">
+          <div className="p-10 lg:p-24 border-2 border-dashed border-slate-200 rounded-[32px] text-center text-slate-400 font-black uppercase tracking-widest flex flex-col items-center gap-4">
             <Users size={48} className="text-slate-200" />
-            Select a user from the directory to analyze their journey
+            Select a user to analyze journey
           </div>
         )}
       </main>

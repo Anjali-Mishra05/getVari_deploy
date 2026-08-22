@@ -28,10 +28,10 @@ const CompactUserList: React.FC<Props> = ({ users, selected, onSelect }) => {
               {u.name.split(' ').map(s => s[0]).slice(0, 2).join('')}
             </div>
             <div className="flex flex-col min-w-0">
-              <div className={`text-sm font-bold truncate ${selected === u.id ? 'text-blue-900' : 'text-slate-900'}`}>
+              <div className={`text-xs sm:text-sm font-bold truncate ${selected === u.id ? 'text-blue-900' : 'text-slate-900'}`}>
                 {u.name}
               </div>
-              <div className="text-xs font-mono text-slate-500 truncate uppercase">{u.id}</div>
+              <div className="text-[10px] font-mono text-slate-500 truncate uppercase">{u.id}</div>
             </div>
           </div>
 

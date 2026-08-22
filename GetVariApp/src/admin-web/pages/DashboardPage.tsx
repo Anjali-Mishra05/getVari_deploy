@@ -9,30 +9,33 @@ import { SupabaseAdminService } from '../services/SupabaseAdminService';
 
 const DashboardPage: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
+  const [fleetStats, setFleetStats] = useState({ totalWaterMl: 0, totalUsers: 0 });
   const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState(mockLogs);
 
   useEffect(() => {
     const loadData = async () => {
-      const data = await SupabaseAdminService.fetchAllUsers();
-      setUsers(data);
+      const [userData, statsData] = await Promise.all([
+        SupabaseAdminService.fetchAllUsers(),
+        SupabaseAdminService.fetchFleetStats()
+      ]);
+      setUsers(userData);
+      setFleetStats(statsData);
       setLoading(false);
     };
     loadData();
   }, []);
 
   const stats: DashboardStats = useMemo(() => {
-    if (users.length === 0) return { total: 0, active: 0, connected: 0, avgRisk: 0, critical: 0, totalWater: 0 };
-
-    const total = users.length;
+    const total = Math.max(users.length, fleetStats.totalUsers);
     const active = users.filter(u => u.lastSyncedMinutes < 60).length;
     const connected = users.filter(u => u.lastSyncedMinutes < 120).length;
-    const avgRisk = 0; // Not persisted in DB
+    const avgRisk = users.length > 0 ? Math.round(users.reduce((acc, u) => acc + u.riskScore, 0) / users.length) : 0;
     const critical = users.filter(u => u.status === 'Critical').length;
-    const totalWater = Math.round(users.reduce((acc, u) => acc + u.waterIntakeMl, 0) / 1000 * 10) / 10;
+    const totalWater = Math.round(fleetStats.totalWaterMl / 1000 * 10) / 10;
 
     return { total, active, connected, avgRisk, critical, totalWater };
-  }, [users]);
+  }, [users, fleetStats]);
 
   const alerts: Alert[] = useMemo(() => {
     return users.reduce((acc: Alert[], u) => {
@@ -58,9 +61,9 @@ const DashboardPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-7 animate-fadeIn">
+    <div className="space-y-7 animate-fadeIn w-full overflow-hidden">
       {/* KPI Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard
           label="Fleet Size"
           value={stats.total}
@@ -84,8 +87,8 @@ const DashboardPage: React.FC = () => {
         />
         <StatCard
           label="Avg Risk"
-          value={`--%`}
-          sublabel="Historical Data Not Persisted"
+          value={`${stats.avgRisk}%`}
+          sublabel="Fleet Physiological Load"
           icon={<TrendingUp size={24} />}
           color="text-amber-400"
         />
