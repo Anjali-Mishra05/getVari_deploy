@@ -25,6 +25,26 @@ jest.mock('react-native-keychain', () => ({
   resetGenericPassword: async () => true,
 }));
 
+// `@react-native-firebase/*` ships untranspiled ESM, which a plain node
+// environment cannot require. Stubbing it here keeps this suite in the same
+// shape as the rest of the logic tests — every native module mocked, no
+// `transformIgnorePatterns` needed — and none of these assertions exercise
+// the phone-auth path anyway; they are about the *session* that survives it.
+// Phone auth is deliberately *unavailable* here: that is the investor build's
+// real state, and it is the state these assertions are about — the demo
+// passcode path and the identity it mints.
+jest.mock('@react-native-firebase/app', () => ({
+  firebase: { app: () => ({}) },
+}));
+
+jest.mock('@react-native-firebase/auth', () => ({
+  getAuth: () => ({ currentUser: null }),
+  signInWithPhoneNumber: async () => {
+    throw new Error('auth/billing-not-enabled');
+  },
+  signOut: async () => undefined,
+}));
+
 jest.mock('../src/services/SupabaseClient', () => ({
   supabase: {
     auth: {

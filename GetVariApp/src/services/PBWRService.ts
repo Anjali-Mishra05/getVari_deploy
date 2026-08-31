@@ -29,6 +29,9 @@ export interface PBWRBreakdown {
 }
 
 class PBWRService {
+  /** Days after sign-up during which adjustments stay at zero. */
+  private CALIBRATION_DAYS = 7;
+
   private GENDER_RATES = {
     Male: 56.9,
     Female: 49.1,
@@ -103,12 +106,19 @@ class PBWRService {
     // We fetch averages (Real + Mock Fallback) for the rolling calculation.
     const avgs = await TelemetryHistoryService.getAverages(7, userId, profile);
 
-    // Stage 2 check: For "Calibration" display, we might want to know if real data exists.
-    const snapshots = await TelemetryHistoryService.getHistory(userId, profile);
-    // If all 7 days were mock, it's strictly calibration.
-    // In a real app, we'd check against profile.created_at as well.
-    const isCalibrationPeriod = snapshots.every(s => (s as any).isMock);
-    // Wait, getMockHistoricalSnapshot doesn't set isMock. Let me add that.
+    // Stage 2: is this account still calibrating?
+    //
+    // Measured from the account's age, not from whether the snapshots are
+    // mock. The mock history exists precisely so the model can personalise
+    // from day one; keying calibration off `isMock` meant any user whose
+    // wearable had not yet reported real telemetry was pinned to zero
+    // adjustments indefinitely, which is the opposite of what the fallback is
+    // for. Accounts with no recorded start date are treated as established —
+    // the stamp is written on first save, so only pre-existing rows lack it,
+    // and those are long past day seven.
+    const createdAt = profile.accountCreatedAt ? Date.parse(profile.accountCreatedAt) : NaN;
+    const isCalibrationPeriod =
+      Number.isFinite(createdAt) && Date.now() - createdAt < this.CALIBRATION_DAYS * 86400000;
 
     // 3. Stage 3 - Adjustment Bands
     // "Missing != Zero": If averages are null, no adjustment is applied.

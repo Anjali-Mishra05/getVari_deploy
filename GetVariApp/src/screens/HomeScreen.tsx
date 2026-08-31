@@ -150,6 +150,8 @@ const HomeScreen = ({ navigation }: any) => {
         refreshTodayLogs();
         refreshUnseen();
         NotificationService.scheduleHydrationReminders();
+        // Tops the fixed-time queue back up to a full week ahead.
+        NotificationService.scheduleDailyNotifications();
       }
     });
 
@@ -175,6 +177,9 @@ const HomeScreen = ({ navigation }: any) => {
       const hasPermission = await NotificationService.requestPermission();
       setNotificationsEnabled(hasPermission);
       await NotificationService.scheduleHydrationReminders();
+      // 07:00 and 22:00 messages, queued with the OS so they arrive on time
+      // whether or not the app is open.
+      await NotificationService.scheduleDailyNotifications();
     } catch (error) {
       console.error('[Notifications] Setup failed:', error);
     }

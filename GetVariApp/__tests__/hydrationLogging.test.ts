@@ -8,6 +8,12 @@
 var mockLogRows: any[] = [];
 var mockProfile: any = { targetDailyMl: 3000 };
 var mockStore = new Map<string, string>();
+/**
+ * Simulates a database that predates the reported_at / verification_source
+ * columns — the state the live table was actually in, which rejected every
+ * insert and made "log 250 ml" in the chat do nothing.
+ */
+var mockLegacyTable = false;
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
@@ -68,6 +74,16 @@ jest.mock('../src/services/SupabaseClient', () => {
             : thenable(() => ({ data: [...mockLogRows], error: null })),
         insert: (row: any) => ({
           select: async () => {
+            if (mockLegacyTable && ('reported_at' in row || 'verification_source' in row)) {
+              return {
+                data: null,
+                error: {
+                  code: 'PGRST204',
+                  message:
+                    "Could not find the 'reported_at' column of 'getvari_hydration_logs' in the schema cache",
+                },
+              };
+            }
             // Stands in for the table's primary key: a repeated row id is
             // rejected instead of creating a second entry.
             if (mockLogRows.some(existing => existing.id === row.id)) {
@@ -99,6 +115,7 @@ const loadPromptSession = () => require('../src/services/HydrationPromptSession'
 
 beforeEach(() => {
   mockLogRows = [];
+  mockLegacyTable = false;
   mockProfile = { targetDailyMl: 3000 };
   mockStore = new Map();
   jest.resetModules();
@@ -325,6 +342,30 @@ describe('HydrationService.logWater', () => {
     expect(result.totalMl).toBe(750);
     expect(result.targetMl).toBe(3000);
     expect(formatDailyTotal(result.totalMl, result.targetMl)).toBe('0.75 L / 3.00 L');
+  });
+
+  it('records the intake time and how the entry was verified', async () => {
+    const service = loadHydrationService();
+
+    await service.logWater({ amountMl: 500, requestId: 'chat:1' });
+
+    expect(mockLogRows[0].reported_at).toBeDefined();
+    expect(mockLogRows[0].verification_source).toBe('user-reported');
+  });
+
+  it('still logs against a table that predates the reported_at column', async () => {
+    mockLegacyTable = true;
+    const service = loadHydrationService();
+
+    const result = await service.logWater({ amountMl: 250, requestId: 'chat:1' });
+
+    // The entry is what matters to the user; the optional columns are dropped
+    // rather than the whole write being rejected.
+    expect(result.status).toBe('logged');
+    expect(result.totalMl).toBe(250);
+    expect(mockLogRows).toHaveLength(1);
+    expect(mockLogRows[0].amount_ml).toBe(250);
+    expect(mockLogRows[0].reported_at).toBeUndefined();
   });
 
   it('adds to what is already logged today', async () => {

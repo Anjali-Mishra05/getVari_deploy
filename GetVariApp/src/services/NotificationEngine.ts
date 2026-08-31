@@ -44,6 +44,19 @@ export type NotificationTrigger =
   | 'ai_progress'
   | 'ai_generic';
 
+/**
+ * What one evaluation decided.
+ *
+ * `raised` is every trigger whose condition held and whose own cooldown had
+ * expired; `delivered` is the subset that actually went to the user this tick,
+ * after burst control and the permission check. They differ whenever several
+ * conditions come true at once — which, on a phone, is most of the time.
+ */
+export interface NotificationOutcome {
+  raised: NotificationTrigger[];
+  delivered: NotificationTrigger[];
+}
+
 export interface NotificationEvaluation {
   sensorData: SensorData;
   profile: UserProfile;
@@ -55,14 +68,92 @@ interface EnginePersistentState {
   lastAlerts: Record<string, number>;
   activeStartTimestamp: number | null;
   inactiveStartTimestamp: number | null;
+  /**
+   * Activity alerts already raised for the *current* active session.
+   *
+   * A time-based cooldown is the wrong tool here: the condition ("active for
+   * 30+ minutes") stays true for the whole session, and the engine is
+   * re-evaluated on every telemetry tick, so without a per-session record the
+   * same alert is re-sent every couple of seconds until the user stops moving.
+   * The list is cleared whenever a session ends or a new one begins.
+   */
+  activitySessionAlerts: NotificationTrigger[];
+  /**
+   * When the engine last delivered anything, used to keep simultaneous
+   * conditions from arriving as one clump. See `MIN_GAP_BETWEEN_ALERTS`.
+   */
+  lastDeliveredAt: number;
 }
 
+/** Alerts scoped to one activity session rather than to a cooldown window. */
+const ACTIVITY_SESSION_TRIGGERS: NotificationTrigger[] = ['post_activity', 'long_activity'];
+
+/**
+ * Delivery order when several conditions come true in the same evaluation.
+ *
+ * Only the first still-deliverable trigger goes out per tick (see
+ * `selectDeliverable`), so this is what decides *which* of a clump the user
+ * hears about first. Anything unlisted sorts last.
+ */
+const TRIGGER_PRIORITY: NotificationTrigger[] = [
+  'high_risk',
+  'elevated_risk',
+  'extreme_heat',
+  'no_water_3h',
+  'low_intake_12pm',
+  'below_target_4pm',
+  'high_temp',
+  'high_humidity',
+  'long_activity',
+  'post_activity',
+  'inactivity',
+  'low_battery',
+  'goal_achieved',
+  'risk_improved',
+  'fully_charged',
+  'weekly_summary',
+];
+
+/**
+ * A high-risk alert is the one notification that must not wait its turn: it
+ * already bypasses the quiet window, so it bypasses the spacing floor too.
+ */
+const BYPASSES_SPACING: NotificationTrigger[] = ['high_risk'];
+
+type AiNudge = 'reminder' | 'insight' | 'activity' | 'risk' | 'progress';
+
+const AI_TRIGGERS: Record<AiNudge, NotificationTrigger> = {
+  reminder: 'ai_reminder',
+  insight: 'ai_insight',
+  activity: 'ai_activity',
+  risk: 'ai_risk',
+  progress: 'ai_progress',
+};
+
+/**
+ * What each AI nudge degrades to when the provider is out of credit.
+ *
+ * Four of the five have a plain-language equivalent already in the message
+ * table. `progress` is congratulatory rather than actionable, so with no AI
+ * text to send there is nothing worth waking the user for — it is dropped.
+ */
+const AI_RULE_BASED_FALLBACK: Record<AiNudge, NotificationTrigger | null> = {
+  reminder: 'regular_reminder',
+  insight: 'below_target_4pm',
+  activity: 'post_activity',
+  risk: 'elevated_risk',
+  progress: null,
+};
+
 class NotificationEngine {
+  /** Set when the AI provider reports it is out of credit (a 429). */
+  private aiQuotaExhausted = false;
+
   /**
    * Evaluates all notification conditions and triggers them if allowed.
    * Respects "Missing != Zero", per-type cooldowns, hysteresis, and sleep windows.
    */
-  async evaluate(evalData: NotificationEvaluation): Promise<void> {
+  async evaluate(evalData: NotificationEvaluation): Promise<NotificationOutcome> {
     const { sensorData, profile, todayLogs, solvedRisk } = evalData;
     const now = Date.now();
     const state = await this.getPersistentState();
@@ -97,14 +188,20 @@ class NotificationEngine {
     // --- Activity Tracking ---
     if (sensorData.activityLoad !== null) {
       if (sensorData.activityLoad >= 50) {
-        if (!state.activeStartTimestamp) state.activeStartTimestamp = now;
+        if (!state.activeStartTimestamp) {
+          // A new session starts here, so last session's alerts are spent.
+          state.activeStartTimestamp = now;
+          state.activitySessionAlerts = [];
+        }
         state.inactiveStartTimestamp = null;
       } else if (sensorData.activityLoad < 10) {
         if (!state.inactiveStartTimestamp) state.inactiveStartTimestamp = now;
+        if (state.activeStartTimestamp) state.activitySessionAlerts = [];
         state.activeStartTimestamp = null;
       } else {
         // Transitional - we pause the active timer if it was running?
         // Spec says >= 30m activity. If they drop below 50, we reset the timer for now.
+        if (state.activeStartTimestamp) state.activitySessionAlerts = [];
         state.activeStartTimestamp = null;
         state.inactiveStartTimestamp = null;
       }
@@ -131,12 +228,13 @@ class NotificationEngine {
         }
       }
 
-      // Activity Alerts
+      // Activity Alerts (once per session, not once per cooldown window)
       if (state.activeStartTimestamp) {
         const activeMins = (now - state.activeStartTimestamp) / 60000;
-        if (activeMins >= 60 && this.canSend(now, lastAlerts, 'long_activity')) {
+        const sessionAlerts = state.activitySessionAlerts;
+        if (activeMins >= 60 && !sessionAlerts.includes('long_activity')) {
           triggers.push('long_activity');
-        } else if (activeMins >= 30 && this.canSend(now, lastAlerts, 'post_activity')) {
+        } else if (activeMins >= 30 && !sessionAlerts.includes('post_activity')) {
           triggers.push('post_activity');
         }
       }
@@ -149,22 +247,45 @@ class NotificationEngine {
         }
       }
 
-      // 12 PM Low intake (< 50%) - Check only once
-      if (hour === 12 && totalMl < targetMl * 0.5 && !this.wasSentToday(lastAlerts, 'low_intake_12pm')) {
+      // 12 PM low intake (< 50%) and 4 PM below target (< 70%), once each.
+      //
+      // Checked over a window rather than on the exact hour. The engine only
+      // runs while the dashboard is mounted, so `hour === 12` meant a user who
+      // did not open the app between 12:00 and 12:59 never heard about being
+      // half a day behind on water. The window closes where the next check
+      // takes over, and `wasSentToday` still holds it to one delivery.
+      if (
+        hour >= 12 && hour < 16 &&
+        totalMl < targetMl * 0.5 &&
+        !this.wasSentToday(lastAlerts, 'low_intake_12pm')
+      ) {
          triggers.push('low_intake_12pm');
       }
 
-      // 4 PM Below target (< 70%) - Check only once
-      if (hour === 16 && totalMl < targetMl * 0.7 && !this.wasSentToday(lastAlerts, 'below_target_4pm')) {
+      if (
+        hour >= 16 && hour < 20 &&
+        totalMl < targetMl * 0.7 &&
+        !this.wasSentToday(lastAlerts, 'below_target_4pm')
+      ) {
          triggers.push('below_target_4pm');
       }
 
       // Environmental Alerts (3h cooldown)
+      // The band is chosen by temperature first and only then checked against
+      // its cooldown — the same shape as the risk bands above. Folding the
+      // cooldown into the first condition meant that while the 3-hourly
+      // extreme-heat alert was cooling down, 38 °C fell through to the milder
+      // "it's hot outside" message, so the user got one or the other every
+      // three hours instead of the extreme-heat alert alone.
       if (sensorData.temperature !== null) {
-        if (sensorData.temperature >= 35 && this.canSend(now, lastAlerts, 'extreme_heat')) {
-          triggers.push('extreme_heat');
-        } else if (sensorData.temperature >= 30 && this.canSend(now, lastAlerts, 'high_temp')) {
-          triggers.push('high_temp');
+        if (sensorData.temperature >= 35) {
+          if (this.canSend(now, lastAlerts, 'extreme_heat')) {
+            triggers.push('extreme_heat');
+          }
+        } else if (sensorData.temperature >= 30) {
+          if (this.canSend(now, lastAlerts, 'high_temp')) {
+            triggers.push('high_temp');
+          }
         }
       }
 
@@ -172,17 +293,17 @@ class NotificationEngine {
         triggers.push('high_humidity');
       }
 
-      // Morning / Night (Once per day)
-      const currentTimeStr = date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
-      if (currentTimeStr === '07:00' && !this.wasSentToday(lastAlerts, 'morning_msg')) {
-        triggers.push('morning_msg');
-      }
-      if (currentTimeStr === '22:00' && !this.wasSentToday(lastAlerts, 'night_msg')) {
-        triggers.push('night_msg');
-      }
+      // The morning (07:00) and night (22:00) messages are *not* raised here.
+      // They carry fixed text at a fixed time, so they are queued with the OS
+      // in `NotificationService.scheduleDailyNotifications` and arrive whether
+      // or not the app is open — which is the whole point of a 7 AM greeting.
 
-      // --- Weekly Summary (Mon 8 AM) ---
-      if (date.getDay() === 1 && hour === 8 && !this.wasSentToday(lastAlerts, 'weekly_summary')) {
+      // --- Weekly Summary (Monday, from 8 AM) ---
+      //
+      // Stays in the engine because its body is computed from the week's data
+      // at delivery time, which a pre-queued notification cannot do. From 08:00
+      // rather than at 08:00, so it survives the app being shut at that hour.
+      if (date.getDay() === 1 && hour >= 8 && !this.wasSentToday(lastAlerts, 'weekly_summary')) {
          triggers.push('weekly_summary');
       }
 
@@ -230,13 +351,26 @@ class NotificationEngine {
     }
 
     // Process triggers
+    //
+    // At most one goes out per evaluation, and no two are less than
+    // MIN_GAP_BETWEEN_ALERTS apart. Anything held back keeps its cooldown
+    // untouched, so a condition that is still true is simply raised again on a
+    // later tick rather than being lost.
     const hasPermission = await NotificationService.requestPermission();
+    const deliverable = this.selectDeliverable(triggers, now, state);
 
-    for (const trigger of triggers) {
+    if (deliverable.length) {
+      state.lastDeliveredAt = now;
+    }
+
+    for (const trigger of deliverable) {
       // Always update state that we "sent" it (to maintain cooldowns)
       state.lastAlerts[trigger] = now;
       if (trigger.startsWith('ai_')) {
         state.lastAlerts['ai_generic'] = now;
+      }
+      if (ACTIVITY_SESSION_TRIGGERS.includes(trigger)) {
+        state.activitySessionAlerts.push(trigger);
       }
 
       // Only actually deliver if permission is granted
@@ -248,13 +382,15 @@ class NotificationEngine {
     }
 
     await this.savePersistentState(state);
+
+    return { raised: triggers, delivered: hasPermission ? deliverable : [] };
   }
 
   /**
    * Triggers AI-driven notifications if credits are available,
    * else falls back to Rule-Based Mode.
    */
-  async triggerAI(type: 'reminder' | 'insight' | 'activity' | 'risk' | 'progress', profile: UserProfile): Promise<void> {
+  async triggerAI(type: AiNudge, profile: UserProfile): Promise<void> {
     const now = Date.now();
     const state = await this.getPersistentState();
 
@@ -265,33 +401,80 @@ class NotificationEngine {
        return;
     }
 
-    // 2. Check AI Quota/Credits (Simulated 429/Error)
-    const aiQuotaExhausted = false; // Mock state
+    // 2. Check AI Quota/Credits. When the provider is out of credit the nudge
+    //    is not dropped — it degrades to the plain rule-based reminder, so the
+    //    user still hears about their hydration, just without the AI phrasing.
+    const trigger = this.aiQuotaExhausted
+      ? AI_RULE_BASED_FALLBACK[type]
+      : AI_TRIGGERS[type];
 
-    if (aiQuotaExhausted) {
-      console.log(`[AI] Credits exhausted (429). Switching to Rule-Based Mode for ${type}.`);
-      return;
+    if (this.aiQuotaExhausted) {
+      console.log(`[AI] Credits exhausted (429). Rule-Based Mode for ${type}.`);
     }
 
-    // 3. Logic to decide specific AI trigger types
-    const triggerMap: Record<string, NotificationTrigger> = {
-      'reminder': 'ai_reminder',
-      'insight': 'ai_insight',
-      'activity': 'ai_activity',
-      'risk': 'ai_risk',
-      'progress': 'ai_progress'
-    };
+    if (!trigger) return;
 
-    const trigger = triggerMap[type];
-    if (trigger) {
-       const hasPermission = await NotificationService.requestPermission();
-       if (hasPermission) {
-         await this.sendNotification(trigger, profile);
-       }
-       state.lastAlerts[trigger] = now;
-       state.lastAlerts['ai_generic'] = now;
-       await this.savePersistentState(state);
+    const hasPermission = await NotificationService.requestPermission();
+    if (hasPermission) {
+      await this.sendNotification(trigger, profile);
     }
+    state.lastAlerts[trigger] = now;
+    // The spam gate covers the fallback too: a rule-based substitute is still
+    // the one nudge this 12-hour window is allowed.
+    state.lastAlerts['ai_generic'] = now;
+    await this.savePersistentState(state);
+  }
+
+  /**
+   * Marks the AI provider as out of credit, or back in credit.
+   *
+   * Called by whatever talks to the provider when it sees a 429, so the
+   * fallback is driven by a real signal rather than a constant.
+   */
+  setAiQuotaExhausted(exhausted: boolean): void {
+    this.aiQuotaExhausted = exhausted;
+  }
+
+  isAiQuotaExhausted(): boolean {
+    return this.aiQuotaExhausted;
+  }
+
+  /**
+   * The subset of this tick's triggers that may be delivered now.
+   *
+   * Returns at most one, the most urgent, and nothing at all while the spacing
+   * floor is still running — except for the alerts in `BYPASSES_SPACING`,
+   * which are urgent enough to interrupt.
+   */
+  private selectDeliverable(
+    triggers: NotificationTrigger[],
+    now: number,
+    state: EnginePersistentState
+  ): NotificationTrigger[] {
+    if (!triggers.length) return [];
+
+    const [top, ...held] = [...triggers].sort(
+      (a, b) => this.priorityOf(a) - this.priorityOf(b)
+    );
+
+    const sinceLast = now - (state.lastDeliveredAt || 0);
+    if (!BYPASSES_SPACING.includes(top) && sinceLast < NOTIFICATION_COOLDOWNS.MIN_GAP_BETWEEN_ALERTS) {
+      console.log(
+        `[NotificationEngine] Holding ${[top, ...held].join(', ')} — ` +
+          `${Math.round(sinceLast / 60000)} min since the last notification.`
+      );
+      return [];
+    }
+
+    if (held.length) {
+      console.log(`[NotificationEngine] Deferring ${held.join(', ')} behind ${top}.`);
+    }
+    return [top];
+  }
+
+  private priorityOf(trigger: NotificationTrigger): number {
+    const index = TRIGGER_PRIORITY.indexOf(trigger);
+    return index === -1 ? TRIGGER_PRIORITY.length : index;
   }
 
   private canSend(now: number, lastAlerts: Record<string, number>, trigger: NotificationTrigger): boolean {
@@ -343,8 +526,8 @@ class NotificationEngine {
       long_activity: { title: '🏃 Long Activity', body: 'You’ve completed a long activity session. Your body may need extra water, so please increase your water intake.' },
       low_battery: { title: '🔋 Low Battery', body: 'Your battery is low. Please charge your device to keep hydration tracking and reminders active.' },
       fully_charged: { title: '⚡ Fully Charged', body: 'Your device is fully charged. You’re all set to continue your hydration tracking.' },
-      morning_msg: { title: '🌅 Good Morning', body: 'Good morning! Start your day with a glass of water and stay hydrated throughout the day.' },
-      night_msg: { title: '🌙 Bedtime', body: 'It’s almost bedtime. Keep up your hydration.' },
+      // morning_msg / night_msg live in NotificationService.DAILY_MESSAGES —
+      // they are queued with the OS at 07:00 and 22:00, not raised from here.
       ai_reminder: { title: '🤖 Smart Nudge', body: 'Based on your hydration pattern, it may be a good time to drink some water. Stay ahead of dehydration!' },
       ai_insight: { title: '🤖 Intake Insight', body: 'Your water intake is lower than your usual pattern. Consider drinking some water to get back on track.' },
       ai_activity: { title: '🤖 Activity Note', body: 'Your recent activity may have increased your hydration needs. Drink water to replenish the fluids you lost.' },
@@ -384,7 +567,17 @@ class NotificationEngine {
 
   private async getPersistentState(): Promise<EnginePersistentState> {
     const raw = await AsyncStorage.getItem(ALERT_STATE_KEY);
-    return raw ? JSON.parse(raw) : { lastAlerts: {}, activeStartTimestamp: null, inactiveStartTimestamp: null };
+    const stored = raw ? JSON.parse(raw) : {};
+    // Spread over defaults so a state blob written by an older build — which
+    // has no `activitySessionAlerts` — still loads with a usable shape.
+    return {
+      lastAlerts: {},
+      activeStartTimestamp: null,
+      inactiveStartTimestamp: null,
+      lastDeliveredAt: 0,
+      ...stored,
+      activitySessionAlerts: Array.isArray(stored.activitySessionAlerts) ? stored.activitySessionAlerts : [],
+    };
   }
 
   private async savePersistentState(state: EnginePersistentState): Promise<void> {
