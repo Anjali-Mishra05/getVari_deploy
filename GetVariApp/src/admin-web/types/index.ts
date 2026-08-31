@@ -27,6 +27,7 @@ export interface User {
   riskHistory: number[];
   waterHistory: { time: string; amount: number }[];
   phone?: string;
+  fullProfile?: any;
 }
 
 export interface Alert {

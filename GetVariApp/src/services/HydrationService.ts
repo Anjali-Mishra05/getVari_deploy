@@ -1,15 +1,17 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-import { supabase } from './SupabaseClient';
-import { AuthService } from './AuthService';
-import NotificationService from './NotificationService';
-import ChatBus from './ChatBus';
 import type {
   HydrationLog,
   HydrationLogResult,
   HydrationSource,
   HydrationTotals,
+  VerificationSource,
 } from '../types';
+import { WATER_LOG_LIMITS } from '../config/edgeCaseConfig';
+import TelemetryHistoryService from './TelemetryHistoryService';
+import { supabase } from './SupabaseClient';
+import { AuthService } from './AuthService';
+import NotificationService from './NotificationService';
+import ChatBus from './ChatBus';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /**
  * The single writer for hydration entries.
@@ -42,6 +44,12 @@ export interface LogWaterParams {
   source?: HydrationSource;
   /** Idempotency key. Generated when the caller has no natural one. */
   requestId?: string;
+  /** Actual intake timestamp for backdating. */
+  reportedAt?: string;
+  /** Verification status. */
+  verificationSource?: VerificationSource;
+  /** Skip realism check (e.g. user already confirmed). */
+  confirmed?: boolean;
 }
 
 /** Row ids are user-scoped so two accounts can share a notification event id. */
@@ -136,6 +144,34 @@ export const fetchTodayLogs = async (userId?: string | null): Promise<HydrationL
   return (data ?? []).map(mapRow);
 };
 
+/**
+ * Calculates the average daily intake over the last 7 days.
+ */
+export const getRolling7DayIntakeAvg = async (userId: string): Promise<number> => {
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
+
+  const { data, error } = await supabase
+    .from(LOGS_TABLE)
+    .select('amount_ml, timestamp')
+    .eq('user_id', userId)
+    .gte('timestamp', sevenDaysAgo.toISOString());
+
+  if (error || !data) return DEFAULT_TARGET_ML; // Use target as fallback base
+
+  // Group by date to find daily totals
+  const dailyTotals: Record<string, number> = {};
+  data.forEach(log => {
+    const date = log.timestamp.split('T')[0];
+    dailyTotals[date] = (dailyTotals[date] || 0) + log.amount_ml;
+  });
+
+  const totals = Object.values(dailyTotals);
+  if (totals.length === 0) return DEFAULT_TARGET_ML;
+  return totals.reduce((a, b) => a + b, 0) / totals.length;
+};
+
 /** Millilitres logged today plus the user's daily goal. */
 export const getTodayTotals = async (userId?: string | null): Promise<HydrationTotals> => {
   const id = userId ?? (await AuthService.getCurrentUserId());
@@ -153,7 +189,9 @@ const performWrite = async (
   rowId: string,
   requestId: string,
   amountMl: number,
-  source: HydrationSource
+  source: HydrationSource,
+  reportedAt?: string,
+  verificationSource: VerificationSource = 'user-reported'
 ): Promise<HydrationLogResult> => {
   // Fast path: this exact request was already written on this device.
   if (await wasProcessed(rowId)) {
@@ -162,19 +200,21 @@ const performWrite = async (
     return { status: 'duplicate', requestId, amountMl, ...totals };
   }
 
+  const timestamp = new Date().toISOString();
+  const actualReportedAt = reportedAt || timestamp;
+
   const row = {
     id: rowId,
     user_id: userId,
-    timestamp: new Date().toISOString(),
+    timestamp: timestamp,
+    reported_at: actualReportedAt,
     amount_ml: amountMl,
     source,
+    verification_source: verificationSource,
   };
 
   const { data, error } = await supabase.from(LOGS_TABLE).insert(row).select();
 
-  // 23505 = unique violation. The row id already exists, which means this
-  // request was processed before (a retry, a replayed notification, a second
-  // device). Treat it as success without creating a second entry.
   if (error && error.code !== '23505') {
     console.error('[Hydration] Insert failed:', error.message, error.details);
     const totals = await getTodayTotals(userId);
@@ -192,7 +232,6 @@ const performWrite = async (
   const entry = data?.[0] ? mapRow(data[0]) : mapRow(row);
   const result: HydrationLogResult = { status: 'logged', requestId, amountMl, entry, ...totals };
 
-  // Something was logged, so the "you haven't logged" countdown restarts.
   try {
     await NotificationService.scheduleHydrationReminders();
   } catch (reminderError) {
@@ -204,23 +243,33 @@ const performWrite = async (
 };
 
 /**
- * Records an intake entry. Safe to call twice with the same `requestId` —
- * the second call reports `duplicate` and writes nothing.
+ * Records an intake entry.
+ * Validates against future dates, negative values, and unrealistic amounts.
  */
-export const logWater = async ({
-  amountMl,
-  source = 'ai_chat',
-  requestId,
-}: LogWaterParams): Promise<HydrationLogResult> => {
+export const logWater = async (params: LogWaterParams): Promise<HydrationLogResult & { needsConfirmation?: boolean }> => {
+  const { amountMl, source = 'ai_chat', requestId, reportedAt, verificationSource, confirmed } = params;
   const id = requestId ?? generateRequestId(source);
   const rounded = Math.round(amountMl);
 
-  if (!Number.isFinite(rounded) || rounded <= 0 || rounded > MAX_SINGLE_ENTRY_ML) {
+  // 1. Basic Validation
+  if (!Number.isFinite(rounded) || rounded <= 0) {
     return {
       status: 'error',
       requestId: id,
       amountMl: rounded,
-      error: 'Amount out of range',
+      error: 'Amount must be positive',
+      totalMl: 0,
+      targetMl: DEFAULT_TARGET_ML,
+    };
+  }
+
+  // Block future intake
+  if (reportedAt && new Date(reportedAt).getTime() > Date.now()) {
+    return {
+      status: 'error',
+      requestId: id,
+      amountMl: rounded,
+      error: 'Future water intake cannot be logged',
       totalMl: 0,
       targetMl: DEFAULT_TARGET_ML,
     };
@@ -238,13 +287,29 @@ export const logWater = async ({
     };
   }
 
-  const rowId = buildRowId(userId, id);
+  // 2. Realism Check vs 7-day rolling average
+  if (!confirmed) {
+    const rollingAvg = await HydrationService.getRolling7DayIntakeAvg(userId);
+    const threshold = Math.max(WATER_LOG_LIMITS.DEFAULT_MAX_SINGLE_ML, rollingAvg * WATER_LOG_LIMITS.UNREALISTIC_FACTOR);
 
-  // Collapse concurrent calls for the same request onto one round trip.
+    if (rounded > threshold) {
+      return {
+        status: 'error',
+        requestId: id,
+        amountMl: rounded,
+        needsConfirmation: true,
+        error: 'Unusually large intake detected. Please confirm.',
+        totalMl: 0,
+        targetMl: DEFAULT_TARGET_ML,
+      };
+    }
+  }
+
+  const rowId = buildRowId(userId, id);
   const existing = inFlight.get(rowId);
   if (existing) return existing;
 
-  const pending = performWrite(userId, rowId, id, rounded, source).catch(error => {
+  const pending = performWrite(userId, rowId, id, rounded, source, reportedAt, verificationSource).catch(error => {
     console.error('[Hydration] Fatal error while logging:', error);
     return {
       status: 'error' as const,
@@ -268,6 +333,7 @@ export const HydrationService = {
   logWater,
   getTodayTotals,
   fetchTodayLogs,
+  getRolling7DayIntakeAvg,
   generateRequestId,
   DEFAULT_TARGET_ML,
 };

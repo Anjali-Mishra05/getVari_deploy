@@ -19,5 +19,6 @@ module.exports = {
     '<rootDir>/__tests__/algoCompliance.test.ts',
     '<rootDir>/__tests__/pbwrAlgorithm.test.ts',
     '<rootDir>/__tests__/pbwrMock.test.ts',
+    '<rootDir>/__tests__/edgeCases.test.ts',
   ],
 };

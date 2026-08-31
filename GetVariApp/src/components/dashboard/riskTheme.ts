@@ -34,6 +34,10 @@ export const statusColor = (status: HydrationRiskStatus): string => {
       return RISK_AMBER;
     case 'High Risk':
       return RISK_ORANGE;
+    case 'Insufficient Data':
+      return '#64748b'; // slate-500
+    case 'Device Error':
+      return '#f59e0b'; // amber-500
     default:
       return RISK_RED;
   }

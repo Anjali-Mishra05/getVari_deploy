@@ -23,6 +23,10 @@ export interface UserProfile {
   waterHabit: HabitRating;
   targetDailyMl: number;
   medicalConditions?: string[];
+  /** Per-notification-type cooldown timestamps (epoch ms). */
+  lastAlertsSent?: Record<string, number>;
+  /** Timestamp of the last weekly summary (YYYY-MM-DD). */
+  lastWeeklySummaryDate?: string;
   /** City chosen for the climate model. Mirrored into `location` on save. */
   selectedCity?: string;
   /** Approximate nightly sleep window, captured during onboarding. */
@@ -34,7 +38,16 @@ export interface UserProfile {
   longitude?: number;
 }
 
-export type ConnectionState = 'connected' | 'syncing' | 'disconnected' | 'low_battery';
+export type ConnectionState =
+  | 'connected'
+  | 'syncing'
+  | 'disconnected'
+  | 'low_battery'
+  | 'offline'
+  | 'status_unknown'
+  | 'device_error'
+  | 'charging'
+  | 'fully_charged';
 
 export interface WearableDevice {
   id: string;
@@ -43,44 +56,49 @@ export interface WearableDevice {
   connected: boolean;
   batteryLevel?: number;
   lastSynced?: string;
+  isCharging?: boolean;
 }
 
 export interface SensorData {
-  heartRate: number; // bpm
-  steps: number; // cumulative or interval steps
-  activityLoad: number; // 0-100 score of active movement
-  temperature: number; // °C ambient or skin, let's represent both
-  humidity: number; // % relative humidity
-  sweatGSR: number; // microsiemens simulated electrodermal sweat rate
+  heartRate: number | null; // bpm, null if missing/invalid
+  steps: number | null; // cumulative or interval steps, null if missing/invalid
+  activityLoad: number | null; // 0-100 score of active movement, null if missing/invalid
+  temperature: number | null; // °C ambient or skin, null if missing/invalid
+  humidity: number | null; // % relative humidity, null if missing/invalid
+  sweatGSR: number | null; // microsiemens, null if missing/invalid
   hydrationScore: number; // 0-100 calculated score (100 is fully hydrated, 0 is critical)
-  batteryLevel: number; // wearable battery %
-  rssi: number; // Bluetooth signal strength (-100 to -30 dBm)
+  batteryLevel: number | null; // wearable battery %, null if missing/invalid
+  rssi: number | null; // Bluetooth signal strength, null if missing/invalid
   lastUpdated: string; // ISO string
 }
 
 export interface HydrationRiskDetails {
-  score: number; // 0 - 100 Risk Score
-  status: 'Hydrated' | 'Mild Risk' | 'High Risk' | 'Critical';
+  score: number | null; // 0 - 100 Risk Score, null if insufficient data
+  status: 'Hydrated' | 'Mild Risk' | 'High Risk' | 'Critical' | 'Insufficient Data' | 'Device Error';
   color: string;
   bgColor: string;
   textGlow: string;
   meaning: string;
   suggestedAction: string;
   glassesRequired?: number;
-  heartLoad: number;
-  activityLoad: number;
-  temperatureLoad: number;
-  humidityLoad: number;
-  timeLoad: number;
+  heartLoad: number | null;
+  activityLoad: number | null;
+  temperatureLoad: number | null;
+  humidityLoad: number | null;
+  timeLoad: number | null;
 }
 
 export type HydrationSource = 'manual' | 'wearable_prediction' | 'smart_cap' | 'ai_chat';
+export type VerificationSource = 'user-reported' | 'sensor-verified';
 
 export interface HydrationLog {
   id: string;
-  timestamp: string;
+  timestamp: string; // creation timestamp
+  reportedAt?: string; // actual intake timestamp for backdating
   amountMl: number; // water intake logged manually or estimated
   source: HydrationSource;
+  verificationSource?: VerificationSource;
+  syncedToCloud?: boolean;
 }
 
 /** Outcome of a write through HydrationService. */

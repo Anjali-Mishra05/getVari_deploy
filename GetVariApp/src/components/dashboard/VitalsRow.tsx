@@ -53,22 +53,22 @@ const Vital: React.FC<VitalProps> = ({
 
 /** Heart rate, strain and body temperature — the three live sensor readings. */
 const VitalsRow: React.FC<VitalsRowProps> = ({ sensorData, connected = true }) => {
-  const dash = (value: string) => (connected ? value : '--');
+  const dash = (value: any) => (connected && value !== null ? String(value) : '--');
 
   return (
     <View className="flex-row gap-2.5 mb-4">
       <Vital
         icon={<Heart color="#ef4444" size={13} />}
         label="HR BPM"
-        value={dash(String(sensorData.heartRate))}
+        value={dash(sensorData.heartRate)}
         unit="BPM"
         unitColor="#ef4444"
-        caption={sensorData.heartRate > 100 ? 'Cardio load high' : 'Baseline stable'}
+        caption={sensorData.heartRate && sensorData.heartRate > 100 ? 'Cardio load high' : 'Baseline stable'}
       />
       <Vital
         icon={<Activity color="#a78bfa" size={13} />}
         label="Strain"
-        value={dash(String(sensorData.activityLoad))}
+        value={dash(sensorData.activityLoad)}
         unit="/100"
         unitColor="#a78bfa"
         caption="Active kinetic force"
@@ -76,7 +76,7 @@ const VitalsRow: React.FC<VitalsRowProps> = ({ sensorData, connected = true }) =
       <Vital
         icon={<Thermometer color="#f97316" size={13} />}
         label="Body Temp"
-        value={dash(sensorData.temperature.toFixed(1))}
+        value={dash(sensorData.temperature !== null ? sensorData.temperature.toFixed(1) : null)}
         unit="°C"
         unitColor="#f97316"
         caption="Safe recovery state"

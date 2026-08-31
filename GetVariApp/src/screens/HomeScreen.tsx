@@ -5,6 +5,7 @@ import {
   Activity,
   Droplets,
   Bell,
+  BellOff,
   Plus,
   Battery,
   TrendingUp,
@@ -44,12 +45,15 @@ import FluidLogSuccessModal from '../components/dashboard/FluidLogSuccessModal';
 import PBWRBreakdownCard from '../components/dashboard/PBWRBreakdownCard';
 import PBWRService, { PBWRBreakdown } from '../services/PBWRService';
 import TelemetryHistoryService from '../services/TelemetryHistoryService';
+import NotificationEngine from '../services/NotificationEngine';
+import { STALENESS_LIMIT_MS } from '../config/edgeCaseConfig';
 
 const HomeScreen = ({ navigation }: any) => {
   const [waterLogs, setWaterLogs] = useState<HydrationLog[]>([]);
   const [userProfile, setUserProfile] = useState<UserProfile | undefined>(undefined);
   const [userId, setUserId] = useState<string | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [quickLogOpen, setQuickLogOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileEditOpen, setProfileEditOpen] = useState(false);
@@ -168,6 +172,8 @@ const HomeScreen = ({ navigation }: any) => {
     try {
       await NotificationService.setupFCM();
       await NotificationService.getFCMToken();
+      const hasPermission = await NotificationService.requestPermission();
+      setNotificationsEnabled(hasPermission);
       await NotificationService.scheduleHydrationReminders();
     } catch (error) {
       console.error('[Notifications] Setup failed:', error);
@@ -187,6 +193,9 @@ const HomeScreen = ({ navigation }: any) => {
       if (profile) {
         console.log('[Supabase] Profile data loaded:', profile);
         setUserProfile(profile);
+
+        // Sync local telemetry history to Supabase for Admin parity
+        TelemetryHistoryService.syncLocalToCloud(userId);
 
         // Reminders are scheduled by the OS from contexts that never see this
         // row, so the sleep window is handed to the notification layer on
@@ -351,10 +360,19 @@ const HomeScreen = ({ navigation }: any) => {
   }, [telemetry.solvedRisk.status, totalWaterConsumed, userProfile, userId]);
 
   useEffect(() => {
-    if (telemetry.sensorData) {
-      TelemetryHistoryService.recordSnapshot(telemetry.sensorData);
+    if (telemetry.sensorData && userProfile && userId) {
+      // 1. Record snapshot for history
+      TelemetryHistoryService.recordSnapshot(telemetry.sensorData, userId);
+
+      // 2. Evaluate all notification triggers
+      NotificationEngine.evaluate({
+        sensorData: telemetry.sensorData,
+        profile: userProfile,
+        todayLogs: waterLogs,
+        solvedRisk: telemetry.solvedRisk
+      });
     }
-  }, [telemetry.sensorData]);
+  }, [telemetry.sensorData, userProfile, userId, telemetry.solvedRisk, waterLogs]);
 
   const isPhysicianGated = useMemo(() => {
     const gated = ['hypertension', 'ckd', 'heart'];
@@ -447,6 +465,22 @@ const HomeScreen = ({ navigation }: any) => {
 
           <VitalsRow sensorData={telemetry.sensorData} />
 
+          {!notificationsEnabled && (
+            <GlassCard className="mb-4 bg-amber-500/10 border-amber-500/20 rounded-2xl p-4 flex-row items-center gap-3">
+              <BellOff color="#f59e0b" size={20} />
+              <View className="flex-1">
+                <Text className="text-amber-500 font-bold text-xs">Notifications are disabled</Text>
+                <Text className="text-amber-500/70 text-[10px] mt-0.5">You won't receive hydration reminders or risk alerts.</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => NotificationService.requestPermission().then(setNotificationsEnabled)}
+                className="bg-amber-500/20 px-3 py-1.5 rounded-lg border border-amber-500/30"
+              >
+                <Text className="text-amber-500 font-bold text-[10px]">ENABLE</Text>
+              </TouchableOpacity>
+            </GlassCard>
+          )}
+
           <AmbientCard
             location={userProfile?.location}
             temperature={telemetry.sensorData.temperature}
@@ -497,17 +531,17 @@ const HomeScreen = ({ navigation }: any) => {
                   ESP32 Core Link
                 </Text>
                 <View className="flex-row items-center gap-1.5 mt-1">
-                  <View className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  <View className={`w-1.5 h-1.5 rounded-full ${TelemetryHistoryService.isFresh(telemetry.sensorData.lastUpdated) ? 'bg-emerald-500' : 'bg-red-500'}`} />
                   <Text className="text-[9px] text-neutral-500 font-mono font-bold uppercase tracking-widest">
-                    Streaming encrypted
+                    {TelemetryHistoryService.isFresh(telemetry.sensorData.lastUpdated) ? 'Streaming encrypted' : 'Offline / Status Unknown'}
                   </Text>
                 </View>
               </View>
             </View>
             <View className="flex-row items-center gap-2.5 bg-white/[0.03] px-3 py-1.5 rounded-xl">
-              <Battery color="#10b981" size={16} />
-              <Text className="text-[11px] font-black text-emerald-500 font-mono">
-                {telemetry.sensorData.batteryLevel}%
+              <Battery color={telemetry.sensorData.batteryLevel && telemetry.sensorData.batteryLevel <= 20 ? '#ef4444' : '#10b981'} size={16} />
+              <Text className={`text-[11px] font-black font-mono ${telemetry.sensorData.batteryLevel && telemetry.sensorData.batteryLevel <= 20 ? 'text-red-500' : 'text-emerald-500'}`}>
+                {telemetry.sensorData.batteryLevel !== null ? `${telemetry.sensorData.batteryLevel}%` : '--%'}
               </Text>
             </View>
           </GlassCard>

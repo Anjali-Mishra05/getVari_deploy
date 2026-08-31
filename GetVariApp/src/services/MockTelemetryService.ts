@@ -40,6 +40,7 @@ export class MockTelemetryService {
       avgHumidity: data.humidity,
       totalSteps: data.steps,
       avgHeartRate: data.heartRate,
+      isMock: true,
     };
   }
 

@@ -33,11 +33,10 @@ export class SupabaseAdminService {
         const userLogs = (logs || []).filter(l => l.user_id === p.id);
         const waterIntakeMl = userLogs.reduce((sum, l) => sum + (l.amount_ml || 0), 0);
 
-        // 1. Get Mock Primary Telemetry
         const mockTelemetry = MockTelemetryService.getMockPrimaryTelemetry(p.id);
 
         // 2. Calculate Time Since Last Drink (REAL)
-        let hoursSinceDrink = 2.0; // Default assumption if no logs
+        let hoursSinceDrink: number | null = null;
         if (userLogs.length > 0) {
           const newest = userLogs.reduce((latest, log) =>
             new Date(log.timestamp) > new Date(latest.timestamp) ? log : latest
@@ -46,11 +45,7 @@ export class SupabaseAdminService {
           hoursSinceDrink = Math.max(0, Math.min(8, hoursSinceDrink));
         }
 
-        // 3. Calculate Risk Score via Engine (Mock Primary + Real Secondary)
-        // We use a simplified version of activeAbsorbedHydration for the admin panel overview
-        // Higher intake today increases the active pool, lowering risk.
-        const activeAbsorbed = Math.min(1000, 200 + waterIntakeMl);
-
+        // 3. Calculate Risk Score via Engine
         const engineResult = HydrationRiskEngine.solveRisk({
           heartRate: mockTelemetry.heartRate,
           activityLoad: mockTelemetry.activityLoad,
@@ -131,7 +126,8 @@ export class SupabaseAdminService {
           targetDailyMl: target,
           riskHistory,
           waterHistory,
-          phone: p.phone_number || undefined
+          phone: p.phone_number || undefined,
+          fullProfile: profile,
         };
       });
     } catch (error) {

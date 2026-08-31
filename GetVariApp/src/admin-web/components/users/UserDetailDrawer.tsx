@@ -5,6 +5,8 @@ import { addOverlay, removeOverlay, forceClearLocks } from '../../utils/overlayM
 import Badge from '../shared/Badge';
 import { User } from '../../types';
 import { sendCriticalAlert } from '../../services/AdminAlertService';
+import PBWRAdminSection from './PBWRAdminSection';
+import PBWRService, { PBWRBreakdown } from '../../../services/PBWRService';
 
 interface UserDetailDrawerProps {
   user?: User;
@@ -14,6 +16,15 @@ interface UserDetailDrawerProps {
 const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) => {
   if (!user) return null;
   const [alertState, setAlertState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [pbwrBreakdown, setPbwrBreakdown] = useState<PBWRBreakdown | null>(null);
+
+  useEffect(() => {
+    if (user) {
+      PBWRService.calculatePBWR((user as any).fullProfile, user.waterIntakeMl, user.id)
+        .then(setPbwrBreakdown)
+        .catch(err => console.error('[UserDetailDrawer] PBWR calculation failed:', err));
+    }
+  }, [user]);
 
   const handleSendAlert = async () => {
     if (user.status !== 'Critical') {
@@ -122,10 +133,21 @@ const UserDetailDrawer: React.FC<UserDetailDrawerProps> = ({ user, onClose }) =>
 
               <div className="mt-3">
                 <span className="text-[10px] uppercase font-black tracking-widest text-blue-400 block">DAILY TARGET</span>
-                <p className="text-sm font-black text-blue-700 mt-1">{user.targetDailyMl} ml</p>
+                <p className="text-sm font-black text-blue-700 mt-1">
+                  {pbwrBreakdown
+                    ? `${(pbwrBreakdown.finalTarget / 1000).toFixed(2)} L (${Math.round(pbwrBreakdown.finalTarget)} mL)`
+                    : `${user.targetDailyMl} ml`}
+                </p>
               </div>
             </div>
           </div>
+
+          <PBWRAdminSection
+            userId={user.id}
+            fullProfile={(user as any).fullProfile}
+            waterIntakeMl={user.waterIntakeMl}
+            breakdown={pbwrBreakdown}
+          />
 
           <div className="bg-slate-50 p-5 rounded-3xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">

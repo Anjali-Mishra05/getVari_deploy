@@ -35,7 +35,7 @@ class PBWRService {
   };
 
   private AGE_FACTORS = [
-    { min: 19, max: 39, factor: 1.00 },
+    { min: 0, max: 39, factor: 1.00 },
     { min: 40, max: 59, factor: 0.95 },
     { min: 60, max: 150, factor: 0.90 },
   ];
@@ -99,18 +99,22 @@ class PBWRService {
     const pbwrBaseline = profile.weightKg * genderRate * ageFactor;
 
     // 2. Stage 2 - 7-Day Calibration
-    // Logic: If we have 7 days of history (real or mock), calibration is complete.
-    const snapshots = await TelemetryHistoryService.getHistory(userId, profile);
-    const isCalibrationPeriod = snapshots.length < 7;
-
-    // In Stage 2 (Days 1-7), target = PBWR only.
-    // However, with mock fallback, snapshots.length will be 7 for any userId/profile.
+    // Logic: With mock fallback, snapshots.length will be 7 for any valid userId/profile.
+    // We fetch averages (Real + Mock Fallback) for the rolling calculation.
     const avgs = await TelemetryHistoryService.getAverages(7, userId, profile);
 
+    // Stage 2 check: For "Calibration" display, we might want to know if real data exists.
+    const snapshots = await TelemetryHistoryService.getHistory(userId, profile);
+    // If all 7 days were mock, it's strictly calibration.
+    // In a real app, we'd check against profile.created_at as well.
+    const isCalibrationPeriod = snapshots.every(s => (s as any).isMock);
+    // Wait, getMockHistoricalSnapshot doesn't set isMock. Let me add that.
+
     // 3. Stage 3 - Adjustment Bands
-    let activityAdj = this.STEP_BANDS.find(b => avgs.avgSteps >= b.min)?.adj || 0;
-    let tempAdj = this.TEMP_BANDS.find(b => avgs.avgTemp >= b.min)?.adj || 0;
-    let humidityAdj = this.HUMIDITY_BANDS.find(b => avgs.avgHumidity >= b.min)?.adj || 0;
+    // "Missing != Zero": If averages are null, no adjustment is applied.
+    let activityAdj = avgs.avgSteps !== null ? (this.STEP_BANDS.find(b => (avgs.avgSteps || 0) >= b.min)?.adj || 0) : 0;
+    let tempAdj = avgs.avgTemp !== null ? (this.TEMP_BANDS.find(b => (avgs.avgTemp || 0) >= b.min)?.adj || 0) : 0;
+    let humidityAdj = avgs.avgHumidity !== null ? (this.HUMIDITY_BANDS.find(b => (avgs.avgHumidity || 0) >= b.min)?.adj || 0) : 0;
 
     if (isCalibrationPeriod) {
         activityAdj = 0;
@@ -179,16 +183,16 @@ class PBWRService {
     const finalDailyWaterTarget = Math.max(1500, Math.min(adjustedTotal, upperLimit));
 
     return {
-      pbwrBaseline: Math.round(pbwrBaseline),
+      pbwrBaseline: pbwrBaseline,
       activityAdj,
       tempAdj,
       humidityAdj,
       workEnvAdj,
       healthAdj,
-      adjustedTotal: Math.round(adjustedTotal),
-      upperLimit: Math.round(upperLimit),
-      finalTarget: Math.round(finalDailyWaterTarget),
-      remaining: Math.max(0, Math.round(finalDailyWaterTarget - waterConsumedMl)),
+      adjustedTotal: adjustedTotal,
+      upperLimit: upperLimit,
+      finalTarget: finalDailyWaterTarget,
+      remaining: Math.max(0, finalDailyWaterTarget - waterConsumedMl),
       isCalibrationPeriod,
       isPhysicianGated,
       physicianLimitEntered: !!profile.physicianLimitMl,

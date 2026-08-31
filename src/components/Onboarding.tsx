@@ -116,7 +116,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       let targetMl = weight * 35;
       if (activityLevel === 'active') targetMl += 600;
       if (activityLevel === 'elite') targetMl += 1200;
-      
+
       // Dynamic scaling based on selected clinical states:
       if (medicalConditions.includes('Diabetes')) {
         targetMl += 450; // High blood glucose demands increased osmotic dilution base
@@ -136,7 +136,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       if (selectedCity) {
         const hotCities = ['Mumbai', 'Delhi', 'Chennai', 'Kolkata', 'Hyderabad', 'Ahmedabad', 'Jaipur'];
         const moderateCities = ['Bengaluru', 'Pune', 'Tokyo', 'San Francisco'];
-        
+
         if (hotCities.some(city => selectedCity.includes(city))) {
           climateModifier = 350; // Extra hydration allocation for tropical climate baseline
         } else if (moderateCities.some(city => selectedCity.includes(city))) {

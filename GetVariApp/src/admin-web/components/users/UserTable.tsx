@@ -69,7 +69,9 @@ const UserTable: React.FC<UserTableProps> = ({ users, onUserClick }) => {
                   <td className="px-6 py-5 align-middle">
                     <div className="flex flex-col gap-1.5">
                       <span className="text-sm font-bold text-slate-800">{u.heartRate || '--'} bpm</span>
-                      <span className="text-xs font-medium text-slate-500">Exertion: {u.activityLoad || 0}%</span>
+                      <span className="text-xs font-medium text-slate-500">
+                      Exertion: {u.activityLoad !== null ? `${u.activityLoad}%` : '--'}
+                    </span>
                     </div>
                   </td>
                   <td className="px-6 py-5 align-middle">

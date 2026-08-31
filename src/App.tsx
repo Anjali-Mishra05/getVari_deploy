@@ -1431,10 +1431,10 @@ export default function App() {
                           </span>
                         )}
                         <span id="hydration-radial-score" className={`text-5xl font-extrabold tracking-tighter ${theme === 'light' ? 'text-[#020813]' : 'text-white'}`}>
-                          {Math.round(displayedScore)}
+                          {solvedRisk.score !== null ? Math.round(displayedScore) : '--'}
                         </span>
                         <span className={`text-[9px] uppercase tracking-widest ${theme === 'light' ? 'text-[#1c3b70]' : 'text-gray-400'} font-semibold font-mono`}>
-                          Dehydration Risk
+                          {solvedRisk.score !== null ? 'Dehydration Risk' : solvedRisk.status}
                         </span>
                       </div>
                     </div>
@@ -1561,7 +1561,7 @@ export default function App() {
                           <span className="text-red-500 text-[10px] mb-1 font-mono">BPM</span>
                         </div>
                         <span className={`text-[9px] ${theme === 'light' ? 'text-slate-500' : 'text-gray-500'} font-sans tracking-tight`}>
-                          {sensorData.heartRate > 100 ? 'Cardio Load high' : 'Baseline stable'}
+                          {sensorData.heartRate && sensorData.heartRate > 100 ? 'Cardio Load high' : 'Baseline stable'}
                         </span>
                       </div>
 
@@ -1586,7 +1586,7 @@ export default function App() {
                         </div>
                         <div className="flex items-end gap-1 my-2">
                           <span id="live-metric-temp" className={`text-3xl font-bold tracking-tight ${theme === 'light' ? 'text-[#020813]' : 'text-white'} font-mono`}>
-                            {deviceConnection === 'disconnected' ? '--' : sensorData.temperature.toFixed(1)}
+                            {deviceConnection === 'disconnected' || sensorData.temperature === null ? '--' : sensorData.temperature.toFixed(1)}
                           </span>
                           <span className="text-orange-500 text-[10px] mb-1 font-mono">°C</span>
                         </div>
@@ -1603,7 +1603,7 @@ export default function App() {
                           <span className={`text-xs font-bold ${theme === 'light' ? 'text-[#020813]' : 'text-neutral-100'} font-sans`}>Mumbai</span>
                         </div>
                         <span className={`text-xs font-mono font-extrabold ${theme === 'light' ? 'text-sky-600' : 'text-cyan-300'}`}>
-                          {sensorData.temperature.toFixed(1)}°C, {sensorData.humidity}% H
+                          {sensorData.temperature !== null ? `${sensorData.temperature.toFixed(1)}°C` : '--°C'}, {sensorData.humidity !== null ? `${sensorData.humidity}% H` : '--% H'}
                         </span>
                       </div>
 

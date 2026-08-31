@@ -77,7 +77,7 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
   // the whole dashboard several times a second.
   const ringProgress = useSharedValue(0);
   useEffect(() => {
-    ringProgress.value = withTiming(Math.min(100, risk.score) / 100, { duration: 700 });
+    ringProgress.value = withTiming(risk.score !== null ? Math.min(100, risk.score) / 100 : 0, { duration: 700 });
   }, [risk.score, ringProgress]);
 
   const ringProps = useAnimatedProps(() => ({
@@ -88,11 +88,11 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
   const targetPercent = Math.min(100, Math.round((totalMl / targetMl) * 100));
 
   const loads = [
-    { label: 'Heart', value: Math.round(risk.heartLoad) },
-    { label: 'Activity', value: Math.round(risk.activityLoad) },
-    { label: 'Temp', value: Math.round(risk.temperatureLoad) },
-    { label: 'Humidity', value: Math.round(risk.humidityLoad) },
-    { label: 'Time', value: Math.round(risk.timeLoad) },
+    { label: 'Heart', value: risk.heartLoad },
+    { label: 'Activity', value: risk.activityLoad },
+    { label: 'Temp', value: risk.temperatureLoad },
+    { label: 'Humidity', value: risk.humidityLoad },
+    { label: 'Time', value: risk.timeLoad },
   ];
 
   return (
@@ -139,10 +139,10 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
           </Svg>
           <View className="absolute items-center justify-center">
             <Text className="text-[56px] font-black text-white" style={{ letterSpacing: -2 }}>
-              {risk.score}
+              {risk.score !== null ? Math.round(risk.score) : '--'}
             </Text>
             <Text className="text-[9px] uppercase tracking-[0.25em] text-neutral-500 font-mono font-black mt-[-4px]">
-              Dehydration Risk
+              {risk.score !== null ? 'Dehydration Risk' : 'Insufficient Data'}
             </Text>
           </View>
         </View>
@@ -232,11 +232,16 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
               <Text className="text-[8px] text-neutral-400" numberOfLines={1}>
                 {load.label}
               </Text>
-              <Text className="text-[12px] font-black text-white font-mono my-0.5">{load.value}</Text>
+              <Text className="text-[12px] font-black text-white font-mono my-0.5">
+                {load.value !== null ? Math.round(load.value) : '--'}
+              </Text>
               <View className="w-full h-1 rounded-full bg-white/10 overflow-hidden">
                 <View
                   className="h-full rounded-full"
-                  style={{ width: `${load.value}%`, backgroundColor: loadColor(load.value) }}
+                  style={{
+                    width: `${load.value !== null ? load.value : 0}%`,
+                    backgroundColor: load.value !== null ? loadColor(load.value) : '#334155'
+                  }}
                 />
               </View>
             </View>

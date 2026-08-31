@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { HydrationLog, HydrationRiskDetails, SensorData, UserProfile } from '../types';
-import { runHydrationRiskSolver } from '../utils/hydrationModel';
+import { calculateRecoveryEstimation, calculatePredictedRiskAfterDrink } from '../utils/hydrationModel';
 import {
   SleepSchedule,
   awakeHoursBetween,
@@ -10,6 +10,9 @@ import {
   mlPerAwakeHour,
   normaliseSleepSchedule,
 } from '../utils/sleepWindow';
+import TelemetryHistoryService from '../services/TelemetryHistoryService';
+import { AuthService } from '../services/AuthService';
+import { HydrationRiskEngine } from '../utils/hydrationRiskEngine';
 
 /**
  * The physiological loop behind the home dashboard.
@@ -96,17 +99,26 @@ const heatStress = (temperature: number, humidity: number): number => {
 
 /** Gastric emptying slows under sympathetic load: strain and heat both cost. */
 export const absorptionRateFor = (sensors: SensorData): number => {
-  const activityFactor = Math.min(0.4, (sensors.activityLoad / 100) * 0.4);
-  const heatFactor = Math.min(0.3, (heatStress(sensors.temperature, sensors.humidity) / 100) * 0.3);
+  const activity = sensors.activityLoad ?? 14; // Default if missing
+  const temperature = sensors.temperature ?? 22;
+  const humidity = sensors.humidity ?? 44;
+
+  const activityFactor = Math.min(0.4, (activity / 100) * 0.4);
+  const heatFactor = Math.min(0.3, (heatStress(temperature, humidity) / 100) * 0.3);
   const multiplier = Math.max(0.3, 1 - activityFactor - heatFactor);
   return BASELINE_ABSORPTION_ML_PER_MIN * multiplier;
 };
 
 /** Perspiration scales with both exertion and the ambient thermal load. */
-export const sweatLossRateFor = (sensors: SensorData): number =>
-  BASELINE_SWEAT_ML_PER_MIN +
-  (sensors.activityLoad / 100) * 8.6 +
-  (heatStress(sensors.temperature, sensors.humidity) / 100) * 5.0;
+export const sweatLossRateFor = (sensors: SensorData): number => {
+  const activity = sensors.activityLoad ?? 14;
+  const temperature = sensors.temperature ?? 22;
+  const humidity = sensors.humidity ?? 44;
+
+  return BASELINE_SWEAT_ML_PER_MIN +
+    (activity / 100) * 8.6 +
+    (heatStress(temperature, humidity) / 100) * 5.0;
+};
 
 /**
  * Hours between now and the newest entry, or the no-log assumption.
@@ -144,6 +156,8 @@ export const useHydrationTelemetry = (
   const sleepSchedule = useMemo(() => normaliseSleepSchedule(profile), [profile]);
 
   const [sensorData, setSensorData] = useState<SensorData>(INITIAL_SENSORS);
+  const [historicalAverages, setHistoricalAverages] = useState<{ avgHR: number | null; avgSteps: number | null; avgTemp: number | null; avgHumidity: number | null } | null>(null);
+  const [isDamaged, setIsDamaged] = useState(false);
   const [stomachVolume, setStomachVolume] = useState(0);
   const [absorbedHydration, setAbsorbedHydration] = useState(180);
   const [effectiveHoursSinceDrink, setEffectiveHoursSinceDrink] = useState(() =>
@@ -246,10 +260,56 @@ export const useHydrationTelemetry = (
     return () => clearInterval(interval);
   }, []);
 
-  const solvedRisk = useMemo(
-    () => runHydrationRiskSolver(sensorData, effectiveHoursSinceDrink, absorbedHydration, profile),
-    [sensorData, effectiveHoursSinceDrink, absorbedHydration, profile]
-  );
+  useEffect(() => {
+    if (profile) {
+      AuthService.getCurrentUserId().then(uid => {
+        if (uid) {
+          Promise.all([
+            TelemetryHistoryService.getAverages(7, uid, profile),
+            TelemetryHistoryService.checkDeviceDamage()
+          ]).then(([avgs, damaged]) => {
+            setHistoricalAverages({
+              avgHR: avgs.avgHR ?? null,
+              avgSteps: avgs.avgSteps ?? null,
+              avgTemp: avgs.avgTemp ?? null,
+              avgHumidity: avgs.avgHumidity ?? null,
+            });
+            setIsDamaged(damaged);
+          });
+        }
+      });
+    }
+  }, [profile]);
+
+  const solvedRisk = useMemo(() => {
+    const fresh = TelemetryHistoryService.isFresh(sensorData.lastUpdated);
+
+    // 1. Enforce staleness: if data is old, treat it as null for the solve
+    const inputs = {
+      heartRate: fresh ? sensorData.heartRate : null,
+      activityLoad: fresh ? sensorData.activityLoad : null,
+      temperature: fresh ? sensorData.temperature : null,
+      humidity: fresh ? sensorData.humidity : null,
+      timeSinceWaterIntake: effectiveHoursSinceDrink
+    };
+
+    const result = HydrationRiskEngine.solveRisk(
+      inputs,
+      profile,
+      historicalAverages ?? undefined
+    );
+
+    // 2. Hardware failure override
+    if (isDamaged) {
+      return {
+        ...result,
+        status: 'Device Error',
+        meaning: 'Persistent sensor failure detected. Your wearable may be damaged.',
+        suggestedAction: 'Inspect your device for water or physical damage.'
+      };
+    }
+    return result;
+  }, [sensorData, effectiveHoursSinceDrink, profile, historicalAverages, isDamaged]);
 
   const ingestFluid = useCallback((amountMl: number) => {
     stomachRef.current = Number(Math.min(STOMACH_CAPACITY_ML, stomachRef.current + amountMl).toFixed(1));

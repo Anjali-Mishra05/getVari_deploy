@@ -7,8 +7,8 @@ import GlassCard from '../GlassCard';
 interface AmbientCardProps {
   /** City from the onboarding profile; falls back when it was never set. */
   location?: string;
-  temperature: number;
-  humidity: number;
+  temperature: number | null;
+  humidity: number | null;
 }
 
 /**
@@ -23,7 +23,7 @@ const AmbientCard: React.FC<AmbientCardProps> = ({ location, temperature, humidi
         <Text className="text-[12px] font-black text-neutral-100">{location || 'Your area'}</Text>
       </View>
       <Text className="text-[12px] font-mono font-black text-cyan-300">
-        {temperature.toFixed(1)}°C, {humidity}% H
+        {temperature !== null ? `${temperature.toFixed(1)}°C` : '--°C'}, {humidity !== null ? `${humidity}% H` : '--% H'}
       </Text>
     </View>
 
@@ -35,7 +35,9 @@ const AmbientCard: React.FC<AmbientCardProps> = ({ location, temperature, humidi
         <Text className="text-[9.5px] uppercase text-neutral-400 font-mono font-black tracking-wide">
           Ambient Humidity
         </Text>
-        <Text className="text-[19px] font-black text-white font-mono mt-0.5">{humidity}% rH</Text>
+        <Text className="text-[19px] font-black text-white font-mono mt-0.5">
+          {humidity !== null ? `${humidity}% rH` : '--% rH'}
+        </Text>
       </View>
     </View>
 

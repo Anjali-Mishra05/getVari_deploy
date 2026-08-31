@@ -90,48 +90,53 @@ export const RISK_CONFIG = {
 };
 
 export interface HydrationEngineInput {
-  heartRate: number;              // BPM
-  activityLoad: number;           // 0-100 active movement index
-  temperature: number;            // °C ambient
-  humidity: number;               // % relative humidity
-  timeSinceWaterIntake: number;   // Hours since last hydration log
+  heartRate: number | null;              // BPM
+  activityLoad: number | null;           // 0-100 active movement index
+  temperature: number | null;            // °C ambient
+  humidity: number | null;               // % relative humidity
+  timeSinceWaterIntake: number | null;   // Hours since last hydration log
 }
 
-export type HydrationRiskStatus = 'Hydrated' | 'Mild Risk' | 'High Risk' | 'Critical';
+export type HydrationRiskStatus = 'Hydrated' | 'Mild Risk' | 'High Risk' | 'Critical' | 'Insufficient Data' | 'Device Error';
 
 export interface HydrationEngineOutput {
-  score: number;                  // 0-100 Risk Score
+  score: number | null;                  // 0-100 Risk Score, null if insufficient data
   status: HydrationRiskStatus;    // Risk Status Category
   meaning: string;                // Physiological explanation
   suggestedAction: string;        // Clinical hydration recommendation
   glassesRequired?: number;       // Suggested glasses needed to recover
   
   // Intermediate debug and analytics load values
-  heartLoad: number;
-  activityLoadScore: number;
-  temperatureLoad: number;
-  humidityLoad: number;
-  timeLoad: number;
+  heartLoad: number | null;
+  activityLoadScore: number | null;
+  temperatureLoad: number | null;
+  humidityLoad: number | null;
+  timeLoad: number | null;
 }
 
 export class HydrationRiskEngine {
-  public static calculateHeartLoad(heartRate: number): number {
+  public static calculateHeartLoad(heartRate: number | null): number | null {
+    if (heartRate === null) return null;
     return this.mapLoad(heartRate, RISK_CONFIG.LOAD_MAPPING.HEART_RATE);
   }
 
-  public static calculateActivityLoad(activityLoad: number): number {
+  public static calculateActivityLoad(activityLoad: number | null): number | null {
+    if (activityLoad === null) return null;
     return this.mapLoad(activityLoad, RISK_CONFIG.LOAD_MAPPING.ACTIVITY);
   }
 
-  public static calculateTemperatureLoad(temperature: number): number {
+  public static calculateTemperatureLoad(temperature: number | null): number | null {
+    if (temperature === null) return null;
     return this.mapLoad(temperature, RISK_CONFIG.LOAD_MAPPING.TEMPERATURE);
   }
 
-  public static calculateHumidityLoad(humidity: number): number {
+  public static calculateHumidityLoad(humidity: number | null): number | null {
+    if (humidity === null) return null;
     return this.mapLoad(humidity, RISK_CONFIG.LOAD_MAPPING.HUMIDITY);
   }
 
-  public static calculateTimeLoad(hoursSinceDrink: number): number {
+  public static calculateTimeLoad(hoursSinceDrink: number | null): number | null {
+    if (hoursSinceDrink === null) return null;
     return this.mapLoad(hoursSinceDrink, RISK_CONFIG.LOAD_MAPPING.TIME_SINCE_DRINK);
   }
 
@@ -203,16 +208,60 @@ export class HydrationRiskEngine {
 
   /**
    * Computes the Hydration Risk Score using exact user weights and personal multipliers.
+   * Handles "Missing != Zero" with 7-day valid history fallback.
    */
   public static solveRisk(
     inputs: HydrationEngineInput,
-    profile?: UserProfile
+    profile?: UserProfile,
+    historicalAverages?: { avgHR: number | null; avgSteps: number | null; avgTemp: number | null; avgHumidity: number | null }
   ): HydrationEngineOutput {
-    // 1. Start with base weights and multipliers
+    // 1. Determine base metrics with fallback to historical data if real-time is missing/stale
+    const heartRate = inputs.heartRate ?? historicalAverages?.avgHR ?? null;
+    const activityLoad = inputs.activityLoad ?? (historicalAverages?.avgSteps ? Math.min(100, (historicalAverages.avgSteps / 10000) * 80) : null);
+    const temperature = inputs.temperature ?? historicalAverages?.avgTemp ?? null;
+    const humidity = inputs.humidity ?? historicalAverages?.avgHumidity ?? null;
+    const timeSinceWaterIntake = inputs.timeSinceWaterIntake; // No historical fallback for delay
+
+    const heartLoad = this.calculateHeartLoad(heartRate);
+    const activityLoadScore = this.calculateActivityLoad(activityLoad);
+    const temperatureLoad = this.calculateTemperatureLoad(temperature);
+    const humidityLoad = this.calculateHumidityLoad(humidity);
+    const timeLoad = this.calculateTimeLoad(timeSinceWaterIntake);
+
+    // If core metrics are missing even after historical fallback, we report insufficient data.
+    const missingCount = [heartLoad, activityLoadScore, temperatureLoad, humidityLoad, timeLoad].filter(l => l === null).length;
+
+    if (missingCount >= 2) {
+      return {
+        score: null,
+        status: 'Insufficient Data',
+        meaning: 'Not enough valid sensor or historical data to calculate a reliable score.',
+        suggestedAction: 'Ensure your wearable is connected or wait for more history to accumulate.',
+        heartLoad,
+        activityLoadScore,
+        temperatureLoad,
+        humidityLoad,
+        timeLoad
+      };
+    }
+
+    // --- Device Error Detection ---
+    // If readings are physically impossible (per configuration), flag error.
+    if (inputs.heartRate !== null && (inputs.heartRate > 220 || inputs.heartRate < 30)) {
+       return {
+         score: null,
+         status: 'Device Error',
+         meaning: 'Abnormal sensor readings detected. Your wearable may be damaged or incorrectly worn.',
+         suggestedAction: 'Inspect your device for water or physical damage.',
+         heartLoad, activityLoadScore, temperatureLoad, humidityLoad, timeLoad
+       };
+    }
+
+    // 2. Start with base weights and multipliers
     let w = { ...RISK_CONFIG.BASELINE_WEIGHTS };
     let m = { heart: 1.0, activity: 1.0, temp: 1.0, humidity: 1.0, time: 1.0 };
 
-    // 2. Apply Dynamic Personalization (Adjusting m and w)
+    // Apply Dynamic Personalization (Adjusting m and w)
     if (profile) {
       // Weight scaling
       if (profile.weightKg > RISK_CONFIG.THRESHOLDS.WEIGHT_LIMIT) {
@@ -268,30 +317,40 @@ export class HydrationRiskEngine {
       }
     }
 
-    // 3. Normalize Weights so their sum equals exactly 1.0
-    const sumWeights = w.heart + w.activity + w.temp + w.humidity + w.time;
+    // 3. Normalize Weights (only for available metrics)
+    let sumWeights = 0;
+    if (heartLoad !== null) sumWeights += w.heart;
+    if (activityLoadScore !== null) sumWeights += w.activity;
+    if (temperatureLoad !== null) sumWeights += w.temp;
+    if (humidityLoad !== null) sumWeights += w.humidity;
+    if (timeLoad !== null) sumWeights += w.time;
+
+    if (sumWeights === 0) {
+       return { score: null, status: 'Insufficient Data', meaning: 'Insufficient valid data.', suggestedAction: 'Check sensors.', heartLoad, activityLoadScore, temperatureLoad, humidityLoad, timeLoad };
+    }
+
     const wNorm = {
-      heart: w.heart / sumWeights,
-      activity: w.activity / sumWeights,
-      temp: w.temp / sumWeights,
-      humidity: w.humidity / sumWeights,
-      time: w.time / sumWeights,
+      heart: heartLoad !== null ? w.heart / sumWeights : 0,
+      activity: activityLoadScore !== null ? w.activity / sumWeights : 0,
+      temp: temperatureLoad !== null ? w.temp / sumWeights : 0,
+      humidity: humidityLoad !== null ? w.humidity / sumWeights : 0,
+      time: timeLoad !== null ? w.time / sumWeights : 0,
     };
 
     // 4. Calculate Adjusted Loads (Clamped at 100)
-    const heartLoad = Math.min(100, this.calculateHeartLoad(inputs.heartRate) * m.heart);
-    const activityLoadScore = Math.min(100, this.calculateActivityLoad(inputs.activityLoad) * m.activity);
-    const temperatureLoad = Math.min(100, this.calculateTemperatureLoad(inputs.temperature) * m.temp);
-    const humidityLoad = Math.min(100, this.calculateHumidityLoad(inputs.humidity) * m.humidity);
-    const timeLoad = Math.min(100, this.calculateTimeLoad(inputs.timeSinceWaterIntake) * m.time);
+    const adjHeart = heartLoad !== null ? Math.min(100, heartLoad * m.heart) : 0;
+    const adjActivity = activityLoadScore !== null ? Math.min(100, activityLoadScore * m.activity) : 0;
+    const adjTemp = temperatureLoad !== null ? Math.min(100, temperatureLoad * m.temp) : 0;
+    const adjHumid = humidityLoad !== null ? Math.min(100, humidityLoad * m.humidity) : 0;
+    const adjTime = timeLoad !== null ? Math.min(100, timeLoad * m.time) : 0;
 
     // 5. Final Linear Combination
     const rawRisk = 
-      (wNorm.heart * heartLoad) +
-      (wNorm.activity * activityLoadScore) +
-      (wNorm.temp * temperatureLoad) +
-      (wNorm.humidity * humidityLoad) +
-      (wNorm.time * timeLoad);
+      (wNorm.heart * adjHeart) +
+      (wNorm.activity * adjActivity) +
+      (wNorm.temp * adjTemp) +
+      (wNorm.humidity * adjHumid) +
+      (wNorm.time * adjTime);
 
     const finalRisk = Math.min(100, Math.max(0, Math.round(rawRisk)));
 
