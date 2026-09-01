@@ -1,7 +1,7 @@
 import os
 from typing import List, Optional, TypedDict
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from supabase import create_client, Client
 import requests
@@ -13,14 +13,38 @@ load_dotenv()
 
 app = FastAPI()
 
-# Add CORS middleware
+# Origins allowed to call this from a browser. Native apps ignore CORS, so this
+# only matters for the admin web build; a public deployment should name it
+# rather than leaving the wildcard.
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Shared secret the app sends as `X-API-Key`.
+#
+# This process holds a Supabase *service-role* key, which bypasses row-level
+# security: an open /chat on a public URL is an unauthenticated path to every
+# user's data. Set AQUASAGE_API_KEY on any deployment that is reachable from
+# the internet. Left unset it stays open, which is fine on a laptop and is why
+# local development needs no extra setup — the startup warning below is there
+# so an unset key in production is at least loud.
+AQUASAGE_API_KEY = os.getenv("AQUASAGE_API_KEY")
+if not AQUASAGE_API_KEY:
+    print("[AquaSage] WARNING: AQUASAGE_API_KEY is unset — /chat is unauthenticated.")
+
+
+def require_api_key(supplied: Optional[str]) -> None:
+    """Reject a request that does not carry the shared secret."""
+    if not AQUASAGE_API_KEY:
+        return
+    if supplied != AQUASAGE_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 # Supabase setup
 supabase_url: str = os.getenv("SUPABASE_URL", "https://ntuboicvzsoamwedtprg.supabase.co")
@@ -32,8 +56,14 @@ supabase: Client = create_client(supabase_url, supabase_key)
 JINA_API_KEY = os.getenv("JINA_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# Groq retires models on its own schedule — `llama-3.3-70b-versatile` was the
+# default here until it stopped existing, which surfaces as a 404 from /chat
+# and reads to the user as "the AI is down". Kept in the environment so the
+# next retirement is a config change on the host, not a redeploy.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
 model = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model=GROQ_MODEL,
     groq_api_key=GROQ_API_KEY,
     temperature=0.2
 )
@@ -241,7 +271,8 @@ async def ping():
     return {"status": "ok"}
 
 @app.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, x_api_key: Optional[str] = Header(default=None)):
+    require_api_key(x_api_key)
     print(f"\n>>> INCOMING REQUEST: {request.question}")
     try:
         inputs = {
@@ -265,4 +296,5 @@ if __name__ == "__main__":
     print("Listening on: http://0.0.0.0:8000")
     print("For Emulator: Use address http://10.0.2.2:8000")
     print("="*50 + "\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # PORT is what every managed host (Render, Fly, Cloud Run) injects.
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

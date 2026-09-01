@@ -27,7 +27,7 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
-import { backendCandidates } from '../config/backend';
+import { BACKEND_API_KEY, backendCandidates } from '../config/backend';
 import ChatBus from '../services/ChatBus';
 import HydrationService from '../services/HydrationService';
 import HydrationPromptSession from '../services/HydrationPromptSession';
@@ -572,7 +572,11 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
 
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // Only sent when configured: a local server runs without the check.
+          ...(BACKEND_API_KEY ? { 'X-API-Key': BACKEND_API_KEY } : {}),
+        },
         body: JSON.stringify({
           question: text,
           chatHistory,

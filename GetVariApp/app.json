@@ -1,4 +1,6 @@
 {
   "name": "GetVariApp",
-  "displayName": "GetVariApp"
+  "displayName": "GetVariApp",
+  "aquaSageBackendUrl": "",
+  "aquaSageApiKey": ""
 }

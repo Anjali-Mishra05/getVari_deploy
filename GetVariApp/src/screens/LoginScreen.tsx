@@ -15,7 +15,7 @@ import {
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
-import { AuthService, AuthChallenge } from '../services/AuthService';
+import { AuthService, AuthChallenge, DEMO_PASSCODE } from '../services/AuthService';
 import { AlertTriangle, Cpu } from 'lucide-react-native';
 import { cssInterop } from 'react-native-css-interop';
 import GlassCard from '../components/GlassCard';
@@ -248,7 +248,7 @@ const LoginScreen = ({ navigation }: any) => {
                     <Text className="text-[10px] text-[#00f2fe] font-black uppercase font-mono tracking-[0.18em]">DEMO / INVESTOR TESTING KEY</Text>
                   </View>
                   <Text className="text-[11px] text-neutral-500 leading-6 font-medium">
-                    Enter any Indian mobile number, check the Terms & Conditions checkbox, and submit. The demo verification passcode is <Text className="text-[#00f2fe] font-black">123456</Text>.
+                    Enter any Indian mobile number, check the Terms & Conditions checkbox, and submit. The demo verification passcode is <Text className="text-[#00f2fe] font-black">{DEMO_PASSCODE}</Text>.
                   </Text>
                 </View>
               </View>
