@@ -60,7 +60,12 @@ jest.mock('@notifee/react-native', () => ({
     displayNotification: () => Promise.resolve(),
     onForegroundEvent: () => () => {},
     onBackgroundEvent: () => {},
-    getNotificationSettings: () => Promise.resolve({ android: { alarm: 1 } }),
+    // Serves both readers: the exact-alarm check reads `android.alarm`, and
+    // the permission check reads `authorizationStatus` — a plain read, with no
+    // dialog and no focus change, which is why it is consulted before ever
+    // prompting the user.
+    getNotificationSettings: () =>
+      Promise.resolve({ authorizationStatus: mockAuthStatus, android: { alarm: 1 } }),
   },
   AlarmType: { SET_ALARM_CLOCK: 1, SET_EXACT_AND_ALLOW_WHILE_IDLE: 0 },
   AndroidImportance: { HIGH: 4 },
@@ -271,5 +276,51 @@ describe('N17/N18: fixed-time daily messages', () => {
     mockAuthStatus = 0; // DENIED
     await NotificationService.scheduleDailyNotifications(Date.now());
     expect(dailyQueue()).toHaveLength(0);
+  });
+});
+
+describe('Burst of scheduling calls', () => {
+  /**
+   * Android re-reports 'active' repeatedly, and a hydration write reschedules
+   * too, so several callers can ask for the same rebuild at once. Rebuilding
+   * takes real native work, so the queue has to collapse duplicates: without
+   * that it grows faster than it drains and a caller awaiting its own turn —
+   * the chat's "Saving…" spinner, for one — never gets it.
+   */
+  test('overlapping calls collapse into one rebuild', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 10, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    // Prime the queue so the calls below land while one run is in flight.
+    const first = NotificationService.scheduleHydrationReminders(now);
+    const burst = Array.from({ length: 20 }, (_, i) =>
+      NotificationService.scheduleHydrationReminders(now + i)
+    );
+
+    await Promise.all([first, ...burst]);
+
+    // One run in flight plus at most one collapsed follow-up.
+    expect(mockQueued.length).toBeLessThanOrEqual(SLOTS * 2);
+  });
+
+  test('every caller in a burst is resolved rather than left waiting', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 10, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    const settled: string[] = [];
+    const calls = [
+      NotificationService.scheduleHydrationReminders(now).then(() => settled.push('r1')),
+      NotificationService.scheduleDailyNotifications(now).then(() => settled.push('d1')),
+      NotificationService.scheduleHydrationReminders(now).then(() => settled.push('r2')),
+      NotificationService.scheduleDailyNotifications(now).then(() => settled.push('d2')),
+      // The one a hydration write makes, arriving last and behind the rest.
+      NotificationService.scheduleHydrationReminders(now).then(() => settled.push('write')),
+    ];
+
+    await Promise.all(calls);
+    expect(settled).toHaveLength(5);
+    expect(settled).toContain('write');
   });
 });

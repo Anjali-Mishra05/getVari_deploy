@@ -88,6 +88,17 @@ const REMINDER_SLOTS = Math.floor(REMINDER_COVERAGE_MS / REMINDER_INTERVAL_MS);
  */
 const REMINDER_RESUME_OFFSET_MS = 30 * 60 * 1000;
 
+/**
+ * Ceiling on one queue rebuild.
+ *
+ * Every notifee call here is a native round trip, and a native promise that
+ * never settles would otherwise wedge the scheduling chain for the life of the
+ * process — no reminder ever rescheduled again, and every caller waiting on it
+ * stuck. A rebuild that overruns this is abandoned so the next one can run;
+ * the queue it left behind is still valid, just older than intended.
+ */
+const RESCHEDULE_TIMEOUT_MS = 20 * 1000;
+
 /** Marks a notification as the "you haven't logged water" nudge. */
 export const HYDRATION_REMINDER_TYPE = 'hydration_reminder';
 
@@ -163,12 +174,75 @@ class NotificationService {
   /** Serialises reminder (re)scheduling so overlapping calls can't interleave. */
   private schedulingQueue: Promise<void> = Promise.resolve();
 
+  /** Whether the user has already been shown the prompt this session. */
+  private permissionAsked = false;
+
+  /**
+   * The reschedule of each kind that is queued but has not started yet.
+   *
+   * Rebuilding a queue takes seconds of native work, so callers that fire in
+   * bursts — a foreground event, a profile load and a hydration write landing
+   * together — could pile up more work than the chain could drain, and a
+   * caller awaiting its own turn would wait indefinitely. Only one reschedule
+   * of a kind is ever worth having in the queue: they all rebuild the same
+   * thing from scratch, so a second one waiting behind the first is pure
+   * duplicate work. Extra callers join the pending run instead, taking the
+   * most recent `fromMs` with them.
+   */
+  private pending: Record<'reminders' | 'daily', { run: Promise<void>; fromMs: number } | null> = {
+    reminders: null,
+    daily: null,
+  };
+
+  /**
+   * Queue `task`, collapsing it into an identical one that is already waiting.
+   */
+  private enqueue(
+    kind: 'reminders' | 'daily',
+    fromMs: number,
+    task: (at: number) => Promise<void>
+  ): Promise<void> {
+    const waiting = this.pending[kind];
+    if (waiting) {
+      // Run from the latest request; the earlier one has not started yet.
+      waiting.fromMs = Math.max(waiting.fromMs, fromMs);
+      return waiting.run;
+    }
+
+    const entry = { fromMs, run: Promise.resolve() };
+    entry.run = this.schedulingQueue.then(() => {
+      // Started: from here on a new call needs its own run.
+      this.pending[kind] = null;
+      return this.withTimeout(kind, task(entry.fromMs));
+    });
+    this.pending[kind] = entry;
+    this.schedulingQueue = entry.run.catch(() => undefined);
+    return entry.run;
+  }
+
   /**
    * Last known sleep window, cached so the hot path (deciding whether to show
    * a notification) doesn't have to await storage on every call. `undefined`
    * means "not read yet"; `null` means "read, and the user has none".
    */
   private sleepSchedule: SleepSchedule | null | undefined = undefined;
+
+  /** Resolves when `work` finishes, or when it has taken too long. */
+  private withTimeout(kind: string, work: Promise<void>): Promise<void> {
+    return new Promise<void>(resolve => {
+      const timer = setTimeout(() => {
+        console.warn(`[Reminders] ${kind} rebuild timed out; moving on.`);
+        resolve();
+      }, RESCHEDULE_TIMEOUT_MS);
+
+      work
+        .catch(error => console.error(`[Reminders] ${kind} rebuild failed:`, error))
+        .finally(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+    });
+  }
 
   /* ------------------------------------------------------------------ *
    * Sleep window
@@ -249,9 +323,33 @@ class NotificationService {
   }
 
   /**
-   * Request permission for Android 13+ and iOS.
+   * Whether the app may post notifications, asking the user at most once.
+   *
+   * This used to call `notifee.requestPermission()` every time — and it is
+   * called from the engine's evaluation, which runs on every telemetry tick.
+   * On Android each of those spins up the system `GrantPermissionsActivity`;
+   * with the permission already granted it closes again without drawing
+   * anything, but it still takes focus for a moment. Twice a second that is
+   * enough to restart the keyboard mid-word, blank the screen between frames
+   * and fire an app-state change — the "unstable keyboard" in the chat, and a
+   * flood of foreground events behind it.
+   *
+   * So: read the current setting, which is a plain query with no dialog, and
+   * only ever put the prompt in front of the user once per session.
    */
   async requestPermission(): Promise<boolean> {
+    try {
+      const current = await notifee.getNotificationSettings();
+      if (current.authorizationStatus >= AuthorizationStatus.AUTHORIZED) return true;
+    } catch (error) {
+      console.warn('[Notifications] Could not read permission state:', error);
+    }
+
+    // Not granted. Ask — but only the first time, so a user who has said no is
+    // not asked again on every tick for the rest of the session.
+    if (this.permissionAsked) return false;
+    this.permissionAsked = true;
+
     const settings = await notifee.requestPermission();
     return settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
   }
@@ -398,8 +496,7 @@ class NotificationService {
    * again in the morning.
    */
   async scheduleHydrationReminders(fromMs: number = Date.now()): Promise<void> {
-    this.schedulingQueue = this.schedulingQueue.then(() => this.rescheduleReminders(fromMs));
-    return this.schedulingQueue;
+    return this.enqueue('reminders', fromMs, at => this.rescheduleReminders(at));
   }
 
   private async rescheduleReminders(fromMs: number): Promise<void> {
@@ -521,8 +618,7 @@ class NotificationService {
    * sleep window is applied to slots that were already scheduled.
    */
   async scheduleDailyNotifications(fromMs: number = Date.now()): Promise<void> {
-    this.schedulingQueue = this.schedulingQueue.then(() => this.rescheduleDaily(fromMs));
-    return this.schedulingQueue;
+    return this.enqueue('daily', fromMs, at => this.rescheduleDaily(at));
   }
 
   private async rescheduleDaily(fromMs: number): Promise<void> {

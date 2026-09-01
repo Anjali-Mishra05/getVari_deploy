@@ -9,6 +9,7 @@ import {
   Keyboard,
   Platform,
   ActivityIndicator,
+  Dimensions,
   Modal,
   Image,
   StyleSheet,
@@ -163,6 +164,75 @@ const styles = StyleSheet.create({
 let messageCounter = 0;
 const nextMessageId = () => `msg_${Date.now()}_${messageCounter++}`;
 
+interface ChatComposerProps {
+  placeholder: string;
+  /** True while a write or an answer is in flight. */
+  busy: boolean;
+  onSend: (text: string) => void;
+}
+
+/**
+ * The message box, with the draft text kept inside it.
+ *
+ * The draft used to live on the chat itself, so every keystroke re-rendered
+ * the whole sheet — the transcript, the quick replies, the lot — while the
+ * dashboard behind it re-rendered the chat every two seconds on its own
+ * telemetry tick. Under that much churn Android restarts the input method
+ * mid-word (`keyboardDidShow` fired nine times while typing a single
+ * sentence), which is what made the keyboard feel unstable. Memoised and
+ * holding its own state, this re-renders on a keystroke and nothing else does.
+ */
+const ChatComposer = React.memo(function ChatComposer({
+  placeholder,
+  busy,
+  onSend,
+}: ChatComposerProps) {
+  const [text, setText] = useState('');
+
+  const send = () => {
+    const trimmed = text.trim();
+    if (!trimmed || busy) return;
+    setText('');
+    onSend(trimmed);
+  };
+
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(255,255,255,0.05)',
+        borderRadius: 24,
+        paddingHorizontal: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.15)',
+      }}
+    >
+      <TextInput
+        value={text}
+        onChangeText={setText}
+        placeholder={placeholder}
+        placeholderTextColor="#475569"
+        style={{ flex: 1, color: '#ffffff', paddingVertical: 12, fontSize: 15 }}
+        multiline
+        blurOnSubmit={false}
+      />
+      <Pressable
+        onPress={send}
+        disabled={!text.trim() || busy}
+        hitSlop={12}
+        style={({ pressed }) => ({
+          marginLeft: 8,
+          paddingVertical: 8,
+          opacity: pressed ? 0.5 : 1,
+        })}
+      >
+        <Send color={text.trim() ? '#00f2fe' : '#475569'} size={24} />
+      </Pressable>
+    </View>
+  );
+});
+
 const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [logFlow, setLogFlow] = useState<LogFlowState>('idle');
@@ -201,11 +271,12 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
       timestamp: new Date(),
     },
   ]);
-  const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   /** Label of the quick reply currently being written, so it can show a spinner. */
   const [pendingReply, setPendingReply] = useState<string | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
+  /** Latest `handleSend`, so `submitMessage` can stay identity-stable. */
+  const handleSendRef = useRef<(text: string) => Promise<void>>(async () => {});
   /**
    * The teaser cycles rather than sitting there permanently: one line fades in,
    * holds long enough to read, fades out, and after a quiet beat the next one
@@ -216,7 +287,19 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   const [teaserShown, setTeaserShown] = useState(true);
   const [serverUrl, setServerUrl] = useState<string | null>(null);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth } = useWindowDimensions();
+  /**
+   * Screen height, not window height.
+   *
+   * The activity is `adjustResize`, so the *window* shrinks when the keyboard
+   * opens — and it does so on its own schedule, a frame or two apart from the
+   * `keyboardDidShow` event. Sizing the sheet from a value that is itself
+   * moving, while also subtracting the keyboard, meant the height was computed
+   * from two disagreeing measurements of the same thing and settled somewhere
+   * new on every frame: the jitter you feel as soon as you start typing.
+   * Screen metrics are fixed, so the keyboard is subtracted exactly once.
+   */
+  const screenHeight = Dimensions.get('screen').height;
 
   /**
    * Quick-reply buttons are sized in pixels rather than by flex.
@@ -251,20 +334,14 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   // Leave room for the status bar so the sheet never runs off the top.
   const SHEET_TOP_GAP = 60;
   /**
-   * Floor for the sheet, and the reason it exists.
-   *
-   * Android resizes the window when the keyboard opens, so `windowHeight` has
-   * often *already* lost the keyboard by the time `keyboardDidShow` reports
-   * its height. Subtracting it again double-counts the keyboard and collapses
-   * the sheet — which squeezed the quick replies down to nothing, and left the
-   * two measurements fighting each other frame to frame (the visible
-   * flicker). Clamping to a usable height makes a bad measurement harmless and
-   * gives the layout a single stable resting point.
+   * Floor for the sheet: a small screen with a tall keyboard must still leave
+   * room for the quick replies and the input, even if that means the sheet
+   * reaches behind the keyboard.
    */
   const MIN_SHEET_HEIGHT = 420;
   const sheetHeight = Math.max(
     MIN_SHEET_HEIGHT,
-    Math.min(windowHeight * 0.82, windowHeight - keyboardHeight - SHEET_TOP_GAP)
+    Math.min(screenHeight * 0.82, screenHeight - keyboardHeight - SHEET_TOP_GAP)
   );
 
   /**
@@ -634,12 +711,22 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
       .finally(() => setPendingReply(null));
   };
 
-  const handleSend = async (override?: string) => {
-    const text = (override ?? input).trim();
+  /**
+   * Handed to the memoised composer.
+   *
+   * Routed through a ref so its identity never changes: a new function on each
+   * render would re-render the composer on every telemetry tick and undo the
+   * memo that keeps the keyboard steady.
+   */
+  const submitMessage = useCallback((text: string) => {
+    void handleSendRef.current(text);
+  }, []);
+
+  const handleSend = async (raw: string) => {
+    const text = raw.trim();
     if (!text || isLoading) return;
 
     const messageId = appendMessage('user', text);
-    setInput('');
 
     if (logFlow === 'awaiting_amount') return handleAmountReply(text, messageId);
     if (logFlow === 'awaiting_choice') return handleChoiceReply(text, messageId);
@@ -659,6 +746,8 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
 
     await askBackend(text);
   };
+
+  handleSendRef.current = handleSend;
 
   useEffect(() => {
     if (scrollViewRef.current) {
@@ -991,43 +1080,17 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                   </View>
                 )}
 
-                <View style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  backgroundColor: 'rgba(255,255,255,0.05)',
-                  borderRadius: 24,
-                  paddingHorizontal: 16,
-                  borderWidth: 1,
-                  borderColor: 'rgba(255,255,255,0.15)'
-                }}>
-                  <TextInput
-                    value={input}
-                    onChangeText={setInput}
-                    placeholder={
-                      logFlow === 'awaiting_amount'
-                        ? 'e.g. 500 ml or 1.5 litres...'
-                        : logFlow === 'awaiting_choice'
-                        ? 'Tap an option, or type the amount'
-                        : 'Ask, or log water (e.g. "I drank 500 ml")'
-                    }
-                    placeholderTextColor="#475569"
-                    style={{ flex: 1, color: '#ffffff', paddingVertical: 12, fontSize: 15 }}
-                    multiline
-                    blurOnSubmit={false}
-                  />
-                  <Pressable
-                    onPress={() => handleSend()}
-                    disabled={!input.trim() || isLoading}
-                    hitSlop={12}
-                    style={({ pressed }) => ({
-                      marginLeft: 8,
-                      paddingVertical: 8,
-                      opacity: pressed ? 0.5 : 1,
-                    })}
-                  >
-                    <Send color={input.trim() ? '#00f2fe' : '#475569'} size={24} />
-                  </Pressable>
-                </View>
+                <ChatComposer
+                  placeholder={
+                    logFlow === 'awaiting_amount'
+                      ? 'e.g. 500 ml or 1.5 litres...'
+                      : logFlow === 'awaiting_choice'
+                      ? 'Tap an option, or type the amount'
+                      : 'Ask, or log water (e.g. "I drank 500 ml")'
+                  }
+                  busy={isLoading}
+                  onSend={submitMessage}
+                />
                 <Text style={{ color: '#475569', fontSize: 9, textAlign: 'center', marginTop: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                   AquaSage AI answers strictly from research documents
                 </Text>
@@ -1040,4 +1103,10 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   );
 };
 
-export default AquaSageChat;
+/**
+ * Memoised because the dashboard that renders it re-renders every two seconds
+ * on its telemetry tick, and the chat has no reason to follow: its props change
+ * only when the profile is reloaded. Without this, the sheet — and the text
+ * input inside it — was rebuilt under the user's fingers twice a second.
+ */
+export default React.memo(AquaSageChat);

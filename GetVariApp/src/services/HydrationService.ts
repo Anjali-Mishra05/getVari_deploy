@@ -264,11 +264,14 @@ const performWrite = async (
   const entry = data?.[0] ? mapRow(data[0]) : mapRow(row);
   const result: HydrationLogResult = { status: 'logged', requestId, amountMl, entry, ...totals };
 
-  try {
-    await NotificationService.scheduleHydrationReminders();
-  } catch (reminderError) {
+  // Resetting the reminder countdown is a side effect of the entry, not part
+  // of it, so it is deliberately *not* awaited. Awaiting it made the user's
+  // confirmation hostage to the OS: notifee's scheduling stalled behind other
+  // native work and the chat sat on "Saving…" indefinitely for a row that was
+  // already safely written.
+  NotificationService.scheduleHydrationReminders().catch(reminderError => {
     console.error('[Hydration] Failed to reset reminders:', reminderError);
-  }
+  });
 
   ChatBus.emitHydrationLogged(result);
   return result;
