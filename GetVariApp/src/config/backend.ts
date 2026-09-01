@@ -23,7 +23,12 @@ export const BACKEND_PORT = 8000;
  * Empty means "not configured": development still discovers the host on its
  * own, and a release build fails fast with the message the chat already shows.
  */
-const CONFIGURED_URL: string = (appConfig as { aquaSageBackendUrl?: string }).aquaSageBackendUrl ?? '';
+const CONFIGURED_URL: string = (
+  (appConfig as { aquaSageBackendUrl?: string }).aquaSageBackendUrl ?? ''
+).replace(/\/+$/, '');
+
+/** The configured backend, or '' when this build has to discover one. */
+export const CONFIGURED_BACKEND_URL = CONFIGURED_URL;
 
 /**
  * Shared secret for the deployed backend, sent as `X-API-Key`.
@@ -66,7 +71,7 @@ export function backendCandidates(): string[] {
   const candidates: string[] = [];
 
   if (CONFIGURED_URL) {
-    candidates.push(CONFIGURED_URL.replace(/\/+$/, ''));
+    candidates.push(CONFIGURED_URL);
   }
 
   // The dev machine, as reported by Metro. Works for physical devices on any

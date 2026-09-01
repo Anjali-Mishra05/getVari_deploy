@@ -27,7 +27,7 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
-import { BACKEND_API_KEY, backendCandidates } from '../config/backend';
+import { BACKEND_API_KEY, CONFIGURED_BACKEND_URL, backendCandidates } from '../config/backend';
 import ChatBus from '../services/ChatBus';
 import HydrationService from '../services/HydrationService';
 import HydrationPromptSession from '../services/HydrationPromptSession';
@@ -392,6 +392,19 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
 
   // Server Discovery Logic
   const discoverServer = async () => {
+    // A configured backend needs no discovery, and must not be probed.
+    //
+    // Discovery exists to find a developer's machine on an unknown address.
+    // When the build has been told where the server is, probing only adds a
+    // way to fail: a free-tier host sleeps when idle and takes half a minute
+    // to wake, so a 6-second /ping aborts, the probe moves on to addresses
+    // that cannot possibly answer on a real phone, and the user is told the
+    // AI is unreachable — for a server that was merely asleep.
+    if (CONFIGURED_BACKEND_URL) {
+      setServerUrl(CONFIGURED_BACKEND_URL);
+      return CONFIGURED_BACKEND_URL;
+    }
+
     const candidates = backendCandidates();
     const startTime = Date.now();
 

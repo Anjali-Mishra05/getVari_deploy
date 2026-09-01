@@ -1,6 +1,6 @@
 {
   "name": "GetVariApp",
   "displayName": "GetVariApp",
-  "aquaSageBackendUrl": "",
-  "aquaSageApiKey": ""
+  "aquaSageBackendUrl": "https://getvari-aquasage.onrender.com",
+  "aquaSageApiKey": "HUimA__Qv0ggeZcpr5akpdGhba1vcbSDmrE3IsNQcPg"
 }
