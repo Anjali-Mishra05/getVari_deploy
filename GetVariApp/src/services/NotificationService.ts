@@ -24,6 +24,7 @@ import { Platform } from 'react-native';
 
 import NotificationHistory from './NotificationHistory';
 import {
+  DEFAULT_SLEEP_SCHEDULE,
   SleepSchedule,
   isAsleepAt,
   nextAwakeAt,
@@ -55,31 +56,96 @@ const SLEEP_SCHEDULE_KEY = 'getvari_sleep_schedule';
 /** Cap on replayable background presses, so the queue cannot grow unbounded. */
 const PENDING_PROMPT_LIMIT = 10;
 
-/** Reminders repeat every 2 minutes while the user has nothing logged. */
-export const REMINDER_INTERVAL_MS = 2 * 60 * 1000;
+/**
+ * Reminders repeat every 2 hours while the user has nothing logged — N1 in the
+ * notification spec ("Regular Hydration Reminder / Every 2 hours").
+ *
+ * This was 2 *minutes*, a demo setting that shipped: the tray filled with "Log
+ * your water" every couple of minutes, which is most of what "the notifications
+ * all come at once" looked like on a real phone.
+ */
+export const REMINDER_INTERVAL_MS = 2 * 60 * 60 * 1000;
 
 /**
  * How far ahead reminders are queued.
  *
- * Notifee has no sub-15-minute repeating trigger, so the cadence is built from
- * one-shot alarms and the queue is only as long as this window. Rescheduling
- * happens when the app is foregrounded or an entry is logged — neither of
- * which is guaranteed to happen for hours — so the window has to outlast a
- * long absence or reminders simply stop. Two hours of coverage is well inside
- * Android's 500-alarm-per-app ceiling.
+ * The cadence is built from one-shot alarms, so the queue is only as long as
+ * this window. Rescheduling happens when the app is foregrounded or an entry
+ * is logged — neither of which is guaranteed to happen for a while — so the
+ * window has to outlast a long absence or reminders simply stop. A full day of
+ * 2-hourly slots is 12 alarms, well inside Android's 500-per-app ceiling.
  */
-export const REMINDER_COVERAGE_MS = 2 * 60 * 60 * 1000;
+export const REMINDER_COVERAGE_MS = 24 * 60 * 60 * 1000;
 const REMINDER_SLOTS = Math.floor(REMINDER_COVERAGE_MS / REMINDER_INTERVAL_MS);
+
+/**
+ * How long after wake-up the reminder cadence resumes.
+ *
+ * A slot pushed out of the quiet window lands exactly on the wake-up time —
+ * which is also when N22's "good morning" message goes out, so the day opened
+ * with two notifications in the same second. Half an hour lets the greeting
+ * lead and the reminders follow.
+ */
+const REMINDER_RESUME_OFFSET_MS = 30 * 60 * 1000;
+
+/**
+ * Ceiling on one queue rebuild.
+ *
+ * Every notifee call here is a native round trip, and a native promise that
+ * never settles would otherwise wedge the scheduling chain for the life of the
+ * process — no reminder ever rescheduled again, and every caller waiting on it
+ * stuck. A rebuild that overruns this is abandoned so the next one can run;
+ * the queue it left behind is still valid, just older than intended.
+ */
+const RESCHEDULE_TIMEOUT_MS = 20 * 1000;
 
 /** Marks a notification as the "you haven't logged water" nudge. */
 export const HYDRATION_REMINDER_TYPE = 'hydration_reminder';
 
-const REMINDER_TITLE = '💧 Log your water';
-const REMINDER_BODIES = [
-  'No water logged yet. Tap to log.',
-  'Still nothing logged. Tap to add it.',
-  'Missed an entry? Tap to log it.',
-];
+/** Marks one of the fixed-time daily messages (N22 in the spec). */
+export const DAILY_MESSAGE_TYPE = 'daily_message';
+const DAILY_ID_PREFIX = 'getvari-daily-';
+
+/**
+ * The notifications the spec pins to a wall-clock time rather than to a
+ * condition: "Morning: 7 AM / Night: 10 PM".
+ *
+ * These are queued with the OS, not raised by `NotificationEngine`. The engine
+ * only runs while the dashboard is mounted, so a greeting it owned arrived
+ * whenever the app was next opened — which is exactly how every notification
+ * ended up landing in one clump on launch.
+ */
+const DAILY_MESSAGES = [
+  {
+    key: 'morning',
+    hour: 7,
+    minute: 0,
+    title: '🌅 Good Morning',
+    body: 'Good morning! Start your day with a glass of water and stay hydrated throughout the day.',
+  },
+  {
+    key: 'night',
+    hour: 22,
+    minute: 0,
+    title: '🌙 Bedtime',
+    body: 'It’s almost bedtime. Keep up your hydration.',
+  },
+] as const;
+
+/** How many days of fixed-time messages are queued ahead. */
+export const DAILY_HORIZON_DAYS = 7;
+
+/**
+ * N1's title and message, verbatim from the notification spec.
+ *
+ * The earlier "Log your water / Still nothing logged / Missed an entry?"
+ * variations were a testing nudge rather than a notification the spec asks
+ * for, and are gone with the 2-minute cadence they were written for. Tapping
+ * this still opens the logging conversation — that is the press action, not a
+ * second kind of notification.
+ */
+const REMINDER_TITLE = '💧 Hydration';
+const REMINDER_BODY = 'Time to hydrate! Please drink some water to stay hydrated.';
 
 /** Makes each locally displayed notification's event id unique. */
 let displayCounter = 0;
@@ -108,12 +174,75 @@ class NotificationService {
   /** Serialises reminder (re)scheduling so overlapping calls can't interleave. */
   private schedulingQueue: Promise<void> = Promise.resolve();
 
+  /** Whether the user has already been shown the prompt this session. */
+  private permissionAsked = false;
+
+  /**
+   * The reschedule of each kind that is queued but has not started yet.
+   *
+   * Rebuilding a queue takes seconds of native work, so callers that fire in
+   * bursts — a foreground event, a profile load and a hydration write landing
+   * together — could pile up more work than the chain could drain, and a
+   * caller awaiting its own turn would wait indefinitely. Only one reschedule
+   * of a kind is ever worth having in the queue: they all rebuild the same
+   * thing from scratch, so a second one waiting behind the first is pure
+   * duplicate work. Extra callers join the pending run instead, taking the
+   * most recent `fromMs` with them.
+   */
+  private pending: Record<'reminders' | 'daily', { run: Promise<void>; fromMs: number } | null> = {
+    reminders: null,
+    daily: null,
+  };
+
+  /**
+   * Queue `task`, collapsing it into an identical one that is already waiting.
+   */
+  private enqueue(
+    kind: 'reminders' | 'daily',
+    fromMs: number,
+    task: (at: number) => Promise<void>
+  ): Promise<void> {
+    const waiting = this.pending[kind];
+    if (waiting) {
+      // Run from the latest request; the earlier one has not started yet.
+      waiting.fromMs = Math.max(waiting.fromMs, fromMs);
+      return waiting.run;
+    }
+
+    const entry = { fromMs, run: Promise.resolve() };
+    entry.run = this.schedulingQueue.then(() => {
+      // Started: from here on a new call needs its own run.
+      this.pending[kind] = null;
+      return this.withTimeout(kind, task(entry.fromMs));
+    });
+    this.pending[kind] = entry;
+    this.schedulingQueue = entry.run.catch(() => undefined);
+    return entry.run;
+  }
+
   /**
    * Last known sleep window, cached so the hot path (deciding whether to show
    * a notification) doesn't have to await storage on every call. `undefined`
    * means "not read yet"; `null` means "read, and the user has none".
    */
   private sleepSchedule: SleepSchedule | null | undefined = undefined;
+
+  /** Resolves when `work` finishes, or when it has taken too long. */
+  private withTimeout(kind: string, work: Promise<void>): Promise<void> {
+    return new Promise<void>(resolve => {
+      const timer = setTimeout(() => {
+        console.warn(`[Reminders] ${kind} rebuild timed out; moving on.`);
+        resolve();
+      }, RESCHEDULE_TIMEOUT_MS);
+
+      work
+        .catch(error => console.error(`[Reminders] ${kind} rebuild failed:`, error))
+        .finally(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+    });
+  }
 
   /* ------------------------------------------------------------------ *
    * Sleep window
@@ -151,11 +280,22 @@ class NotificationService {
     );
     // The queue in the OS was built against the previous window.
     await this.scheduleHydrationReminders();
+    await this.scheduleDailyNotifications();
   }
 
-  /** The stored sleep window, or null when the user never gave one. */
-  async getSleepSchedule(): Promise<SleepSchedule | null> {
-    if (this.sleepSchedule !== undefined) return this.sleepSchedule;
+  /**
+   * The window to stay quiet in — the user's own, or 23:00–07:00.
+   *
+   * N14 makes quiet hours a rule of the product rather than a preference, so a
+   * device with nothing stored (onboarding not finished, a fresh install, a
+   * signed-out session) still gets them. Treating "no answer yet" as "no quiet
+   * hours" is what queued reminders for 01:00 and 03:00 on a phone that had
+   * simply never been asked.
+   */
+  async getSleepSchedule(): Promise<SleepSchedule> {
+    if (this.sleepSchedule !== undefined) {
+      return this.sleepSchedule ?? DEFAULT_SLEEP_SCHEDULE;
+    }
 
     try {
       const raw = await AsyncStorage.getItem(SLEEP_SCHEDULE_KEY);
@@ -164,13 +304,12 @@ class NotificationService {
       console.error('[Reminders] Failed to read sleep window:', error);
       this.sleepSchedule = null;
     }
-    return this.sleepSchedule;
+    return this.sleepSchedule ?? DEFAULT_SLEEP_SCHEDULE;
   }
 
   /** Whether the app is currently in its quiet, "user is asleep" state. */
   async isSleeping(at: number = Date.now()): Promise<boolean> {
-    const schedule = await this.getSleepSchedule();
-    return !!schedule && isAsleepAt(schedule, at);
+    return isAsleepAt(await this.getSleepSchedule(), at);
   }
 
   /** Forgets the window — used on sign-out, alongside the rest of the state. */
@@ -184,9 +323,33 @@ class NotificationService {
   }
 
   /**
-   * Request permission for Android 13+ and iOS.
+   * Whether the app may post notifications, asking the user at most once.
+   *
+   * This used to call `notifee.requestPermission()` every time — and it is
+   * called from the engine's evaluation, which runs on every telemetry tick.
+   * On Android each of those spins up the system `GrantPermissionsActivity`;
+   * with the permission already granted it closes again without drawing
+   * anything, but it still takes focus for a moment. Twice a second that is
+   * enough to restart the keyboard mid-word, blank the screen between frames
+   * and fire an app-state change — the "unstable keyboard" in the chat, and a
+   * flood of foreground events behind it.
+   *
+   * So: read the current setting, which is a plain query with no dialog, and
+   * only ever put the prompt in front of the user once per session.
    */
   async requestPermission(): Promise<boolean> {
+    try {
+      const current = await notifee.getNotificationSettings();
+      if (current.authorizationStatus >= AuthorizationStatus.AUTHORIZED) return true;
+    } catch (error) {
+      console.warn('[Notifications] Could not read permission state:', error);
+    }
+
+    // Not granted. Ask — but only the first time, so a user who has said no is
+    // not asked again on every tick for the rest of the session.
+    if (this.permissionAsked) return false;
+    this.permissionAsked = true;
+
     const settings = await notifee.requestPermission();
     return settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
   }
@@ -313,18 +476,8 @@ class NotificationService {
     });
   }
 
-  /**
-   * Specific helper for the welcome notification.
-   */
-  async showWelcomeNotification() {
-    await this.displayNotification(
-      '🎉 Welcome to GetVari!',
-      "We're happy to have you here! 💙\nRemember to stay hydrated and don't forget to drink water throughout your day."
-    );
-  }
-
   /* ------------------------------------------------------------------ *
-   * Repeating "why haven't you logged?" reminders
+   * N1 — the recurring 2-hourly hydration reminder
    * ------------------------------------------------------------------ */
 
   /**
@@ -343,8 +496,7 @@ class NotificationService {
    * again in the morning.
    */
   async scheduleHydrationReminders(fromMs: number = Date.now()): Promise<void> {
-    this.schedulingQueue = this.schedulingQueue.then(() => this.rescheduleReminders(fromMs));
-    return this.schedulingQueue;
+    return this.enqueue('reminders', fromMs, at => this.rescheduleReminders(at));
   }
 
   private async rescheduleReminders(fromMs: number): Promise<void> {
@@ -375,9 +527,11 @@ class NotificationService {
 
       for (let slot = 1; slot <= REMINDER_SLOTS; slot++) {
         cursor += REMINDER_INTERVAL_MS;
-        if (schedule) {
-          const awakeAt = nextAwakeAt(schedule, cursor);
-          if (awakeAt !== cursor) sleepShifted = true;
+        const awakeAt = nextAwakeAt(schedule, cursor);
+        if (awakeAt !== cursor) {
+          sleepShifted = true;
+          cursor = awakeAt + REMINDER_RESUME_OFFSET_MS;
+        } else {
           cursor = awakeAt;
         }
         const timestamp = cursor;
@@ -386,30 +540,20 @@ class NotificationService {
         const trigger: TimestampTrigger = {
           type: TriggerType.TIMESTAMP,
           timestamp,
-          // `SET_ALARM_CLOCK` is the only alarm type that actually holds a
-          // 2-minute cadence here.
-          //
-          // This was `SET_EXACT_AND_ALLOW_WHILE_IDLE`, which is the textbook
-          // choice and which the OS confirms this app is entitled to
-          // (`dumpsys alarm` reports `exactAllowReason=policy_permission` via
-          // the `USE_EXACT_ALARM` permission). The alarms still came back
-          // without `FLAG_STANDALONE` and carrying a batching window that grew
-          // to minutes, so every reminder landed on Android's ~5-minute
-          // inexact grid with two or three collapsed onto the same instant.
-          // Exempting the app from Doze changed nothing.
-          //
-          // `setAlarmClock` is the API alarm-clock apps use. It is treated as
-          // user-visible and is not deferred or batched, which is what makes
-          // an interval this short survive. The cost is that Android may show
-          // a "next alarm" indicator — the trade the cadence is worth.
-          alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
+          // At a 2-hour cadence Android's ~5-minute batching grid is noise, so
+          // the ordinary exact-and-allow-while-idle alarm is enough — it still
+          // fires in Doze, and it does not put the system "next alarm" icon in
+          // the status bar the way `SET_ALARM_CLOCK` does. (That heavier alarm
+          // type was here because the interval used to be 2 minutes, which
+          // nothing weaker could hold.)
+          alarmManager: { type: AlarmType.SET_EXACT_AND_ALLOW_WHILE_IDLE },
         };
 
         await notifee.createTriggerNotification(
           {
             id: `${REMINDER_ID_PREFIX}${slot}`,
             title: REMINDER_TITLE,
-            body: REMINDER_BODIES[(slot - 1) % REMINDER_BODIES.length],
+            body: REMINDER_BODY,
             // The scheduled timestamp makes the id unique per reminder while
             // staying identical across every delivery of the same press.
             data: {
@@ -427,8 +571,8 @@ class NotificationService {
       }
 
       console.log(
-        `[Reminders] Queued ${REMINDER_SLOTS} reminders, ${REMINDER_INTERVAL_MS / 60000} min apart` +
-          (sleepShifted && schedule
+        `[Reminders] Queued ${REMINDER_SLOTS} reminders, ${REMINDER_INTERVAL_MS / 3600000}h apart` +
+          (sleepShifted
             ? `, resuming at ${schedule.wakeUp} (asleep ${describeSleepWindow(schedule)}).`
             : '.')
       );
@@ -458,6 +602,95 @@ class NotificationService {
       }
     } catch (error) {
       console.error('[Reminders] Failed to cancel:', error);
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Fixed-time daily messages
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Queue the morning and night messages at their own clock times for the next
+   * `DAILY_HORIZON_DAYS` days.
+   *
+   * Re-queued rather than topped up on every call, so a device that has been
+   * asleep for a week still ends up with a correct week ahead, and a changed
+   * sleep window is applied to slots that were already scheduled.
+   */
+  async scheduleDailyNotifications(fromMs: number = Date.now()): Promise<void> {
+    return this.enqueue('daily', fromMs, at => this.rescheduleDaily(at));
+  }
+
+  private async rescheduleDaily(fromMs: number): Promise<void> {
+    try {
+      const hasPermission = await this.requestPermission();
+      if (!hasPermission) {
+        console.warn('[Daily] Notification permission denied; skipping schedule.');
+        return;
+      }
+
+      await this.createNotificationChannel();
+      await this.cancelDailyNotifications();
+
+      const schedule = await this.getSleepSchedule();
+      let queued = 0;
+
+      for (let day = 0; day < DAILY_HORIZON_DAYS; day++) {
+        for (const message of DAILY_MESSAGES) {
+          const at = new Date(fromMs);
+          at.setDate(at.getDate() + day);
+          at.setHours(message.hour, message.minute, 0, 0);
+          const timestamp = at.getTime();
+
+          if (timestamp <= Date.now()) continue;
+          // N14: routine notifications stay silent inside the quiet window.
+          // These are dropped rather than shifted — a "good morning" delivered
+          // at bedtime is worse than no greeting at all.
+          if (isAsleepAt(schedule, timestamp)) continue;
+
+          const id = `${DAILY_ID_PREFIX}${message.key}-${day}`;
+          await notifee.createTriggerNotification(
+            {
+              id,
+              title: message.title,
+              body: message.body,
+              data: {
+                type: DAILY_MESSAGE_TYPE,
+                key: message.key,
+                eventId: `${id}@${timestamp}`,
+              },
+              android: {
+                channelId: REMINDER_CHANNEL_ID,
+                importance: AndroidImportance.DEFAULT,
+                pressAction: { id: 'default', launchActivity: 'default' },
+              },
+            },
+            {
+              type: TriggerType.TIMESTAMP,
+              timestamp,
+              alarmManager: { type: AlarmType.SET_EXACT_AND_ALLOW_WHILE_IDLE },
+            } satisfies TimestampTrigger
+          );
+          queued++;
+        }
+      }
+
+      console.log(`[Daily] Queued ${queued} fixed-time messages over ${DAILY_HORIZON_DAYS} days.`);
+    } catch (error) {
+      console.error('[Daily] Failed to schedule:', error);
+    }
+  }
+
+  /** Drop every queued fixed-time message, leaving reminders untouched. */
+  async cancelDailyNotifications(): Promise<void> {
+    try {
+      const triggerIds = await notifee.getTriggerNotificationIds();
+      const queued = triggerIds.filter(id => id.startsWith(DAILY_ID_PREFIX));
+      if (queued.length) {
+        await notifee.cancelTriggerNotifications(queued);
+      }
+    } catch (error) {
+      console.error('[Daily] Failed to cancel:', error);
     }
   }
 

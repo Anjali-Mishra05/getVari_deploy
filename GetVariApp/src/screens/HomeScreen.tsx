@@ -144,13 +144,25 @@ const HomeScreen = ({ navigation }: any) => {
     });
 
     // Returning to the app restarts the reminder countdown from now.
+    //
+    // Only a real return counts. Android re-reports 'active' repeatedly — on
+    // this device roughly once a second — and the handler used to run in full
+    // every time, which meant a rebuild of the whole notification queue (a
+    // couple of seconds of native work) several times a second. The scheduling
+    // queue then grew faster than it drained, and anything waiting on it,
+    // including the reschedule a hydration write does, never got its turn.
+    let previousAppState = AppState.currentState;
     const appStateSub = AppState.addEventListener('change', state => {
-      if (state === 'active') {
-        replayPendingPrompts();
-        refreshTodayLogs();
-        refreshUnseen();
-        NotificationService.scheduleHydrationReminders();
-      }
+      const returned = state === 'active' && previousAppState !== 'active';
+      previousAppState = state;
+      if (!returned) return;
+
+      replayPendingPrompts();
+      refreshTodayLogs();
+      refreshUnseen();
+      NotificationService.scheduleHydrationReminders();
+      // Tops the fixed-time queue back up to a full week ahead.
+      NotificationService.scheduleDailyNotifications();
     });
 
     return () => {
@@ -175,6 +187,9 @@ const HomeScreen = ({ navigation }: any) => {
       const hasPermission = await NotificationService.requestPermission();
       setNotificationsEnabled(hasPermission);
       await NotificationService.scheduleHydrationReminders();
+      // 07:00 and 22:00 messages, queued with the OS so they arrive on time
+      // whether or not the app is open.
+      await NotificationService.scheduleDailyNotifications();
     } catch (error) {
       console.error('[Notifications] Setup failed:', error);
     }

@@ -121,8 +121,12 @@ const fetchTargetMl = async (userId: string): Promise<number> => {
 const mapRow = (row: any): HydrationLog => ({
   id: row.id,
   timestamp: row.timestamp,
+  // Falls back to the write time when the column is absent, so the "no water
+  // for 3 hours" rule still has an intake time to measure from.
+  reportedAt: row.reported_at ?? row.timestamp,
   amountMl: row.amount_ml,
   source: row.source,
+  verificationSource: row.verification_source ?? undefined,
 });
 
 /** Today's entries, newest first. */
@@ -184,6 +188,16 @@ export const getTodayTotals = async (userId?: string | null): Promise<HydrationT
   };
 };
 
+/**
+ * True when Postgres/PostgREST rejected the write because a column in the row
+ * does not exist on the table — as opposed to a permission, constraint or
+ * connectivity failure, which must still surface as an error.
+ */
+const isUnknownColumnError = (error: { code?: string; message?: string }): boolean =>
+  error.code === 'PGRST204' ||
+  error.code === '42703' ||
+  /column .* does not exist|could not find the .* column/i.test(error.message ?? '');
+
 const performWrite = async (
   userId: string,
   rowId: string,
@@ -203,17 +217,35 @@ const performWrite = async (
   const timestamp = new Date().toISOString();
   const actualReportedAt = reportedAt || timestamp;
 
-  const row = {
+  const baseRow = {
     id: rowId,
     user_id: userId,
     timestamp: timestamp,
-    reported_at: actualReportedAt,
     amount_ml: amountMl,
     source,
+  };
+
+  const row = {
+    ...baseRow,
+    reported_at: actualReportedAt,
     verification_source: verificationSource,
   };
 
-  const { data, error } = await supabase.from(LOGS_TABLE).insert(row).select();
+  let { data, error } = await supabase.from(LOGS_TABLE).insert(row).select();
+
+  // `reported_at` / `verification_source` were added to the write before they
+  // were added to the table. PostgREST answers an unknown column with PGRST204
+  // (schema cache) or 42703 (undefined_column) and rejects the whole insert —
+  // which is what silently broke *every* path that logs water, chat included.
+  // The columns are optional metadata, so a database that predates the
+  // migration still gets the entry rather than an error the user can't act on.
+  if (error && isUnknownColumnError(error)) {
+    console.warn(
+      '[Hydration] Table is missing reported_at/verification_source; ' +
+        'writing without them. Run supabase/migrations to restore backdating.'
+    );
+    ({ data, error } = await supabase.from(LOGS_TABLE).insert(baseRow).select());
+  }
 
   if (error && error.code !== '23505') {
     console.error('[Hydration] Insert failed:', error.message, error.details);
@@ -232,11 +264,14 @@ const performWrite = async (
   const entry = data?.[0] ? mapRow(data[0]) : mapRow(row);
   const result: HydrationLogResult = { status: 'logged', requestId, amountMl, entry, ...totals };
 
-  try {
-    await NotificationService.scheduleHydrationReminders();
-  } catch (reminderError) {
+  // Resetting the reminder countdown is a side effect of the entry, not part
+  // of it, so it is deliberately *not* awaited. Awaiting it made the user's
+  // confirmation hostage to the OS: notifee's scheduling stalled behind other
+  // native work and the chat sat on "Saving…" indefinitely for a row that was
+  // already safely written.
+  NotificationService.scheduleHydrationReminders().catch(reminderError => {
     console.error('[Hydration] Failed to reset reminders:', reminderError);
-  }
+  });
 
   ChatBus.emitHydrationLogged(result);
   return result;

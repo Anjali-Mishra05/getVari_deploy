@@ -13,8 +13,7 @@ import {
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
-import { AuthService, AuthChallenge } from '../services/AuthService';
-import NotificationService from '../services/NotificationService';
+import { AuthService, AuthChallenge, DEMO_PASSCODE } from '../services/AuthService';
 import { Cpu } from 'lucide-react-native';
 import { cssInterop } from 'react-native-css-interop';
 import GlassCard from '../components/GlassCard';
@@ -57,8 +56,6 @@ const OtpScreen = ({ route, navigation }: any) => {
 
     try {
       await AuthService.verifyOtp(confirmation, otpCode);
-      // Trigger welcome notification
-      await NotificationService.showWelcomeNotification();
       navigation.replace('Onboarding');
     } catch (err: any) {
       setError(err.message || 'Invalid authorization code.');
@@ -224,7 +221,7 @@ const OtpScreen = ({ route, navigation }: any) => {
                   <Text className="text-[10px] text-[#00f2fe] font-black uppercase font-mono tracking-[0.18em]">DEMO / INVESTOR TESTING KEY</Text>
                 </View>
                 <Text className="text-[11px] text-neutral-400 leading-6 font-medium">
-                  Enter any Indian mobile number, check the Terms &amp; Conditions checkbox, and submit. The demo verification passcode is <Text className="text-[#00f2fe] font-black">123456</Text>.
+                  Enter any Indian mobile number, check the Terms &amp; Conditions checkbox, and submit. The demo verification passcode is <Text className="text-[#00f2fe] font-black">{DEMO_PASSCODE}</Text>.
                 </Text>
               </View>
 

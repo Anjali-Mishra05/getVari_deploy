@@ -1,15 +1,44 @@
 import { NativeModules, Platform } from 'react-native';
 
+import appConfig from '../../app.json';
+
 /** Port the FastAPI backend listens on (see Chatbot/backend/main.py). */
 export const BACKEND_PORT = 8000;
 
 /**
- * Manual override for when auto-discovery can't find the backend — most often
- * a physical device on a network where the Metro host and the backend host
- * differ. Set it to your dev machine's LAN address, e.g.
- * 'http://192.168.1.42:8000', and leave it null otherwise.
+ * Where the backend lives, for builds that cannot discover it.
+ *
+ * Auto-discovery below reads the host from the URL Metro served the bundle
+ * from, which is exactly right in development and useless in a release build:
+ * there the bundle is a file on the device, so there is no host to read and
+ * the chat can only report that it could not reach the server. A shipped app
+ * therefore has to be *told* where the backend is.
+ *
+ * It is read from `app.json` rather than hardcoded here so that pointing a
+ * build at a deployed server — or at a machine on the tester's network — is a
+ * one-line config change and not a code change:
+ *
+ *     "aquaSageBackendUrl": "https://getvari-api.example.com"
+ *
+ * Empty means "not configured": development still discovers the host on its
+ * own, and a release build fails fast with the message the chat already shows.
  */
-const MANUAL_OVERRIDE: string | null = null;
+const CONFIGURED_URL: string = (
+  (appConfig as { aquaSageBackendUrl?: string }).aquaSageBackendUrl ?? ''
+).replace(/\/+$/, '');
+
+/** The configured backend, or '' when this build has to discover one. */
+export const CONFIGURED_BACKEND_URL = CONFIGURED_URL;
+
+/**
+ * Shared secret for the deployed backend, sent as `X-API-Key`.
+ *
+ * The server holds a Supabase service-role key, so a public deployment must
+ * not answer just anybody. Empty is correct for a local server, which runs
+ * without the check.
+ */
+export const BACKEND_API_KEY: string =
+  (appConfig as { aquaSageApiKey?: string }).aquaSageApiKey ?? '';
 
 /**
  * The host running Metro is, in practice, the host running the backend: both
@@ -41,8 +70,8 @@ function hostFromMetro(): string | null {
 export function backendCandidates(): string[] {
   const candidates: string[] = [];
 
-  if (MANUAL_OVERRIDE) {
-    candidates.push(MANUAL_OVERRIDE);
+  if (CONFIGURED_URL) {
+    candidates.push(CONFIGURED_URL);
   }
 
   // The dev machine, as reported by Metro. Works for physical devices on any

@@ -29,6 +29,13 @@ export interface UserProfile {
   lastWeeklySummaryDate?: string;
   /** City chosen for the climate model. Mirrored into `location` on save. */
   selectedCity?: string;
+  /**
+   * When this account first saved a profile (ISO 8601).
+   *
+   * PBWR uses it to decide whether the user is still inside their 7-day
+   * calibration window. Stamped once, on the first save, and never rewritten.
+   */
+  accountCreatedAt?: string;
   /** Approximate nightly sleep window, captured during onboarding. */
   sleepSchedule?: SleepSchedule;
   /** Waking hours implied by `sleepSchedule` — the denominator for averages. */

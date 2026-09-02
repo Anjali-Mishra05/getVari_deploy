@@ -34,6 +34,9 @@ create table if not exists public.getvari_hydration_logs (
   "timestamp" timestamptz not null default now(),
   amount_ml   integer     not null,
   source      text        not null default 'manual',
+  -- When the user says they actually drank it; the app backdates entries.
+  reported_at timestamptz not null default now(),
+  verification_source text not null default 'user-reported',
   created_at  timestamptz not null default now()
 );
 
@@ -74,8 +77,10 @@ alter table public.getvari_profiles
   add column if not exists updated_at timestamptz not null default now();
 
 alter table public.getvari_hydration_logs
-  add column if not exists source     text        not null default 'manual',
-  add column if not exists created_at timestamptz not null default now();
+  add column if not exists source      text        not null default 'manual',
+  add column if not exists reported_at timestamptz not null default now(),
+  add column if not exists verification_source text not null default 'user-reported',
+  add column if not exists created_at  timestamptz not null default now();
 
 -- ---------------------------------------------------------------------------
 -- 3. Idempotency

@@ -1,0 +1,27 @@
+# Render blueprint for the AquaSage chat backend.
+#
+#   Render dashboard -> New -> Blueprint -> pick this repo.
+#
+# Every value marked `sync: false` is prompted for at deploy time and stored in
+# Render, not here: these are secrets and must never live in the repository.
+services:
+  - type: web
+    name: getvari-aquasage
+    runtime: docker
+    dockerfilePath: ./GetVariApp/Chatbot/backend/Dockerfile
+    dockerContext: ./GetVariApp/Chatbot/backend
+    plan: free
+    healthCheckPath: /ping
+    envVars:
+      - key: SUPABASE_URL
+        value: https://ntuboicvzsoamwedtprg.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: JINA_API_KEY
+        sync: false
+      - key: AQUASAGE_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: "*"

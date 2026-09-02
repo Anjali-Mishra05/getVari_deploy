@@ -29,6 +29,16 @@ export const NOTIFICATION_COOLDOWNS = {
   INACTIVITY_REMINDER: 3 * 60 * 60 * 1000, // 3 hours
   GOAL_ACHIEVED: 24 * 60 * 60 * 1000, // Once per day
   WEEKLY_SUMMARY: 7 * 24 * 60 * 60 * 1000, // Once per week
+  /**
+   * Floor on the gap between any two engine notifications.
+   *
+   * The engine re-evaluates every condition on each telemetry tick, so a phone
+   * that is hot, humid, at elevated risk and three hours without a drink has
+   * four true conditions the moment the dashboard mounts — and delivered all
+   * four in the same second. Conditions that stay true are simply re-raised on
+   * a later tick, so spacing costs nothing but the clump.
+   */
+  MIN_GAP_BETWEEN_ALERTS: 15 * 60 * 1000, // 15 minutes
 };
 
 export const RISK_THRESHOLDS = {

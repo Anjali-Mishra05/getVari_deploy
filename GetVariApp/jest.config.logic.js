@@ -20,5 +20,8 @@ module.exports = {
     '<rootDir>/__tests__/pbwrAlgorithm.test.ts',
     '<rootDir>/__tests__/pbwrMock.test.ts',
     '<rootDir>/__tests__/edgeCases.test.ts',
+    '<rootDir>/__tests__/notificationTriggers.test.ts',
+    '<rootDir>/__tests__/edgeCasesStrict.test.ts',
+    '<rootDir>/__tests__/reminderScheduling.test.ts',
   ],
 };

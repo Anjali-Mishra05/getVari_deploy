@@ -72,6 +72,9 @@ export const withDerivedFields = (profile: any): any => {
   const schedule = normaliseSleepSchedule(profile);
   return {
     ...profile,
+    // Stamped on the first save and preserved thereafter, so the PBWR
+    // calibration window has a fixed start date to measure from.
+    accountCreatedAt: profile.accountCreatedAt ?? new Date().toISOString(),
     // The dashboard reads `location`; onboarding has always written
     // `selectedCity`. Both are kept in step rather than migrating rows.
     location: profile.selectedCity ?? profile.location,
