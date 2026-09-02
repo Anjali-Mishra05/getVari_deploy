@@ -73,8 +73,6 @@ export const fetchEventsForUser = async (userId: string): Promise<ActivityEvent[
         }
 
         // Calculate risk AFTER this intake to show correlation improvement
-        const activeAbsorbed = Math.min(1000, 200 + cumulativeMl);
-
         const engineResult = HydrationRiskEngine.solveRisk({
           ...mockTelemetry,
           timeSinceWaterIntake: Math.max(0, Math.min(8, hoursSince))
@@ -119,11 +117,10 @@ export const fetchEventsForUser = async (userId: string): Promise<ActivityEvent[
         hoursSince = (pointTime - new Date(newest.timestamp).getTime()) / 3_600_000;
       }
 
-      const activeAbsorbed = Math.min(1000, 200 + waterIntakeMlAtTime);
       const engineResult = HydrationRiskEngine.solveRisk({
         ...mockTelemetry,
         timeSinceWaterIntake: Math.max(0, Math.min(8, hoursSince))
-      }, activeAbsorbed, profileRow?.profile);
+      }, profileRow?.profile);
 
       events.push({
         eventId: makeId('TELEMETRY_TODAY'),
@@ -153,11 +150,10 @@ export const fetchEventsForUser = async (userId: string): Promise<ActivityEvent[
       // Approximate daily intake for that day (mocking historical distribution)
       const waterIntakeMlAtTime = logsBeforePoint.reduce((sum, l) => sum + l.amount_ml, 0) / (7 - i + 1);
 
-      const activeAbsorbed = Math.min(1000, 200 + waterIntakeMlAtTime);
       const engineResult = HydrationRiskEngine.solveRisk({
         ...mockTelemetry,
         timeSinceWaterIntake: 2.5 // Assume average gap for daily snapshots
-      }, activeAbsorbed, profileRow?.profile);
+      }, profileRow?.profile);
 
       events.push({
         eventId: makeId('TELEMETRY_HIST'),

@@ -24,10 +24,12 @@ interface PBWRAdminSectionProps {
 
 const PBWRAdminSection: React.FC<PBWRAdminSectionProps> = ({ userId, fullProfile, waterIntakeMl, breakdown }) => {
   const [history, setHistory] = useState<TelemetrySnapshot[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
+    if (!expanded || history.length > 0) return;
+
     const fetchData = async () => {
       setLoading(true);
       try {
@@ -41,23 +43,15 @@ const PBWRAdminSection: React.FC<PBWRAdminSectionProps> = ({ userId, fullProfile
     };
 
     fetchData();
-  }, [userId, fullProfile]);
-
-  if (loading) {
-    return (
-      <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 animate-pulse text-center">
-        <span className="text-xs font-mono text-slate-400">CALCULATING PBWR PIPELINE...</span>
-      </div>
-    );
-  }
+  }, [userId, fullProfile, expanded, history.length]);
 
   if (!breakdown) return null;
 
-  const averages = {
-    steps: Math.round(history.reduce((acc, curr) => acc + curr.totalSteps, 0) / history.length),
-    temp: (history.reduce((acc, curr) => acc + curr.avgTemp, 0) / history.length).toFixed(1),
-    humidity: Math.round(history.reduce((acc, curr) => acc + curr.avgHumidity, 0) / history.length)
-  };
+  const averages = history.length > 0 ? {
+    steps: Math.round(history.reduce((acc, curr) => acc + (curr.totalSteps || 0), 0) / history.length),
+    temp: (history.reduce((acc, curr) => acc + (curr.avgTemp || 0), 0) / history.length).toFixed(1),
+    humidity: Math.round(history.reduce((acc, curr) => acc + (curr.avgHumidity || 0), 0) / history.length)
+  } : { steps: 0, temp: '0.0', humidity: 0 };
 
   const chronologicalHistory = history;
 
@@ -77,93 +71,99 @@ const PBWRAdminSection: React.FC<PBWRAdminSectionProps> = ({ userId, fullProfile
       </div>
 
       {expanded && (
-        <div className="space-y-4 animate-fadeIn">
-          {/* Summary Card */}
-          <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-6">
-            <div className="flex justify-between items-start">
-              <div>
-                <span className="text-[9px] font-black uppercase tracking-widest text-blue-500">Algorithm Status</span>
-                <div className="flex items-center gap-2 mt-1">
-                  <div className={`w-2 h-2 rounded-full ${breakdown.isCalibrationPeriod ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
-                  <span className="text-sm font-black text-slate-900">
-                    {breakdown.isCalibrationPeriod ? 'Calibration Phase (Day 1-7)' : 'Active Monitoring (Day 8+)'}
-                  </span>
-                </div>
-              </div>
-              <div className="text-right">
-                <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Final daily target</span>
-                <p className="text-2xl font-black text-blue-700 mt-1">
-                  {(breakdown.finalTarget / 1000).toFixed(2)} L ({Math.round(breakdown.finalTarget)} mL)
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Formula Pipeline */}
-              <div className="space-y-3">
-                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block border-b border-slate-100 pb-2">Calculation Pipeline</span>
-                <div className="space-y-2">
-                  <PipelineItem label="Base PBWR" value={`${(breakdown.pbwrBaseline / 1000).toFixed(3)} L`} />
-                  <PipelineItem label="Activity Adjustment" value={`+${(breakdown.activityAdj / 1000).toFixed(3)} L`} isAdj />
-                  <PipelineItem label="Temperature Adjustment" value={`+${(breakdown.tempAdj / 1000).toFixed(3)} L`} isAdj />
-                  <PipelineItem label="Humidity Adjustment" value={`+${(breakdown.humidityAdj / 1000).toFixed(3)} L`} isAdj />
-                  <PipelineItem label="Work Env Adjustment" value={`+${(breakdown.workEnvAdj / 1000).toFixed(3)} L`} isAdj />
-                  <PipelineItem label="Health Adjustment" value={`+${(breakdown.healthAdj / 1000).toFixed(3)} L`} isAdj />
-                  <div className="pt-2 border-t border-slate-50 flex justify-between items-center">
-                    <span className="text-xs font-bold text-slate-900">Adjusted Total</span>
-                    <span className="text-sm font-black text-slate-900">{(breakdown.adjustedTotal / 1000).toFixed(3)} L</span>
-                  </div>
-                  <div className="flex justify-between items-center text-[10px]">
-                    <span className="font-bold text-slate-400 uppercase tracking-wider">Upper Safety Limit</span>
-                    <span className="font-bold text-slate-600">{(breakdown.upperLimit / 1000).toFixed(3)} L</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* 7-Day Averages */}
-              <div className="space-y-3">
-                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block border-b border-slate-100 pb-2">7-Day Observed Averages</span>
-                <div className="grid grid-cols-1 gap-2">
-                  <AverageCard icon={<Footprints className="w-4 h-4" />} label="Activity / Steps" value={`${averages.steps.toLocaleString()} / day`} />
-                  <AverageCard icon={<Thermometer className="w-4 h-4" />} label="Ambient Temp" value={`${averages.temp} °C`} />
-                  <AverageCard icon={<CloudRain className="w-4 h-4" />} label="Relative Humidity" value={`${averages.humidity} %`} />
-                </div>
-              </div>
-            </div>
+        loading ? (
+          <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 animate-pulse text-center">
+            <span className="text-xs font-mono text-slate-400">CALCULATING PBWR PIPELINE...</span>
           </div>
+        ) : (
+          <div className="space-y-4 animate-fadeIn">
+            {/* Summary Card */}
+            <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-6">
+              <div className="flex justify-between items-start">
+                <div>
+                  <span className="text-[9px] font-black uppercase tracking-widest text-blue-500">Algorithm Status</span>
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className={`w-2 h-2 rounded-full ${breakdown.isCalibrationPeriod ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
+                    <span className="text-sm font-black text-slate-900">
+                      {breakdown.isCalibrationPeriod ? 'Calibration Phase (Day 1-7)' : 'Active Monitoring (Day 8+)'}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Final daily target</span>
+                  <p className="text-2xl font-black text-blue-700 mt-1">
+                    {(breakdown.finalTarget / 1000).toFixed(2)} L ({Math.round(breakdown.finalTarget)} mL)
+                  </p>
+                </div>
+              </div>
 
-          {/* History Table */}
-          <div className="bg-slate-50 rounded-3xl border border-slate-100 overflow-hidden shadow-sm">
-            <div className="px-6 py-4 border-b border-slate-200 flex items-center gap-2">
-              <History className="w-4 h-4 text-slate-400" />
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">7-Day Snapshot Log</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Formula Pipeline */}
+                <div className="space-y-3">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block border-b border-slate-100 pb-2">Calculation Pipeline</span>
+                  <div className="space-y-2">
+                    <PipelineItem label="Base PBWR" value={`${(breakdown.pbwrBaseline / 1000).toFixed(3)} L`} />
+                    <PipelineItem label="Activity Adjustment" value={`+${(breakdown.activityAdj / 1000).toFixed(3)} L`} isAdj />
+                    <PipelineItem label="Temperature Adjustment" value={`+${(breakdown.tempAdj / 1000).toFixed(3)} L`} isAdj />
+                    <PipelineItem label="Humidity Adjustment" value={`+${(breakdown.humidityAdj / 1000).toFixed(3)} L`} isAdj />
+                    <PipelineItem label="Work Env Adjustment" value={`+${(breakdown.workEnvAdj / 1000).toFixed(3)} L`} isAdj />
+                    <PipelineItem label="Health Adjustment" value={`+${(breakdown.healthAdj / 1000).toFixed(3)} L`} isAdj />
+                    <div className="pt-2 border-t border-slate-50 flex justify-between items-center">
+                      <span className="text-xs font-bold text-slate-900">Adjusted Total</span>
+                      <span className="text-sm font-black text-slate-900">{(breakdown.adjustedTotal / 1000).toFixed(3)} L</span>
+                    </div>
+                    <div className="flex justify-between items-center text-[10px]">
+                      <span className="font-bold text-slate-400 uppercase tracking-wider">Upper Safety Limit</span>
+                      <span className="font-bold text-slate-600">{(breakdown.upperLimit / 1000).toFixed(3)} L</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 7-Day Averages */}
+                <div className="space-y-3">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block border-b border-slate-100 pb-2">7-Day Observed Averages</span>
+                  <div className="grid grid-cols-1 gap-2">
+                    <AverageCard icon={<Footprints className="w-4 h-4" />} label="Activity / Steps" value={`${averages.steps.toLocaleString()} / day`} />
+                    <AverageCard icon={<Thermometer className="w-4 h-4" />} label="Ambient Temp" value={`${averages.temp} °C`} />
+                    <AverageCard icon={<CloudRain className="w-4 h-4" />} label="Relative Humidity" value={`${averages.humidity} %`} />
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-100/50">
-                    <th className="px-6 py-3 text-[9px] font-black uppercase tracking-widest text-slate-400">Day</th>
-                    <th className="px-6 py-3 text-[9px] font-black uppercase tracking-widest text-slate-400">Date</th>
-                    <th className="px-6 py-3 text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">Steps</th>
-                    <th className="px-6 py-3 text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">Temp</th>
-                    <th className="px-6 py-3 text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">Humidity</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {chronologicalHistory.map((day, idx) => (
-                    <tr key={day.date} className="hover:bg-white transition-colors">
-                      <td className="px-6 py-3 text-[10px] font-bold text-slate-400">Day {idx + 1}</td>
-                      <td className="px-6 py-3 text-xs font-black text-slate-700">{day.date}</td>
-                      <td className="px-6 py-3 text-xs font-mono font-black text-slate-900 text-right">{day.totalSteps.toLocaleString()}</td>
-                      <td className="px-6 py-3 text-xs font-mono font-black text-slate-900 text-right">{day.avgTemp.toFixed(1)}°C</td>
-                      <td className="px-6 py-3 text-xs font-mono font-black text-slate-900 text-right">{day.avgHumidity}%</td>
+
+            {/* History Table */}
+            <div className="bg-slate-50 rounded-3xl border border-slate-100 overflow-hidden shadow-sm">
+              <div className="px-6 py-4 border-b border-slate-200 flex items-center gap-2">
+                <History className="w-4 h-4 text-slate-400" />
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">7-Day Snapshot Log</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-100/50">
+                      <th className="px-6 py-3 text-[9px] font-black uppercase tracking-widest text-slate-400">Day</th>
+                      <th className="px-6 py-3 text-[9px] font-black uppercase tracking-widest text-slate-400">Date</th>
+                      <th className="px-6 py-3 text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">Steps</th>
+                      <th className="px-6 py-3 text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">Temp</th>
+                      <th className="px-6 py-3 text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">Humidity</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {chronologicalHistory.map((day, idx) => (
+                      <tr key={day.date} className="hover:bg-white transition-colors">
+                        <td className="px-6 py-3 text-[10px] font-bold text-slate-400">Day {idx + 1}</td>
+                        <td className="px-6 py-3 text-xs font-black text-slate-700">{day.date}</td>
+                        <td className="px-6 py-3 text-xs font-mono font-black text-slate-900 text-right">{(day.totalSteps || 0).toLocaleString()}</td>
+                        <td className="px-6 py-3 text-xs font-mono font-black text-slate-900 text-right">{(day.avgTemp || 0).toFixed(1)}°C</td>
+                        <td className="px-6 py-3 text-xs font-mono font-black text-slate-900 text-right">{day.avgHumidity || 0}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </div>
+        )
       )}
     </div>
   );

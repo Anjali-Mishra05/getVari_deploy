@@ -44,6 +44,8 @@ const UserFilters: React.FC<UserFiltersProps> = ({
             <option value="high">High Risk</option>
             <option value="mild">Mild Risk</option>
             <option value="hydrated">Hydrated</option>
+            <option value="insufficientdata">Insufficient Data</option>
+            <option value="deviceerror">Device Error</option>
           </select>
         </div>
 

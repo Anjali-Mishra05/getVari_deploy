@@ -56,7 +56,8 @@ const UserTable: React.FC<UserTableProps> = ({ users, onUserClick }) => {
                         variant={
                           u.status === 'Critical' ? 'red' :
                           u.status === 'High Risk' ? 'amber' :
-                          u.status === 'Mild Risk' ? 'cyan' : 'emerald'
+                          u.status === 'Mild Risk' ? 'cyan' :
+                          u.status === 'Hydrated' ? 'emerald' : 'neutral'
                         }
                         dot
                         className="px-2.5 py-1 text-[11px]"

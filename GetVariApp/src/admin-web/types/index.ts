@@ -1,5 +1,5 @@
 export type Workload = 'Office' | 'Commuter' | 'Gym' | 'Field';
-export type RiskStatus = 'Hydrated' | 'Mild Risk' | 'High Risk' | 'Critical';
+export type RiskStatus = 'Hydrated' | 'Mild Risk' | 'High Risk' | 'Critical' | 'Insufficient Data' | 'Device Error';
 export type LogType = 'info' | 'success' | 'warn' | 'error';
 export type AlertType = 'critical' | 'warn' | 'info';
 

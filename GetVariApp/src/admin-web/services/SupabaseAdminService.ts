@@ -98,9 +98,9 @@ export class SupabaseAdminService {
           const historyRisk = HydrationRiskEngine.solveRisk({
             ...mockTelemetry,
             timeSinceWaterIntake: Math.max(0, Math.min(8, hoursSince))
-          }, activeAbsorbed, profile);
+          }, profile);
 
-          riskHistory.push(historyRisk.score);
+          riskHistory.push(historyRisk.score ?? 0);
         }
 
         return {
@@ -120,7 +120,7 @@ export class SupabaseAdminService {
           firmwareVersion: 'v1.0.0',
           lastSynced: lastActiveTime > 0 ? new Date(lastActiveTime).toLocaleDateString() : 'Never',
           lastSyncedMinutes,
-          riskScore: engineResult.score,
+          riskScore: engineResult.score ?? 0,
           status,
           waterIntakeMl,
           targetDailyMl: target,
