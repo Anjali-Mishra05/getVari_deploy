@@ -48,13 +48,42 @@ export const validate = (raw: any): AppConfig | null => {
   const nonEmpty = <T,>(value: any, fallback: T[]): T[] =>
     Array.isArray(value) && value.length > 0 ? value : fallback;
 
+  /**
+   * Merge a published list over the shipped one, item by item and field by
+   * field, matching on `id`.
+   *
+   * A wholesale replacement was wrong in a way that only shows up once the two
+   * sides are out of step — which is the normal state of affairs, because the
+   * app updates when a user installs it and the server updates when someone
+   * deploys. A build that added `ambientTempC` to the climate bands fetched a
+   * document from a server that predated the field, adopted that list entire,
+   * and every band lost the value: the app then fell back to a hardcoded
+   * ambient and quietly stopped modelling the user's actual climate. Nothing
+   * failed, nothing logged, the numbers were just wrong.
+   *
+   * Merging per field means an older server can only override what it actually
+   * knows about. Items it does not mention keep their shipped definition;
+   * items it adds come through whole.
+   */
+  const mergeById = <T extends { id: string }>(value: any, fallback: T[]): T[] => {
+    if (!Array.isArray(value) || value.length === 0) return fallback;
+    const shipped = new Map(fallback.map(item => [item.id, item]));
+    return value
+      .filter((item: any) => item && typeof item.id === 'string')
+      .map((item: any) => ({ ...(shipped.get(item.id) ?? {}), ...item }) as T);
+  };
+
   return {
     ...DEFAULT_APP_CONFIG,
     ...raw,
-    medicalConditions: conditions ?? DEFAULT_APP_CONFIG.medicalConditions,
-    activityLevels: nonEmpty(raw.activityLevels, DEFAULT_APP_CONFIG.activityLevels),
-    workEnvironments: nonEmpty(raw.workEnvironments, DEFAULT_APP_CONFIG.workEnvironments),
-    climateBands: nonEmpty(raw.climateBands, DEFAULT_APP_CONFIG.climateBands),
+    medicalConditions: conditions
+      ? mergeById(conditions, DEFAULT_APP_CONFIG.medicalConditions)
+      : DEFAULT_APP_CONFIG.medicalConditions,
+    activityLevels: mergeById(raw.activityLevels, DEFAULT_APP_CONFIG.activityLevels),
+    workEnvironments: mergeById(raw.workEnvironments, DEFAULT_APP_CONFIG.workEnvironments),
+    climateBands: mergeById(raw.climateBands, DEFAULT_APP_CONFIG.climateBands),
+    // Amounts carry no id and are a plain ordered list, so a published one
+    // replaces the shipped list outright.
     quickLogAmounts: nonEmpty(raw.quickLogAmounts, DEFAULT_APP_CONFIG.quickLogAmounts),
     targetFormula: { ...DEFAULT_APP_CONFIG.targetFormula, ...(raw.targetFormula ?? {}) },
     riskThresholds: { ...DEFAULT_APP_CONFIG.riskThresholds, ...(raw.riskThresholds ?? {}) },

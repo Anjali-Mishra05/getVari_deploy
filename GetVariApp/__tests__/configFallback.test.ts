@@ -100,4 +100,52 @@ describe('a backend that does not serve /config yet', () => {
     expect(AppConfigStore.current().medicalConditions[0].targetAdjustmentMl).toBe(999);
     expect(Object.keys(mockStore)).toContain('@getvari/app_config_v1');
   });
+
+  it('keeps fields a server older than the app does not know about', async () => {
+    // The exact shape of a real incident: the app gained `ambientTempC` on the
+    // climate bands, the deployed server predated it, and adopting the
+    // server's list wholesale left every band without the field. The app then
+    // fell back to a hardcoded ambient and silently stopped modelling the
+    // user's climate.
+    const olderServerBands = DEFAULT_APP_CONFIG.climateBands.map(band => {
+      const { ambientTempC, ambientHumidity, ...withoutAmbient } = band;
+      return withoutAmbient;
+    });
+
+    respondWith(200, { ...DEFAULT_APP_CONFIG, climateBands: olderServerBands });
+    await refresh({ force: true });
+
+    const hot = AppConfigStore.current().climateBands.find(b => b.id === 'hot')!;
+    expect(hot.ambientTempC).toBe(
+      DEFAULT_APP_CONFIG.climateBands.find(b => b.id === 'hot')!.ambientTempC
+    );
+    expect(hot.ambientHumidity).toBeGreaterThan(0);
+  });
+
+  it('still lets the server override the fields it does know about', async () => {
+    respondWith(200, {
+      ...DEFAULT_APP_CONFIG,
+      climateBands: [{ id: 'hot', targetAdjustmentMl: 999 }],
+    });
+    await refresh({ force: true });
+
+    const hot = AppConfigStore.current().climateBands.find(b => b.id === 'hot')!;
+    expect(hot.targetAdjustmentMl).toBe(999);
+    // ...without losing everything it did not mention.
+    expect(hot.cities).toContain('Mumbai');
+    expect(hot.ambientTempC).toBeGreaterThan(0);
+  });
+
+  it('passes through an item the shipped config has never seen', async () => {
+    respondWith(200, {
+      ...DEFAULT_APP_CONFIG,
+      medicalConditions: [
+        ...DEFAULT_APP_CONFIG.medicalConditions,
+        { id: 'gout', title: 'Gout', enabled: true, targetAdjustmentMl: 300 },
+      ],
+    });
+    await refresh({ force: true });
+
+    expect(AppConfigStore.conditionById('gout')?.targetAdjustmentMl).toBe(300);
+  });
 });
