@@ -1,5 +1,7 @@
 import { SensorData, HydrationRiskDetails, UserProfile } from '../types';
 import { HydrationRiskEngine } from './hydrationRiskEngine';
+import { climateBandFor } from './hydrationTarget';
+import AppConfigStore from '../config/appConfigStore';
 
 /**
  * Calculates physiological indicator score for heart rate.
@@ -35,6 +37,19 @@ export function runHydrationRiskSolver(
     timeSinceWaterIntake: hoursSinceDrink
   }, profile);
 
+  return toRiskDetails(engineOutput);
+}
+
+/**
+ * Dress an engine result as the `HydrationRiskDetails` the UI consumes.
+ *
+ * Split out because the dashboard hook calls `solveRisk` directly and used to
+ * pass the raw engine output straight to the cards — which is how the fields
+ * the UI needs went missing without anything complaining loudly.
+ */
+export function toRiskDetails(
+  engineOutput: ReturnType<typeof HydrationRiskEngine.solveRisk>
+): HydrationRiskDetails {
   let color = 'from-emerald-400 to-teal-500';
   let bgColor = 'bg-emerald-500/10';
   let textGlow = 'shadow-emerald-500/40 text-emerald-400';
@@ -72,10 +87,10 @@ export function runHydrationRiskSolver(
     suggestedAction: engineOutput.suggestedAction,
     glassesRequired: engineOutput.glassesRequired,
     heartLoad: engineOutput.heartLoad,
-    activityLoad: engineOutput.activityLoadScore,
+    activityLoad: engineOutput.activityLoad,
     temperatureLoad: engineOutput.temperatureLoad,
     humidityLoad: engineOutput.humidityLoad,
-    timeLoad: engineOutput.timeLoad
+    timeLoad: engineOutput.timeLoad,
   };
 }
 
@@ -94,19 +109,16 @@ export function calculateRecoveryEstimation(fluidMl: number, profile?: UserProfi
       multiplier *= Math.min(1.3, profile.weightKg / 75);
     }
 
-    // 2. Clinical Modifiers
-    if (profile.medicalConditions) {
-      if (profile.medicalConditions.includes('Diabetes')) multiplier *= 1.25;
-      if (profile.medicalConditions.includes('Kidney Disease')) multiplier *= 1.40;
-      if (profile.medicalConditions.includes('Hypertension')) multiplier *= 1.10;
+    // 2. Clinical Modifiers, from the admin config rather than a local list.
+    //    The literal names this used to match ('Kidney Disease') were never
+    //    what onboarding stored, so none of them had ever applied.
+    for (const condition of AppConfigStore.conditionsFor(profile.medicalConditions)) {
+      multiplier *= condition.recoveryMultiplier ?? 1;
     }
 
-    // 3. Hot Climate Modifier: Multiplied by 0.90
-    if (profile.location) {
-      const hotCities = ['Mumbai', 'Chennai', 'Delhi', 'Jaipur', 'Hyderabad', 'Ahmedabad', 'Kolkata'];
-      if (hotCities.some(city => profile.location!.includes(city))) {
-        multiplier *= 0.90;
-      }
+    // 3. Climate Modifier: a hotter band absorbs marginally faster.
+    if (climateBandFor(profile.location ?? profile.selectedCity)?.id === 'hot') {
+      multiplier *= 0.90;
     }
   }
 
@@ -132,10 +144,15 @@ export function calculateRecoveryEstimation(fluidMl: number, profile?: UserProfi
   const endHrs = Math.floor(endTotal / 60);
   const endMins = endTotal % 60;
 
+  // "1h 0m" is not how anyone writes an hour, and a 500ml estimate lands
+  // exactly there — the window starts at 60 minutes.
+  const hoursAndMinutes = (hours: number, minutes: number): string =>
+    minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+
   if (startHrs === 0) {
-    return `${startTotal} mins to ${endHrs}h ${endMins}m`;
+    return `${startTotal} mins to ${hoursAndMinutes(endHrs, endMins)}`;
   }
-  return `${startHrs}h ${startMins}m to ${endHrs}h ${endMins}m`;
+  return `${hoursAndMinutes(startHrs, startMins)} to ${hoursAndMinutes(endHrs, endMins)}`;
 }
 
 /**
@@ -148,18 +165,20 @@ export function calculatePredictedRiskAfterDrink(
   fluidMl: number,
   profile?: UserProfile
 ): number {
-  let weightFactor = profile ? (70 / profile.weightKg) : 1.0;
-  let absorptionEfficiency = 1.0;
+  // A profile that has not loaded yet (or one saved without a weight) used to
+  // divide by zero here, and the Infinity propagated all the way to a "NaN"
+  // on the confirmation modal. An unknown weight simply means no scaling.
+  const weightKg = Number(profile?.weightKg);
+  const weightFactor = Number.isFinite(weightKg) && weightKg > 0 ? 70 / weightKg : 1.0;
 
-  if (profile?.medicalConditions) {
-    if (profile.medicalConditions.includes('Diabetes')) {
-      absorptionEfficiency = 0.90;
-    }
-    if (profile.medicalConditions.includes('Kidney Disease')) {
-      absorptionEfficiency = 0.85;
-    }
-  }
+  // The worst-affected condition sets the ceiling; they do not compound.
+  const absorptionEfficiency = AppConfigStore.conditionsFor(profile?.medicalConditions).reduce(
+    (lowest, condition) => Math.min(lowest, condition.absorptionEfficiency ?? 1),
+    1.0
+  );
 
-  const riskReduction = fluidMl * 0.08 * weightFactor * absorptionEfficiency;
-  return Math.max(0, Math.round(currentRisk - riskReduction));
+  const safeRisk = Number.isFinite(currentRisk) ? currentRisk : 0;
+  const safeFluid = Number.isFinite(fluidMl) ? fluidMl : 0;
+  const riskReduction = safeFluid * 0.08 * weightFactor * absorptionEfficiency;
+  return Math.max(0, Math.round(safeRisk - riskReduction));
 }

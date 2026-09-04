@@ -92,6 +92,99 @@ export function backendCandidates(): string[] {
   }
 
   const unique = [...new Set(candidates)];
-  console.log('[AquaSage] Backend candidates generated:', unique);
+  console.log('[Backend] Candidates generated:', unique);
   return unique;
+}
+
+/**
+ * The backend address, resolved once and shared by everything that calls it.
+ *
+ * The chat used to own discovery, which meant the config service and the chat
+ * each probed on their own — two cold starts on a free-tier host that takes
+ * the better part of a minute to wake. Discovery now happens here, at most
+ * once, and every caller awaits the same promise.
+ */
+let resolvedUrl: string | null = null;
+let resolving: Promise<string | null> | null = null;
+
+/** Milliseconds to wait for a candidate to answer `/ping`. */
+const PROBE_TIMEOUT_MS = 6000;
+
+export async function resolveBackendUrl(): Promise<string | null> {
+  if (resolvedUrl) return resolvedUrl;
+
+  // A configured backend needs no discovery, and must not be probed.
+  //
+  // Discovery exists to find a developer's machine on an unknown address.
+  // When the build has been told where the server is, probing only adds a way
+  // to fail: a free-tier host sleeps when idle and takes half a minute to
+  // wake, so a 6-second /ping aborts, the probe moves on to addresses that
+  // cannot possibly answer on a real phone, and the user is told the AI is
+  // unreachable — for a server that was merely asleep.
+  if (CONFIGURED_BACKEND_URL) {
+    resolvedUrl = CONFIGURED_BACKEND_URL;
+    return resolvedUrl;
+  }
+
+  if (resolving) return resolving;
+
+  resolving = (async () => {
+    const candidates = backendCandidates();
+    const startedAt = Date.now();
+
+    for (const base of candidates) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+        try {
+          const res = await fetch(`${base}/ping`, { signal: controller.signal });
+          if (res.ok) {
+            console.log(`[Backend] Discovered at ${base} in ${Date.now() - startedAt}ms`);
+            resolvedUrl = base;
+            return base;
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch (error: any) {
+        console.log(`[Backend] Probing ${base} failed: ${error?.message ?? error}`);
+      }
+    }
+
+    console.warn('[Backend] Not found on any candidate address:', candidates);
+    return null;
+  })();
+
+  try {
+    return await resolving;
+  } finally {
+    resolving = null;
+  }
+}
+
+/**
+ * Wake the backend without waiting for it.
+ *
+ * Render's free tier stops the instance after 15 minutes of no traffic and
+ * takes roughly 30-50 seconds to start it again. Nothing in the app can stop
+ * that, but the app decides *when* the wait happens: called on launch and on
+ * every foreground, the instance is usually already up by the time the user
+ * opens the chat, so the cold start is spent on a screen the user is reading
+ * rather than on a message they are waiting for.
+ *
+ * Deliberately unawaited and never throws.
+ */
+export function warmBackend(): void {
+  resolveBackendUrl()
+    .then(base => {
+      if (!base) return;
+      return fetch(`${base}/ping`).catch(() => undefined);
+    })
+    .catch(() => undefined);
+}
+
+/** Test seam: forget the resolved address so the next call probes again. */
+export function resetBackendResolution(): void {
+  resolvedUrl = null;
+  resolving = null;
 }

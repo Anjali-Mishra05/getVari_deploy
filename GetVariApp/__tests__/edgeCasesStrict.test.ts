@@ -136,7 +136,12 @@ jest.mock('../src/services/NotificationService', () => ({
   },
 }));
 
-jest.mock('@notifee/react-native', () => ({ __esModule: true, default: {}, AndroidImportance: { HIGH: 4 } }));
+jest.mock('@notifee/react-native', () => ({
+  __esModule: true,
+  default: {},
+  AndroidImportance: { DEFAULT: 3, HIGH: 4 },
+  AndroidStyle: { BIGTEXT: 1 },
+}));
 jest.mock('@react-native-firebase/messaging', () => ({}));
 
 import { HydrationRiskEngine } from '../src/utils/hydrationRiskEngine';
@@ -233,7 +238,7 @@ describe('EC-1: Bluetooth disconnected — fall back to 7-day history', () => {
       { avgHR: 70, avgSteps: 10000, avgTemp: 25, avgHumidity: 50 }
     );
     // 10 000 steps → 80/100 activity → the 80+ band.
-    expect(result.activityLoadScore).toBe(90);
+    expect(result.activityLoad).toBe(90);
   });
 });
 

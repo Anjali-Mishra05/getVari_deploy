@@ -18,7 +18,7 @@ describe('Hydration Risk Solver Compliance', () => {
       fitnessGoal: 'optimize_health',
       waterHabit: 'moderate',
       targetDailyMl: 2500,
-      medicalConditions: ['Diabetes'],
+      medicalConditions: ['diabetes'],
       location: 'Mumbai'
     };
 
@@ -82,7 +82,7 @@ describe('Hydration Risk Solver Compliance', () => {
       fitnessGoal: 'optimize_health',
       waterHabit: 'moderate',
       targetDailyMl: 2500,
-      medicalConditions: ['Kidney Disease'],
+      medicalConditions: ['ckd'],
       location: 'Bangalore'
     };
 
@@ -120,7 +120,7 @@ describe('Hydration Risk Solver Compliance', () => {
       fitnessGoal: 'optimize_health',
       waterHabit: 'moderate',
       targetDailyMl: 3000,
-      medicalConditions: ['Diabetes', 'Kidney Disease', 'Hypertension'], // Multiple tweaks
+      medicalConditions: ['diabetes', 'ckd', 'hypertension'], // Multiple tweaks
       location: 'Mumbai' // Climate tweak
     };
 

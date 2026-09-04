@@ -7,6 +7,8 @@
  * which is why it is phrased the way a person would type it.
  */
 
+import AppConfigStore from '../config/appConfigStore';
+
 export interface QuickAmount {
   ml: number;
   /** "250 ml" — also parseable by `parseIntakeMl`. */
@@ -17,10 +19,37 @@ export interface QuickAmount {
   primary?: boolean;
 }
 
-export const QUICK_LOG_AMOUNTS: QuickAmount[] = [
-  { ml: 250, label: '250 ml', caption: 'A glass' },
-  { ml: 500, label: '500 ml', caption: 'A bottle', primary: true },
-  { ml: 1000, label: '1 litre', caption: 'A large bottle' },
+/** Everyday objects the amounts correspond to, by size. */
+const CAPTION_BANDS: { maxMl: number; caption: string }[] = [
+  { maxMl: 300, caption: 'A glass' },
+  { maxMl: 600, caption: 'A bottle' },
+  { maxMl: 1100, caption: 'A large bottle' },
+  { maxMl: Infinity, caption: 'A jug' },
 ];
 
-export default QUICK_LOG_AMOUNTS;
+const captionFor = (ml: number): string =>
+  CAPTION_BANDS.find(band => ml <= band.maxMl)?.caption ?? 'A serving';
+
+/**
+ * The amounts on offer right now, from the admin config.
+ *
+ * A function rather than a constant: the config arrives from the network after
+ * the module is first imported, and a captured array would pin the app to the
+ * amounts it booted with. Callers read it during render, which is cheap — the
+ * list is four items long.
+ */
+export const quickLogAmounts = (): QuickAmount[] =>
+  AppConfigStore.current().quickLogAmounts.map(amount => ({
+    ml: amount.ml,
+    label: amount.label,
+    caption: captionFor(amount.ml),
+    primary: amount.primary,
+  }));
+
+/**
+ * The shipped amounts, for the handful of call sites that need a value rather
+ * than a call. Prefer `quickLogAmounts()`, which follows the admin config.
+ */
+export const QUICK_LOG_AMOUNTS: QuickAmount[] = quickLogAmounts();
+
+export default quickLogAmounts;

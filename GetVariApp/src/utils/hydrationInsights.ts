@@ -20,24 +20,34 @@ export interface InsightInputs {
   /** Hours since the last logged drink, after absorption credit. */
   hoursSinceDrink: number;
   totalMl: number;
-  targetMl: number;
+  /** The daily goal, or null while the profile is still loading. */
+  targetMl: number | null;
 }
 
 /** Why the risk is where it is, in one clause, from the dominant load. */
 const dominantDriver = (risk: HydrationRiskDetails): string => {
+  // A missing load weighs nothing. Left un-coerced, an undefined load produced
+  // NaN, and `NaN > x` is always false — so that channel could never win, and
+  // the insight silently misattributed the cause.
+  const weigh = (value: number | null | undefined, weight: number): number =>
+    typeof value === 'number' && Number.isFinite(value) ? value * weight : 0;
+
   const drivers = [
-    { text: 'elevated cardiovascular strain', weighted: risk.heartLoad * 0.3 },
-    { text: 'sustained physical exertion', weighted: risk.activityLoad * 0.25 },
-    { text: 'ambient thermal load', weighted: risk.temperatureLoad * 0.2 },
-    { text: 'low sweat-evaporation potential', weighted: risk.humidityLoad * 0.1 },
-    { text: 'a prolonged gap since your last intake', weighted: risk.timeLoad * 0.15 },
+    { text: 'elevated cardiovascular strain', weighted: weigh(risk.heartLoad, 0.3) },
+    { text: 'sustained physical exertion', weighted: weigh(risk.activityLoad, 0.25) },
+    { text: 'ambient thermal load', weighted: weigh(risk.temperatureLoad, 0.2) },
+    { text: 'low sweat-evaporation potential', weighted: weigh(risk.humidityLoad, 0.1) },
+    { text: 'a prolonged gap since your last intake', weighted: weigh(risk.timeLoad, 0.15) },
   ];
   return drivers.reduce((top, item) => (item.weighted > top.weighted ? item : top)).text;
 };
 
 /** Prescribed volume, rounded to something a bottle or glass can deliver. */
 const prescribedMl = (inputs: InsightInputs): number => {
-  const fromGoal = Math.max(0, inputs.targetMl - inputs.totalMl);
+  // A goal that has not loaded contributes nothing, rather than a negative
+  // deficit that would drag the suggestion down to its floor.
+  const fromGoal =
+    inputs.targetMl === null ? 0 : Math.max(0, inputs.targetMl - inputs.totalMl);
   const fromRisk = (inputs.risk.glassesRequired ?? 0) * 250;
   const suggested = Math.max(fromRisk, Math.min(650, fromGoal));
   return Math.max(250, Math.round(suggested / 50) * 50);
@@ -53,7 +63,7 @@ export const generateInsights = (inputs: InsightInputs): AIInsight[] => {
   const stamp = Date.now();
 
   const strainPhrase =
-    sensorData.activityLoad >= 50 ? 'high physical strain' : 'low physical strain';
+    (sensorData.activityLoad ?? 0) >= 50 ? 'high physical strain' : 'low physical strain';
   const riskPhrase =
     risk.score <= 25
       ? 'hydration reserves are holding'
