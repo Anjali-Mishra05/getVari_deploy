@@ -1,16 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Modal,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
-import { Check, Droplets, X } from 'lucide-react-native';
+import { ActivityIndicator, Text, TouchableOpacity, View } from 'react-native';
+import { Check, Droplets } from 'lucide-react-native';
 
-import { QUICK_LOG_AMOUNTS } from '../utils/hydrationAmounts';
+import Sheet from './ui/Sheet';
+import { quickLogAmounts } from '../utils/hydrationAmounts';
 import { formatMl } from '../utils/hydrationFormat';
 
 interface QuickLogSheetProps {
@@ -19,7 +12,8 @@ interface QuickLogSheetProps {
   /** Writes the entry. Resolves `false` when nothing was recorded. */
   onLog: (amountMl: number) => Promise<boolean>;
   totalMl: number;
-  targetMl: number;
+  /** The daily goal, or null while the profile is still loading. */
+  targetMl: number | null;
 }
 
 const ACCENT = '#00f2fe';
@@ -87,70 +81,20 @@ const QuickLogSheet: React.FC<QuickLogSheetProps> = ({
   const busy = pendingMl !== null || loggedMl !== null;
 
   return (
-    <Modal
+    <Sheet
       visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
+      onClose={onClose}
+      title="Log water"
+      subtitle={
+        targetMl === null
+          ? `${formatMl(totalMl)} TODAY`.toUpperCase()
+          : `${formatMl(totalMl)} OF ${formatMl(targetMl)} TODAY`.toUpperCase()
+      }
     >
-      {/* RN's Modal opens its own native window outside the app root's
-          GestureHandlerRootView; without one here, gesture-handler swallows
-          touches inside the sheet on Android. */}
-      <GestureHandlerRootView
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'flex-end' }}
-      >
-        <TouchableOpacity activeOpacity={1} onPress={onClose} style={{ flex: 1 }} />
-
-        <Animated.View
-          entering={SlideInDown.duration(280)}
-          exiting={SlideOutDown.duration(220)}
-          style={{
-            backgroundColor: '#020617',
-            borderTopLeftRadius: 40,
-            borderTopRightRadius: 40,
-            borderTopWidth: 1,
-            borderColor: 'rgba(255,255,255,0.2)',
-            paddingBottom: 40,
-            overflow: 'hidden',
-          }}
-        >
-          {/* Header */}
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingHorizontal: 24,
-              paddingVertical: 18,
-              borderBottomWidth: 1,
-              borderBottomColor: 'rgba(255,255,255,0.05)',
-            }}
-          >
-            <View>
-              <Text style={{ color: '#ffffff', fontWeight: '900', fontSize: 16 }}>
-                Log water
-              </Text>
-              <Text
-                style={{
-                  color: '#64748b',
-                  fontSize: 9,
-                  fontWeight: '900',
-                  letterSpacing: 2,
-                  marginTop: 3,
-                }}
-              >
-                {`${formatMl(totalMl)} OF ${formatMl(targetMl)} TODAY`.toUpperCase()}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={onClose} style={{ padding: 10 }}>
-              <X color="#94a3b8" size={24} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Amounts */}
-          <View style={{ paddingHorizontal: 20, paddingTop: 18 }}>
-            {QUICK_LOG_AMOUNTS.map(amount => {
+      {/* Amounts. The sheet sizes to its content, so the bottom inset lives
+          here rather than on the panel. */}
+      <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 40 }}>
+        {quickLogAmounts().map(amount => {
               const isPending = pendingMl === amount.ml;
               const isLogged = loggedMl === amount.ml;
               const highlight = amount.primary || isLogged;
@@ -269,10 +213,8 @@ const QuickLogSheet: React.FC<QuickLogSheetProps> = ({
                 Couldn't save that entry. Check your connection and try again.
               </Text>
             )}
-          </View>
-        </Animated.View>
-      </GestureHandlerRootView>
-    </Modal>
+      </View>
+    </Sheet>
   );
 };
 

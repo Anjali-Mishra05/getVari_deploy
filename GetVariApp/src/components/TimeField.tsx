@@ -1,7 +1,9 @@
 import React, { useRef, useState } from 'react';
-import { Modal, SafeAreaView, ScrollView, Text, TouchableOpacity, View } from 'react-native';
-import Animated, { FadeInUp } from 'react-native-reanimated';
+import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
+
 import { Check, ChevronDown } from 'lucide-react-native';
+
+import Sheet from './ui/Sheet';
 
 import { formatClock, formatClockLabel } from '../utils/sleepWindow';
 
@@ -34,23 +36,13 @@ const TimeField = ({ label, caption, value, onChange, icon: Icon }: any) => {
       </TouchableOpacity>
       {!!caption && <Text className="text-neutral-500 text-[10px] mt-2 leading-relaxed">{caption}</Text>}
 
-      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
-        <View className="flex-1 bg-black/40 justify-end">
-          <TouchableOpacity activeOpacity={1} onPress={() => setOpen(false)} className="absolute inset-0" />
-
-          <Animated.View
-            entering={FadeInUp.duration(300)}
-            className="w-full bg-[#01040a] border-t border-white/10 rounded-t-[42px] overflow-hidden h-[70%]"
-          >
-            <View className="items-center pt-3 pb-1">
-              <View className="w-12 h-1 bg-white/10 rounded-full" />
-            </View>
-
-            <View className="px-6 pt-4 pb-2">
-              <Text className="text-white font-black text-xl">{label}</Text>
-              <Text className="text-neutral-500 text-[11px] mt-1">An approximate time is enough.</Text>
-            </View>
-
+      <Sheet
+        visible={open}
+        onClose={() => setOpen(false)}
+        title={label}
+        subtitle="AN APPROXIMATE TIME IS ENOUGH"
+        heightFraction={0.7}
+      >
             <ScrollView
               ref={scrollRef}
               className="flex-1 px-4"
@@ -82,17 +74,9 @@ const TimeField = ({ label, caption, value, onChange, icon: Icon }: any) => {
                   {option === value && <Check size={18} color="#00f2fe" />}
                 </TouchableOpacity>
               ))}
-              <View className="h-10" />
-            </ScrollView>
-
-            <SafeAreaView>
-              <TouchableOpacity onPress={() => setOpen(false)} className="p-6 items-center border-t border-white/5">
-                <Text className="text-[#64748b] text-[12px] font-black uppercase tracking-widest">Close Picker</Text>
-              </TouchableOpacity>
-            </SafeAreaView>
-          </Animated.View>
-        </View>
-      </Modal>
+          <View className="h-10" />
+        </ScrollView>
+      </Sheet>
     </View>
   );
 };

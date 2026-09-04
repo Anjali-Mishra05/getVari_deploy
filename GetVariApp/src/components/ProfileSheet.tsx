@@ -1,31 +1,24 @@
 import React, { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  ScrollView,
-  Text,
-  TouchableOpacity,
-  View,
-  useWindowDimensions,
-} from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
-import { Activity, LogOut, Moon, Pencil, Phone, Target, User, X } from 'lucide-react-native';
+import { ActivityIndicator, Alert, ScrollView, Text, View } from 'react-native';
+import { Activity, LogOut, Moon, Pencil, Phone, Target } from 'lucide-react-native';
+
+import Button from './ui/Button';
+import Sheet from './ui/Sheet';
 
 import { AuthService, StoredSession } from '../services/AuthService';
 import NotificationService from '../services/NotificationService';
 import NotificationHistory from '../services/NotificationHistory';
 import HydrationPromptSession from '../services/HydrationPromptSession';
 import { describeSleepWindow, normaliseSleepSchedule } from '../utils/sleepWindow';
+import useAppConfig from '../hooks/useAppConfig';
 
 interface ProfileSheetProps {
   visible: boolean;
   onClose: () => void;
   /** The onboarding profile blob, when it has been loaded. */
   userProfile: any;
-  /** Daily goal already resolved by the caller (profile value, or default). */
-  targetMl: number;
+  /** The daily goal from the profile, or null while it is still loading. */
+  targetMl: number | null;
   /** Called once the session is gone, so the app can leave the signed-in area. */
   onLoggedOut: () => void;
   /**
@@ -105,7 +98,7 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
   onLoggedOut,
   onEditProfile,
 }) => {
-  const { height: windowHeight } = useWindowDimensions();
+  const appConfig = useAppConfig();
   const [session, setSession] = useState<StoredSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
@@ -167,6 +160,10 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
     );
   };
 
+  const activityLabel =
+    appConfig.activityLevels.find(level => level.id === userProfile?.activityLevel)?.title ??
+    'Not set';
+
   const sleepSchedule = normaliseSleepSchedule(userProfile);
   const sleepWindowLabel = sleepSchedule ? describeSleepWindow(sleepSchedule) : 'Not set';
 
@@ -176,77 +173,22 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
     'U';
 
   return (
-    <Modal
+    <Sheet
       visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
+      onClose={onClose}
+      title="Account"
+      subtitle={session?.isDemo ? 'DEMO SESSION' : 'SIGNED IN'}
+      heightFraction={0.75}
     >
-      {/* Same reason as the notification sheet: RN's Modal opens its own native
-          window outside the app root's GestureHandlerRootView. */}
-      <GestureHandlerRootView
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'flex-end' }}
-      >
-        <TouchableOpacity activeOpacity={1} onPress={onClose} style={{ flex: 1 }} />
-
-        <Animated.View
-          entering={SlideInDown.duration(300)}
-          exiting={SlideOutDown.duration(250)}
-          style={{
-            maxHeight: Math.min(windowHeight * 0.75, windowHeight - 60),
-            backgroundColor: '#020617',
-            borderTopLeftRadius: 40,
-            borderTopRightRadius: 40,
-            borderTopWidth: 1,
-            borderColor: 'rgba(255,255,255,0.2)',
-            overflow: 'hidden',
-          }}
-        >
-          {/* Header */}
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingHorizontal: 24,
-              paddingVertical: 18,
-              borderBottomWidth: 1,
-              borderBottomColor: 'rgba(255,255,255,0.05)',
-            }}
-          >
-            <View>
-              <Text style={{ color: '#ffffff', fontWeight: '900', fontSize: 16 }}>
-                Account
-              </Text>
-              <Text
-                style={{
-                  color: '#64748b',
-                  fontSize: 9,
-                  fontWeight: '900',
-                  letterSpacing: 2,
-                  marginTop: 3,
-                }}
-              >
-                {session?.isDemo ? 'DEMO SESSION' : 'SIGNED IN'}
-              </Text>
-            </View>
-            <TouchableOpacity
-              onPress={onClose}
-              style={{ padding: 10 }}
-              accessibilityRole="button"
-              accessibilityLabel="Close account sheet"
-            >
-              <X color="#94a3b8" size={24} />
-            </TouchableOpacity>
-          </View>
-
           {loading ? (
             <View style={{ paddingVertical: 60, alignItems: 'center' }}>
               <ActivityIndicator color={ACCENT} />
             </View>
           ) : (
+            // `flex: 1` so the list scrolls inside the panel's fixed height
+            // rather than overflowing past its rounded bottom edge.
             <ScrollView
+              style={{ flex: 1 }}
               contentContainerStyle={{ paddingBottom: 40 }}
               showsVerticalScrollIndicator={false}
             >
@@ -287,37 +229,20 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
                   </Text>
                 )}
 
-                <TouchableOpacity
+                <Button
+                  label="Edit details"
                   onPress={onEditProfile}
-                  activeOpacity={0.8}
-                  accessibilityRole="button"
-                  accessibilityLabel="Edit personal details"
+                  variant="secondary"
+                  size="sm"
+                  icon={<Pencil color={ACCENT} size={13} strokeWidth={2.5} />}
                   style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 8,
                     marginTop: 16,
-                    paddingVertical: 10,
-                    paddingHorizontal: 18,
-                    borderRadius: 18,
                     backgroundColor: 'rgba(0,242,254,0.08)',
-                    borderWidth: 1,
                     borderColor: 'rgba(0,242,254,0.25)',
                   }}
-                >
-                  <Pencil color={ACCENT} size={13} strokeWidth={2.5} />
-                  <Text
-                    style={{
-                      color: ACCENT,
-                      fontSize: 11,
-                      fontWeight: '900',
-                      letterSpacing: 1.2,
-                      textTransform: 'uppercase',
-                    }}
-                  >
-                    Edit details
-                  </Text>
-                </TouchableOpacity>
+                  textStyle={{ color: ACCENT, letterSpacing: 1.2, textTransform: 'uppercase' }}
+                  accessibilityLabel="Edit personal details"
+                />
               </View>
 
               <Row
@@ -328,17 +253,21 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
               <Row
                 icon={<Target color={ACCENT} size={17} />}
                 label="Daily goal"
-                value={`${targetMl} ml`}
+                value={targetMl === null ? 'Loading…' : `${targetMl} ml`}
               />
+              {/* The activity level is shown by its configured title, not by
+                  its stored id, and says "Not set" rather than defaulting to
+                  "Moderate" — a value the user never chose should not be
+                  presented back to them as though they had.
+
+                  The "Fitness goal" row that used to sit here was removed:
+                  nothing in onboarding or the editor ever collects that field,
+                  so it read "Not set" for every user who has ever installed
+                  the app. */}
               <Row
                 icon={<Activity color="#a78bfa" size={17} />}
                 label="Activity level"
-                value={userProfile?.activityLevel || 'Moderate'}
-              />
-              <Row
-                icon={<User color="#94a3b8" size={17} />}
-                label="Fitness goal"
-                value={userProfile?.fitnessGoal || 'Not set'}
+                value={activityLabel}
               />
               <Row
                 icon={<Moon color="#818cf8" size={17} />}
@@ -347,50 +276,20 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
               />
 
               {/* Log out */}
-              <TouchableOpacity
+              <Button
+                label="LOG OUT"
                 onPress={confirmSignOut}
-                disabled={signingOut}
-                activeOpacity={0.8}
-                accessibilityRole="button"
+                variant="danger"
+                size="lg"
+                loading={signingOut}
+                icon={<LogOut color="#f43f5e" size={18} strokeWidth={2.5} />}
+                style={{ marginHorizontal: 20, marginTop: 26 }}
+                textStyle={{ letterSpacing: 1.2 }}
                 accessibilityLabel="Log out"
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginHorizontal: 20,
-                  marginTop: 26,
-                  paddingVertical: 16,
-                  borderRadius: 20,
-                  backgroundColor: 'rgba(244,63,94,0.08)',
-                  borderWidth: 1,
-                  borderColor: 'rgba(244,63,94,0.3)',
-                  opacity: signingOut ? 0.6 : 1,
-                }}
-              >
-                {signingOut ? (
-                  <ActivityIndicator color="#f43f5e" />
-                ) : (
-                  <>
-                    <LogOut color="#f43f5e" size={18} strokeWidth={2.5} />
-                    <Text
-                      style={{
-                        color: '#f43f5e',
-                        fontSize: 13,
-                        fontWeight: '900',
-                        letterSpacing: 1.2,
-                        marginLeft: 10,
-                      }}
-                    >
-                      LOG OUT
-                    </Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </ScrollView>
-          )}
-        </Animated.View>
-      </GestureHandlerRootView>
-    </Modal>
+              />
+        </ScrollView>
+      )}
+    </Sheet>
   );
 };
 

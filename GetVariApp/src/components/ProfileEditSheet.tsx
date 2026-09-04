@@ -1,17 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Modal,
-  Platform,
-  ScrollView,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-  useWindowDimensions,
-} from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
+import { ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import {
   Check,
   ChevronDown,
@@ -20,17 +8,18 @@ import {
   Moon,
   Sunrise,
   Target,
-  X,
 } from 'lucide-react-native';
-import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
-import Geolocation from '@react-native-community/geolocation';
 
+import Button from './ui/Button';
+import Sheet from './ui/Sheet';
 import CustomSlider from './CustomSlider';
 import TimeField from './TimeField';
 import CityPickerModal from './CityPickerModal';
 import ProfileService from '../services/ProfileService';
+import ConfigService from '../services/ConfigService';
+import useAppConfig from '../hooks/useAppConfig';
 import { computeTargetDailyMl } from '../utils/hydrationTarget';
-import { getClosestCity } from '../data/indianCities';
+import LocationService from '../services/LocationService';
 import {
   DEFAULT_SLEEP_SCHEDULE,
   awakeHoursPerDay,
@@ -52,21 +41,10 @@ const ACCENT = '#00f2fe';
 
 const GENDERS = ['Female', 'Male', 'Non-Binary'];
 
-const CONDITIONS = [
-  { id: 'diabetes', title: 'Diabetes (Type I/II)' },
-  { id: 'hypertension', title: 'Hypertension / High BP' },
-  { id: 'ckd', title: 'Kidney Disease / CKD' },
-  { id: 'heart', title: 'Heart Condition' },
-  { id: 'stones', title: 'Kidney Stone History' },
-];
-
-const ACTIVITY_LEVELS = [
-  { id: 'sedentary', title: 'Sedentary' },
-  { id: 'light', title: 'Light Active' },
-  { id: 'moderate', title: 'Moderate Load' },
-  { id: 'active', title: 'High Strain' },
-  { id: 'elite', title: 'Elite / Hybrid' },
-];
+// The condition and activity lists used to be typed out here *and* in
+// onboarding, with the target calculator holding a third copy under different
+// ids. They now come from the admin config, so there is one list and the app
+// picks up an edit without a release.
 
 /** Deliberately permissive: this is a typo check, not an address validator. */
 const looksLikeEmail = (value: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
@@ -101,7 +79,6 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
   onClose,
   onSaved,
 }) => {
-  const { height: windowHeight } = useWindowDimensions();
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -119,6 +96,13 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
   const [wakeUp, setWakeUp] = useState(DEFAULT_SLEEP_SCHEDULE.wakeUp);
 
   const [showCityPicker, setShowCityPicker] = useState(false);
+
+  // Subscribed, not sampled: the admin config can arrive (or change) while
+  // this sheet is open.
+  const appConfig = useAppConfig();
+  const conditions = appConfig.medicalConditions.filter(c => c.enabled !== false);
+  const activityLevels = appConfig.activityLevels.filter(level => level.enabled !== false);
+  const workEnvironments = appConfig.workEnvironments.filter(env => env.enabled !== false);
   const [isLocating, setIsLocating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -153,38 +137,30 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
       prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]
     );
 
+  /**
+   * Re-resolve the city from the device.
+   *
+   * Shares `LocationService` with onboarding, so a fix taken here obeys the
+   * same rules — GPS first, network second, and no city named when the nearest
+   * one in the table is too far away to be the user's.
+   */
   const detectLocation = async () => {
     setIsLocating(true);
     setErrorMsg('');
     try {
-      const permission = await request(
-        Platform.OS === 'android'
-          ? PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION
-          : PERMISSIONS.IOS.LOCATION_WHEN_IN_USE
-      );
-      if (permission !== RESULTS.GRANTED) {
-        setErrorMsg('Location permission denied. Pick a city instead.');
-        setIsLocating(false);
-        return;
-      }
+      const result = await LocationService.resolveCurrentLocation();
+      if (result.latitude !== null) setLatitude(result.latitude);
+      if (result.longitude !== null) setLongitude(result.longitude);
 
-      Geolocation.getCurrentPosition(
-        (position: any) => {
-          const { latitude: lat, longitude: lon } = position.coords;
-          setLatitude(lat);
-          setLongitude(lon);
-          setSelectedCity(getClosestCity(lat, lon));
-          setIsLocating(false);
-        },
-        () => {
-          setErrorMsg('Could not read your location. Pick a city instead.');
-          setIsLocating(false);
-        },
-        { enableHighAccuracy: false, timeout: 5000 }
-      );
+      if (result.city) {
+        setSelectedCity(result.city);
+      } else {
+        setErrorMsg(LocationService.describeFailure(result.status));
+      }
     } catch (error) {
       console.error('[Profile] Location detection failed:', error);
       setErrorMsg('Could not read your location. Pick a city instead.');
+    } finally {
       setIsLocating(false);
     }
   };
@@ -245,52 +221,17 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
   };
 
   return (
-    <Modal
+    <Sheet
       visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
+      onClose={onClose}
+      title="Edit details"
+      subtitle="PERSONAL INFORMATION"
+      heightFraction={0.9}
     >
-      {/* Same reason as the account sheet: RN's Modal opens its own native
-          window outside the app root's GestureHandlerRootView. */}
-      <GestureHandlerRootView
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'flex-end' }}
-      >
-        <TouchableOpacity activeOpacity={1} onPress={onClose} style={{ flex: 1 }} />
-
-        <Animated.View
-          entering={SlideInDown.duration(300)}
-          exiting={SlideOutDown.duration(250)}
-          style={{
-            maxHeight: Math.min(windowHeight * 0.9, windowHeight - 40),
-            backgroundColor: '#020617',
-            borderTopLeftRadius: 40,
-            borderTopRightRadius: 40,
-            borderTopWidth: 1,
-            borderColor: 'rgba(255,255,255,0.2)',
-            overflow: 'hidden',
-          }}
-        >
-          {/* Header */}
-          <View className="flex-row items-center justify-between px-6 py-4 border-b border-white/5">
-            <View>
-              <Text className="text-white font-black text-[16px]">Edit details</Text>
-              <Text className="text-[9px] text-slate-500 font-black tracking-[2px] mt-1">
-                PERSONAL INFORMATION
-              </Text>
-            </View>
-            <TouchableOpacity
-              onPress={onClose}
-              className="p-2.5"
-              accessibilityRole="button"
-              accessibilityLabel="Close profile editor"
-            >
-              <X color="#94a3b8" size={24} />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView
+      {/* `flex: 1` so the form scrolls inside the panel's fixed height and the
+          action row below it stays pinned to the bottom. */}
+      <ScrollView
+            style={{ flex: 1 }}
             contentContainerStyle={{ padding: 22, paddingBottom: 30 }}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
@@ -387,7 +328,7 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
 
             <SectionLabel>Medical States</SectionLabel>
 
-            {CONDITIONS.map(cond => (
+            {conditions.map(cond => (
               <TouchableOpacity
                 key={cond.id}
                 onPress={() => toggleCondition(cond.id)}
@@ -417,7 +358,7 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
             <SectionLabel>Daily Activity Strain</SectionLabel>
 
             <View className="flex-row flex-wrap gap-2 mb-6">
-              {ACTIVITY_LEVELS.map(opt => (
+              {activityLevels.map(opt => (
                 <TouchableOpacity
                   key={opt.id}
                   onPress={() => setActivityLevel(opt.id)}
@@ -441,20 +382,17 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
 
             <SectionLabel>Work Environment</SectionLabel>
             <View className="flex-row flex-wrap gap-2 mb-6">
-              {[
-                { id: 'indoor', label: 'Indoor/Office' },
-                { id: 'ac_office', label: 'AC Office' },
-                { id: 'hybrid', label: 'Hybrid' },
-                { id: 'outdoor', label: 'Outdoor' },
-                { id: 'heavy_outdoor', label: 'Heavy Outdoor' }
-              ].map((env) => (
+              {workEnvironments.map((env) => (
                 <TouchableOpacity key={env.id} onPress={() => setWorkEnvironment(env.id as any)} className={`px-4 py-3 rounded-xl border items-center ${workEnvironment === env.id ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`}>
                   <Text className={`text-[11px] font-bold ${workEnvironment === env.id ? 'text-[#00f2fe]' : 'text-neutral-400'}`}>{env.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
 
-            {(medicalConditions.includes('hypertension') || medicalConditions.includes('ckd') || medicalConditions.includes('heart')) && (
+            {/* Which diagnoses need a doctor's daily limit is a property of
+                the condition in the admin config, not a list of ids repeated
+                on every screen that asks. */}
+            {ConfigService.requiresPhysicianLimit(medicalConditions) && (
               <View className="mb-6">
                 <FieldLabel>Physician Daily Limit (ml)</FieldLabel>
                 <TextInput
@@ -532,42 +470,31 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
             )}
           </ScrollView>
 
-          {/* Actions */}
-          <View className="flex-row gap-3 px-5 pt-4 pb-7 border-t border-white/5">
-            <TouchableOpacity
-              onPress={onClose}
-              disabled={saving}
-              className="flex-1 py-4 bg-white/5 rounded-[22px] border border-white/5 items-center"
-              accessibilityRole="button"
-              accessibilityLabel="Discard changes"
-            >
-              <Text className="text-slate-400 text-[12px] font-black uppercase tracking-wider">
-                Cancel
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={save}
-              disabled={saving}
-              activeOpacity={0.85}
-              className={`flex-[2] py-4 bg-[#00f2fe] rounded-[22px] items-center justify-center ${
-                saving ? 'opacity-50' : ''
-              }`}
-              accessibilityRole="button"
-              accessibilityLabel="Save profile changes"
-            >
-              {saving ? (
-                <ActivityIndicator color="#020617" size="small" />
-              ) : (
-                <Text className="text-[#020617] text-[12px] font-black uppercase tracking-wider">
-                  Save changes
-                </Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
+      {/* Actions */}
+      <View className="flex-row gap-3 px-5 pt-4 pb-7 border-t border-white/5">
+        <Button
+          label="Cancel"
+          onPress={onClose}
+          variant="secondary"
+          size="lg"
+          disabled={saving}
+          style={{ flex: 1 }}
+          textStyle={{ textTransform: 'uppercase' }}
+          accessibilityLabel="Discard changes"
+        />
+        <Button
+          label="Save changes"
+          onPress={save}
+          size="lg"
+          loading={saving}
+          style={{ flex: 2 }}
+          textStyle={{ textTransform: 'uppercase' }}
+          accessibilityLabel="Save profile changes"
+        />
+      </View>
 
-        <CityPickerModal
-          visible={showCityPicker}
+      <CityPickerModal
+        visible={showCityPicker}
           selectedCity={selectedCity}
           onSelect={(city, lat, lon) => {
             setSelectedCity(city);
@@ -575,10 +502,9 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
             setLongitude(lon);
             setShowCityPicker(false);
           }}
-          onClose={() => setShowCityPicker(false)}
-        />
-      </GestureHandlerRootView>
-    </Modal>
+        onClose={() => setShowCityPicker(false)}
+      />
+    </Sheet>
   );
 };
 
