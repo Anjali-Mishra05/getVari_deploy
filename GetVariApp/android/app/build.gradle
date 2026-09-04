@@ -112,6 +112,16 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
+    // Phone Number Hint API — lets the user pick one of the device's SIM
+    // numbers from a system sheet instead of typing it, with no runtime
+    // permission. See PhoneNumberModule.kt.
+    //
+    // @react-native-firebase/app already pulls this in transitively (it logs
+    // `play.play-services-auth using default value: 21.5.0` at configure
+    // time), but it is declared here too because this module is what actually
+    // uses it — pinned to the same version, so the two cannot conflict.
+    implementation("com.google.android.gms:play-services-auth:21.5.0")
+
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
     } else {
