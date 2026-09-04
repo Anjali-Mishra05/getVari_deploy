@@ -1,0 +1,46 @@
+# Keeps the AquaSage chat backend from cold-starting in front of a user.
+#
+# Render's free plan stops a service after 15 minutes with no inbound traffic,
+# and starting it again takes roughly 30-50 seconds — which the user sees as
+# the assistant taking most of a minute to answer its first question. Nothing
+# in the app can shorten that start-up; the only fix is for the service never
+# to go idle in the first place.
+#
+# A ping every 10 minutes stays comfortably inside the 15-minute window. It is
+# a stop-gap: the real fix is a paid instance that does not sleep, and this
+# workflow should be deleted the day the service moves off the free plan.
+#
+# GitHub skips scheduled workflows on repositories with no activity for 60
+# days, and cron firing is best-effort under load, so treat this as reducing
+# cold starts rather than eliminating them.
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+# One ping at a time; a run that overlaps the next schedule adds nothing.
+concurrency:
+  group: keep-backend-awake
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /ping
+        env:
+          # Override in repository variables to point at a different deployment.
+          BACKEND_URL: ${{ vars.AQUASAGE_BACKEND_URL || 'https://getvari-aquasage.onrender.com' }}
+        run: |
+          # --max-time 90 rather than the default: if the instance *has* gone
+          # to sleep, this request is the one paying for the wake-up, and it
+          # should wait for it rather than time out and leave it asleep.
+          code=$(curl --silent --show-error --location \
+                      --max-time 90 --retry 2 --retry-delay 15 \
+                      --output /dev/null --write-out '%{http_code}' \
+                      "$BACKEND_URL/ping")
+          echo "GET $BACKEND_URL/ping -> $code"
+          test "$code" = "200"
