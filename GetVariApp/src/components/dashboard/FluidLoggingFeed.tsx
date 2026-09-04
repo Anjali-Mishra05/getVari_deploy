@@ -18,6 +18,7 @@ const SOURCE_LABEL: Record<HydrationSource, string> = {
   smart_cap: 'GetVari Proprietary SmartCap®',
   wearable_prediction: 'Wearable Prediction',
   ai_chat: 'Vari Chat',
+  correction: 'Correction',
 };
 
 /** Today's entries, newest first — the audit trail behind the day's total. */
@@ -47,13 +48,26 @@ const FluidLoggingFeed: React.FC<FluidLoggingFeedProps> = ({ logs, limit = 4 }) 
               className="flex-row items-center justify-between bg-white/[0.02] p-3 rounded-xl border border-white/5"
             >
               <View className="flex-row items-center gap-2.5 flex-1">
-                <View className="px-2.5 py-1 rounded bg-cyan-500/10">
-                  <Text className="text-[11px] font-black font-mono text-cyan-300">
-                    +{log.amountMl}ml
+                {/* A correction is a negative row, so the sign comes from the
+                    amount rather than being hardcoded to "+". */}
+                <View
+                  className={`px-2.5 py-1 rounded ${
+                    log.amountMl < 0 ? 'bg-amber-500/10' : 'bg-cyan-500/10'
+                  }`}
+                >
+                  <Text
+                    className={`text-[11px] font-black font-mono ${
+                      log.amountMl < 0 ? 'text-amber-300' : 'text-cyan-300'
+                    }`}
+                  >
+                    {log.amountMl < 0 ? '' : '+'}
+                    {log.amountMl}ml
                   </Text>
                 </View>
                 <View className="flex-1">
-                  <Text className="text-[11.5px] font-black text-white">Water Intake Synced</Text>
+                  <Text className="text-[11.5px] font-black text-white">
+                    {log.amountMl < 0 ? 'Intake Corrected' : 'Water Intake Synced'}
+                  </Text>
                   <Text className="text-[9px] text-neutral-400" numberOfLines={1}>
                     Source: {SOURCE_LABEL[log.source] ?? 'Health Integrator'}
                   </Text>

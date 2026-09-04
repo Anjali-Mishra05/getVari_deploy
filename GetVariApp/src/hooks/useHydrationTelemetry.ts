@@ -10,6 +10,8 @@ import {
   normaliseSleepSchedule,
 } from '../utils/sleepWindow';
 import TelemetryHistoryService from '../services/TelemetryHistoryService';
+import AppConfigStore from '../config/appConfigStore';
+import { climateBandFor } from '../utils/hydrationTarget';
 import { AuthService } from '../services/AuthService';
 import { HydrationRiskEngine } from '../utils/hydrationRiskEngine';
 
@@ -63,17 +65,33 @@ const NO_READINGS: SensorData = {
   lastUpdated: new Date(0).toISOString(),
 };
 
-/** Where the simulation starts once it does begin producing readings. */
-const BASELINE_SENSORS: SensorData = {
-  ...NO_READINGS,
-  heartRate: 55,
-  activityLoad: 14,
-  temperature: 25.2,
-  humidity: 45,
-  sweatGSR: 2.0,
-  batteryLevel: 84,
-  rssi: -58,
-  lastUpdated: new Date().toISOString(),
+/**
+ * The readings the stream settles around, for this user.
+ *
+ * They come from the profile rather than from a fixed set of numbers: the
+ * activity band sets the resting heart rate and movement index, and the
+ * climate band of the user's resolved city sets the ambient temperature and
+ * humidity. That is what makes the dashboard reflect *where the user is* — a
+ * profile in Chennai is modelled against Chennai's heat — and it is what makes
+ * the documented use cases reproducible instead of landing on a different
+ * score every time the screen is opened.
+ */
+const baselineFor = (profile?: UserProfile): SensorData => {
+  const config = AppConfigStore.current();
+  const activity = config.activityLevels.find(level => level.id === profile?.activityLevel);
+  const band = climateBandFor(profile?.location ?? profile?.selectedCity);
+
+  return {
+    ...NO_READINGS,
+    heartRate: activity?.baselineHeartRate ?? 72,
+    activityLoad: activity?.baselineActivityIndex ?? 15,
+    temperature: band?.ambientTempC ?? 24,
+    humidity: band?.ambientHumidity ?? 50,
+    sweatGSR: 2.0,
+    batteryLevel: 84,
+    rssi: -58,
+    lastUpdated: new Date().toISOString(),
+  };
 };
 
 /**
@@ -87,47 +105,52 @@ const NO_LOG_ASSUMED_GAP_HOURS = 2;
 const MAX_GAP_HOURS = 8;
 
 /**
- * How long a published risk score stands before it is allowed to move.
+ * How the published score is allowed to move.
  *
- * The engine re-solves on every sensor tick — twice a minute of simulated
- * drift — and the ring was repainting a different number every two seconds.
- * A score that never settles cannot be read, let alone acted on, and the
- * movement was noise rather than physiology: the underlying drift is a random
- * walk, not a change in the user's state.
+ * The score is a weighted sum of *band-mapped* loads — heart rate under 80 BPM
+ * is a load of 10, over it a load of 40 — so a reading drifting across a band
+ * edge moves the score by nine points in one tick. The simulated stream used to
+ * be an unanchored random walk of ±2 BPM and ±3 activity every two seconds,
+ * which crossed those edges constantly: that is the reported "sometimes 25,
+ * sometimes 36".
  *
- * The published score therefore holds for an hour. Three things still move it
- * immediately, because each is a real event rather than noise:
+ * Freezing the output on a clock was the wrong answer to that — it fixes the
+ * flicker by making the score wrong for up to an hour, including right after
+ * the user drinks something. The jitter is an *input* problem and is fixed at
+ * the input (see `BASELINE_PULL` and `bandStableSensors`).
  *
- *  - the user logs a drink, so the screen must show what that did;
- *  - the engine gains or loses the ability to score at all (a wearable that
- *    drops out, or one that reconnects);
- *  - the solve crosses into a *worse* risk band, which is the case where
- *    holding a stale number could matter to someone.
+ * What remains here is a floor, not a hold: the score follows the algorithm,
+ * and these rules only stop it repainting on residual noise.
+ *
+ *  - A drink, a change of risk band, or the engine gaining or losing the
+ *    ability to score publishes immediately. Intake and the recovery engine
+ *    are the things the user acts on, so they must never wait.
+ *  - Otherwise a move is published once it is worth reading: at least
+ *    `MIN_SCORE_DELTA` points, and no more often than `MIN_REPUBLISH_MS`.
  */
-const SCORE_HOLD_MS = 60 * 60 * 1000;
+const MIN_REPUBLISH_MS = 60 * 1000;
 
-/** Bands in ascending severity, for deciding whether a change is escalation. */
-const SEVERITY: HydrationRiskDetails['status'][] = [
-  'Insufficient Data',
-  'Device Error',
-  'Hydrated',
-  'Mild Risk',
-  'High Risk',
-  'Critical',
-];
+/** Point change worth repainting for. Below this it is noise, not news. */
+const MIN_SCORE_DELTA = 3;
 
-/** True when `next` is a worse band than `previous`. */
-const isEscalation = (
-  previous: HydrationRiskDetails['status'],
-  next: HydrationRiskDetails['status']
-): boolean => SEVERITY.indexOf(next) > SEVERITY.indexOf(previous);
+/**
+ * How strongly each tick pulls a reading back to its baseline.
+ *
+ * The stream is now mean-reverting rather than a free walk: noise is added, but
+ * the value is drawn back toward the anchor the profile and climate imply, so
+ * it stays inside one load band instead of wandering across several. Without
+ * this the sensors have no anchor at all and a long session drifts anywhere.
+ */
+const BASELINE_PULL = 0.25;
 
 export interface HydrationTelemetry {
   sensorData: SensorData;
   /**
-   * The risk solve the screen shows. Held for an hour between updates — see
-   * `SCORE_HOLD_MS` — so the number is readable rather than twitching on every
-   * sensor tick.
+   * The risk solve the screen shows.
+   *
+   * Follows the algorithm — intake, the recovery engine and the hydration gap
+   * all move it immediately — while residual sensor noise does not. See
+   * `MIN_REPUBLISH_MS`.
    */
   solvedRisk: HydrationRiskDetails;
   /** When `solvedRisk` was last allowed to change, epoch ms. */
@@ -243,6 +266,11 @@ export const useHydrationTelemetry = (
   // cannot report that back.
   const sensorRef = useRef(sensorData);
   sensorRef.current = sensorData;
+  // The simulation tick is mounted once; the baseline changes when the profile
+  // loads or the user edits their city, so it is reached through a ref rather
+  // than by restarting the interval.
+  const baselineRef = useRef(baselineFor(profile));
+  baselineRef.current = baselineFor(profile);
   const stomachRef = useRef(stomachVolume);
   stomachRef.current = stomachVolume;
   const sleepScheduleRef = useRef(sleepSchedule);
@@ -262,35 +290,38 @@ export const useHydrationTelemetry = (
   // Sensor stream + physiological step.
   useEffect(() => {
     const interval = setInterval(() => {
-      // 1. Sensor drift. A random walk around the current reading, bounded to
-      //    survivable ranges so a long session cannot wander into nonsense.
+      // 1. Sensor drift, pulled back toward the profile's baseline.
+      //
+      //    Previously a free random walk: each tick added ±2 BPM and ±3
+      //    activity to the *previous* reading with nothing holding it in
+      //    place, so over a few minutes it wandered across the load-band
+      //    edges (80 BPM, activity 20/50, 22°C, 40% RH) and back. Each
+      //    crossing moves the risk score by eight to ten points, which is
+      //    what "sometimes 25, sometimes 36" was.
+      //
+      //    Mean reversion keeps a reading near its anchor: noise still moves
+      //    it, but the pull is proportional to how far it has strayed, so it
+      //    settles inside one band instead of touring several.
       setSensorData(prev => {
-        // The first tick publishes the baseline; every later one drifts from
-        // the previous reading. Reading through the baseline also means a
-        // channel that is somehow null (or NaN) recovers rather than
-        // propagating into every subsequent value.
-        const from = {
-          heartRate: prev.heartRate ?? BASELINE_SENSORS.heartRate!,
-          activityLoad: prev.activityLoad ?? BASELINE_SENSORS.activityLoad!,
-          temperature: prev.temperature ?? BASELINE_SENSORS.temperature!,
-          humidity: prev.humidity ?? BASELINE_SENSORS.humidity!,
-          sweatGSR: prev.sweatGSR ?? BASELINE_SENSORS.sweatGSR!,
+        const baseline = baselineRef.current;
+
+        /** One channel's next value: pulled toward `anchor`, plus noise. */
+        const step = (current: number | null, anchor: number, noise: number, lo: number, hi: number) => {
+          const from = current ?? anchor;
+          const drift = (anchor - from) * BASELINE_PULL + (Math.random() * 2 - 1) * noise;
+          return Math.min(hi, Math.max(lo, from + drift));
         };
 
-        const heartRate = Math.min(170, Math.max(45, from.heartRate + Math.round(Math.random() * 4 - 2)));
-        const activityLoad = Math.min(100, Math.max(5, from.activityLoad + Math.round(Math.random() * 6 - 3)));
-        const temperature = Number(
-          Math.min(41, Math.max(18, from.temperature + (Math.random() * 0.2 - 0.1))).toFixed(1)
-        );
-        const humidity = Math.min(95, Math.max(20, from.humidity + Math.round(Math.random() * 2 - 1)));
-        const sweatGSR = Number(
-          Math.min(15, Math.max(0.1, from.sweatGSR + (Math.random() * 0.4 - 0.2))).toFixed(2)
-        );
+        const heartRate = Math.round(step(prev.heartRate, baseline.heartRate!, 1.5, 45, 170));
+        const activityLoad = Math.round(step(prev.activityLoad, baseline.activityLoad!, 2, 0, 100));
+        const temperature = Number(step(prev.temperature, baseline.temperature!, 0.15, 18, 45).toFixed(1));
+        const humidity = Math.round(step(prev.humidity, baseline.humidity!, 1, 10, 100));
+        const sweatGSR = Number(step(prev.sweatGSR, baseline.sweatGSR!, 0.15, 0.1, 15).toFixed(2));
 
         return {
           ...prev,
-          batteryLevel: prev.batteryLevel ?? BASELINE_SENSORS.batteryLevel,
-          rssi: prev.rssi ?? BASELINE_SENSORS.rssi,
+          batteryLevel: prev.batteryLevel ?? baseline.batteryLevel,
+          rssi: prev.rssi ?? baseline.rssi,
           heartRate,
           activityLoad,
           temperature,
@@ -401,28 +432,42 @@ export const useHydrationTelemetry = (
   /**
    * The solve as published to the screen.
    *
-   * `liveRisk` above is recomputed on every tick; this is the one the user
-   * reads, and it only moves on the conditions described at `SCORE_HOLD_MS`.
+   * `liveRisk` is recomputed on every tick; this is the one the user reads.
+   * The rules are at `MIN_REPUBLISH_MS` — in short, anything the user did or
+   * that changed their risk band shows at once, and gradual drift shows once
+   * it is worth reading.
    */
   const [publishedRisk, setPublishedRisk] = useState<HydrationRiskDetails>(liveRisk);
   const [riskUpdatedAt, setRiskUpdatedAt] = useState(() => Date.now());
 
-  // Set when a drink is logged, so the next solve is published immediately
-  // rather than waiting out the hold — logging water and seeing the score sit
-  // still would read as the app ignoring it.
+  // Set when a drink is logged. Intake and the recovery engine are what the
+  // user acts on, so a log must move the score in the same breath — waiting
+  // even a minute reads as the app having ignored it.
   const forcePublishRef = useRef(true);
 
   useEffect(() => {
     const now = Date.now();
     const scored = (risk: HydrationRiskDetails) => risk.score !== null;
+    const sinceLast = now - riskUpdatedAt;
+
+    // A band change is a change in what the app is telling the user to do, so
+    // it is never withheld — in either direction. Escalation matters for
+    // safety; de-escalation matters because it is usually the user's own drink
+    // taking effect, and holding that back is exactly what made the score feel
+    // disconnected from the recovery engine.
+    const bandChanged = liveRisk.status !== publishedRisk.status;
+    const availabilityChanged = scored(liveRisk) !== scored(publishedRisk);
+
+    const movedEnough =
+      scored(liveRisk) &&
+      scored(publishedRisk) &&
+      Math.abs((liveRisk.score as number) - (publishedRisk.score as number)) >= MIN_SCORE_DELTA;
 
     const shouldPublish =
       forcePublishRef.current ||
-      now - riskUpdatedAt >= SCORE_HOLD_MS ||
-      // The engine gained or lost the ability to score at all.
-      scored(liveRisk) !== scored(publishedRisk) ||
-      // Never sit on a stale number while the situation is getting worse.
-      isEscalation(publishedRisk.status, liveRisk.status);
+      bandChanged ||
+      availabilityChanged ||
+      (movedEnough && sinceLast >= MIN_REPUBLISH_MS);
 
     if (!shouldPublish) return;
 

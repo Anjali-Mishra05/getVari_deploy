@@ -117,35 +117,45 @@
       "title": "Sedentary",
       "description": "Minimal physical exertion. Remote work style.",
       "enabled": true,
-      "targetBonusMl": 0
+      "targetBonusMl": 0,
+      "baselineHeartRate": 70,
+      "baselineActivityIndex": 10
     },
     {
       "id": "light",
       "title": "Light Active",
       "description": "Slight exertion. Light walks or stretching/yoga.",
       "enabled": true,
-      "targetBonusMl": 0
+      "targetBonusMl": 0,
+      "baselineHeartRate": 72,
+      "baselineActivityIndex": 33
     },
     {
       "id": "moderate",
       "title": "Moderate Load",
       "description": "Moderate physical load, gym session 3-4x/week.",
       "enabled": true,
-      "targetBonusMl": 0
+      "targetBonusMl": 0,
+      "baselineHeartRate": 90,
+      "baselineActivityIndex": 65
     },
     {
       "id": "active",
       "title": "High Strain",
       "description": "Daily athletic strain, high sweating baseline.",
       "enabled": true,
-      "targetBonusMl": 600
+      "targetBonusMl": 600,
+      "baselineHeartRate": 95,
+      "baselineActivityIndex": 88
     },
     {
       "id": "elite",
       "title": "Elite / Hybrid",
       "description": "Double sessions daily or intensive endurance sports.",
       "enabled": true,
-      "targetBonusMl": 1200
+      "targetBonusMl": 1200,
+      "baselineHeartRate": 110,
+      "baselineActivityIndex": 92
     }
   ],
   "workEnvironments": [
@@ -203,7 +213,9 @@
         "humidity": 0.05,
         "time": -0.05,
         "activity": -0.05
-      }
+      },
+      "ambientTempC": 30,
+      "ambientHumidity": 68
     },
     {
       "id": "moderate",
@@ -220,7 +232,9 @@
       ],
       "targetAdjustmentMl": 100,
       "riskLoadMultiplier": 1.0,
-      "riskWeightDeltas": {}
+      "riskWeightDeltas": {},
+      "ambientTempC": 25,
+      "ambientHumidity": 52
     },
     {
       "id": "temperate",
@@ -228,7 +242,9 @@
       "cities": [],
       "targetAdjustmentMl": 0,
       "riskLoadMultiplier": 1.0,
-      "riskWeightDeltas": {}
+      "riskWeightDeltas": {},
+      "ambientTempC": 19,
+      "ambientHumidity": 50
     }
   ],
   "targetFormula": {

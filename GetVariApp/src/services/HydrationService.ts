@@ -286,8 +286,10 @@ export const logWater = async (params: LogWaterParams): Promise<HydrationLogResu
   const id = requestId ?? generateRequestId(source);
   const rounded = Math.round(amountMl);
 
-  // 1. Basic Validation
-  if (!Number.isFinite(rounded) || rounded <= 0) {
+  // 1. Basic Validation. A correction is the one entry allowed to be negative
+  //    — see `adjustIntake`, which is the only caller that sets that source.
+  const allowNegative = source === 'correction';
+  if (!Number.isFinite(rounded) || (allowNegative ? rounded === 0 : rounded <= 0)) {
     return {
       status: 'error',
       requestId: id,
@@ -322,8 +324,10 @@ export const logWater = async (params: LogWaterParams): Promise<HydrationLogResu
     };
   }
 
-  // 2. Realism Check vs 7-day rolling average
-  if (!confirmed) {
+  // 2. Realism Check vs 7-day rolling average. A correction is bounded by the
+  //    day's total instead (it can only give back what was logged), so the
+  //    "unusually large" question does not apply to it.
+  if (!confirmed && !allowNegative) {
     const rollingAvg = await HydrationService.getRolling7DayIntakeAvg(userId);
     const threshold = Math.max(WATER_LOG_LIMITS.DEFAULT_MAX_SINGLE_ML, rollingAvg * WATER_LOG_LIMITS.UNREALISTIC_FACTOR);
 
@@ -364,8 +368,69 @@ export const logWater = async (params: LogWaterParams): Promise<HydrationLogResu
   }
 };
 
+/**
+ * Takes back part of today's intake.
+ *
+ * The chat could log water but never un-log it, so a user who said "reduce 4
+ * litres" had the text read as an *intake* of 4,000ml — which tripped the
+ * realism check, returned an error, and left the dashboard unchanged. There
+ * was no way at all to correct a mis-log.
+ *
+ * A correction is written as a negative row rather than by deleting the
+ * original: the day's history stays an append-only record, the total falls out
+ * of the same sum, and "I logged 2 litres by mistake" is preserved as
+ * something the user said rather than erased.
+ *
+ * @param amountMl A positive number — how much to give back.
+ */
+export const adjustIntake = async (params: {
+  amountMl: number;
+  requestId?: string;
+  reason?: string;
+}): Promise<HydrationLogResult & { adjustedMl?: number }> => {
+  const requestId = params.requestId ?? generateRequestId('correction');
+  const requested = Math.round(Math.abs(params.amountMl));
+
+  const userId = await AuthService.getCurrentUserId();
+  if (!userId) {
+    return {
+      status: 'unauthenticated',
+      requestId,
+      amountMl: 0,
+      totalMl: 0,
+      targetMl: DEFAULT_TARGET_ML,
+    };
+  }
+
+  const totals = await getTodayTotals(userId);
+
+  if (totals.totalMl <= 0) {
+    return {
+      status: 'error',
+      requestId,
+      amountMl: 0,
+      error: 'Nothing logged today to take back.',
+      ...totals,
+    };
+  }
+
+  // Never below zero: a day's intake that reads as negative is not a fact
+  // about anything. Asking to remove more than was logged clears the day.
+  const adjustedMl = Math.min(requested, totals.totalMl);
+
+  const result = await logWater({
+    amountMl: -adjustedMl,
+    source: 'correction',
+    requestId,
+    confirmed: true,
+  });
+
+  return { ...result, adjustedMl };
+};
+
 export const HydrationService = {
   logWater,
+  adjustIntake,
   getTodayTotals,
   fetchTodayLogs,
   getRolling7DayIntakeAvg,

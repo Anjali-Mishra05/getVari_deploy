@@ -65,6 +65,12 @@ export interface ActivityLevelConfig {
   enabled: boolean;
   /** Added to the daily goal, in ml. */
   targetBonusMl: number;
+  /**
+   * Resting heart rate and movement index typical of this band, used as the
+   * anchor for the simulated stream until a wearable is paired.
+   */
+  baselineHeartRate: number;
+  baselineActivityIndex: number;
 }
 
 export interface WorkEnvironmentConfig {
@@ -100,6 +106,18 @@ export interface ClimateBandConfig {
   riskLoadMultiplier: number;
   /** Added to the risk engine's baseline weights before normalisation. */
   riskWeightDeltas: RiskTweak;
+  /**
+   * Representative daytime conditions for this band.
+   *
+   * Until a paired wearable is reporting real ambient readings, this is what
+   * the dashboard shows and what the risk engine scores against — so a user in
+   * Chennai is modelled against Chennai's heat rather than against whatever a
+   * random walk happened to produce. It is also what makes the documented use
+   * cases reproducible: an 85kg diabetic in Mumbai lands in the hot band every
+   * time, not on a different score each time the screen is opened.
+   */
+  ambientTempC: number;
+  ambientHumidity: number;
 }
 
 export interface TargetFormulaConfig {

@@ -20,11 +20,7 @@ interface RiskScoreCardProps {
   lastIntakeMl: number | null;
   /** True while water is still moving from gut to bloodstream. */
   absorbing: boolean;
-  /**
-   * When the score last moved, epoch ms. Shown because the score is held for
-   * an hour between updates — without saying so, a number that does not change
-   * for an hour reads as a frozen screen rather than a settled one.
-   */
+  /** When the score last moved, epoch ms. */
   updatedAt?: number;
 }
 
@@ -180,7 +176,7 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
             </Text>
             {!!updatedLabel && (
               <Text className="text-[8px] text-neutral-600 font-mono mt-1.5">
-                Updated {updatedLabel} · refreshes hourly
+                Updated {updatedLabel}
               </Text>
             )}
           </View>

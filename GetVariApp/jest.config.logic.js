@@ -25,6 +25,8 @@ module.exports = {
     '<rootDir>/__tests__/edgeCasesStrict.test.ts',
     '<rootDir>/__tests__/reminderScheduling.test.ts',
     '<rootDir>/__tests__/appConfig.test.ts',
+    '<rootDir>/__tests__/intakeCorrection.test.ts',
+    '<rootDir>/__tests__/scoreStability.test.ts',
     '<rootDir>/__tests__/configFallback.test.ts',
     '<rootDir>/__tests__/phoneNumber.test.ts',
   ],

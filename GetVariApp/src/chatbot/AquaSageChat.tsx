@@ -29,9 +29,9 @@ import { BACKEND_API_KEY, backendCandidates, resolveBackendUrl, warmBackend } fr
 import ChatBus from '../services/ChatBus';
 import HydrationService from '../services/HydrationService';
 import HydrationPromptSession from '../services/HydrationPromptSession';
-import { parseIntakeMl } from '../utils/parseIntake';
+import { matchIntake, parseIntakeMl } from '../utils/parseIntake';
 import { detectHydrationLogIntent, looksLikeQuestion } from '../utils/hydrationIntent';
-import { buildLogConfirmation } from '../utils/hydrationFormat';
+import { buildLogConfirmation, formatMl } from '../utils/hydrationFormat';
 import { withHydrationTip } from '../utils/hydrationTips';
 import { quickLogAmounts } from '../utils/hydrationAmounts';
 import type { HydrationLogResult } from '../types';
@@ -568,6 +568,50 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
     }
   };
 
+  /**
+   * Takes an amount back off today's total and reports what actually changed.
+   *
+   * The reply names the resulting total rather than just acknowledging: the
+   * reported defect was that the dashboard did not reflect the request, so the
+   * chat now states the number the user can go and check.
+   */
+  const commitCorrection = async (amountMl: number) => {
+    if (isLoggingRef.current) return;
+    isLoggingRef.current = true;
+    setIsLoading(true);
+
+    try {
+      const result = await HydrationService.adjustIntake({ amountMl });
+
+      if (result.status === 'unauthenticated') {
+        appendAssistant(NO_AUTH_MESSAGE);
+        return;
+      }
+      if (result.status === 'error') {
+        appendAssistant(
+          result.error === 'Nothing logged today to take back.'
+            ? "**Nothing to take back** — you haven't logged any water today yet."
+            : ERROR_MESSAGE
+        );
+        return;
+      }
+
+      const removed = result.adjustedMl ?? amountMl;
+      const askedForMore = removed < amountMl;
+      appendAssistant(
+        `**Removed ${formatMl(removed)}.**` +
+          (askedForMore ? " That's everything logged today." : '') +
+          ` Today's total is now **${formatMl(result.totalMl)}**.`
+      );
+    } catch (error) {
+      console.error('[Vari] Failed to adjust intake:', error);
+      appendAssistant(ERROR_MESSAGE);
+    } finally {
+      setIsLoading(false);
+      isLoggingRef.current = false;
+    }
+  };
+
   /** Sends the question to the RAG backend and appends the answer. */
   const askBackend = async (text: string) => {
     setIsLoading(true);
@@ -761,6 +805,17 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
 
     if (logFlow === 'awaiting_amount') return handleAmountReply(text, messageId);
     if (logFlow === 'awaiting_choice') return handleChoiceReply(text, messageId);
+
+    // A correction — "reduce 4 litres", "remove 500ml", "I logged too much" —
+    // is handled before the logging intent, because the same sentence contains
+    // an amount and would otherwise be read as an intake of it. That is
+    // exactly what used to happen: "reduce 4 litre" added 4,000ml, tripped the
+    // unrealistic-amount check, and left the day's total untouched.
+    const parsed = matchIntake(text);
+    if (parsed?.direction === 'remove') {
+      await commitCorrection(parsed.amountMl);
+      return;
+    }
 
     // Logging never depends on a reminder: any message that reads as "log this
     // much water" is written straight away.

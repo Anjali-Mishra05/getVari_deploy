@@ -169,7 +169,11 @@ const HomeScreen = ({ navigation }: any) => {
       if (ingestedLogIds.current.has(entry.id)) return;
       ingestedLogIds.current.add(entry.id);
 
-      ingestFluidRef.current(entry.amountMl);
+      // A correction takes millilitres off the day's *total*; it cannot take
+      // them out of the stomach, because the water was either drunk or never
+      // drunk. Feeding a negative amount to the recovery model would drain a
+      // gut that may hold nothing.
+      if (entry.amountMl > 0) ingestFluidRef.current(entry.amountMl);
       setWaterLogs(prev => (prev.some(log => log.id === entry.id) ? prev : [entry, ...prev]));
     });
 

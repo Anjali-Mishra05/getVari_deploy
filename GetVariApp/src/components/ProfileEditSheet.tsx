@@ -12,7 +12,7 @@ import {
 
 import Button from './ui/Button';
 import Sheet from './ui/Sheet';
-import CustomSlider from './CustomSlider';
+import NumberField from './ui/NumberField';
 import TimeField from './TimeField';
 import CityPickerModal from './CityPickerModal';
 import ProfileService from '../services/ProfileService';
@@ -264,7 +264,7 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
 
             <SectionLabel>Biometrics</SectionLabel>
 
-            <CustomSlider label="Age (years)" min={14} max={90} value={age} onChange={setAge} />
+            <NumberField label="Age" unit="years" min={14} max={90} value={age} onChange={setAge} />
 
             <FieldLabel>Gender</FieldLabel>
             <View className="flex-row gap-2 mb-7">
@@ -287,13 +287,14 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
               ))}
             </View>
 
-            <CustomSlider
+            <NumberField
               label="Baseline Weight"
+              unit="kg"
               min={40}
               max={140}
               value={weight}
               onChange={setWeight}
-              unit="kg"
+              hint="Sets your daily goal"
             />
 
             <SectionLabel>Location (Climate Tracking)</SectionLabel>

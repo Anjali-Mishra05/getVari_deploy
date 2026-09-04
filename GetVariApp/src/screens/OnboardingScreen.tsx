@@ -37,7 +37,7 @@ import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 
 import GlassCard from '../components/GlassCard';
 import Button from '../components/ui/Button';
-import CustomSlider from '../components/CustomSlider';
+import NumberField from '../components/ui/NumberField';
 import TimeField from '../components/TimeField';
 import CityPickerModal from '../components/CityPickerModal';
 import { supabase } from '../services/SupabaseClient';
@@ -54,6 +54,27 @@ import {
   formatClockLabel,
   sleepDurationMinutes,
 } from '../utils/sleepWindow';
+
+/**
+ * A labelled field that says it is required, and why it is not satisfied.
+ *
+ * The asterisk is the visible half of defect 6: nothing marked these as
+ * mandatory, so walking past them looked allowed.
+ */
+const RequiredField: React.FC<{
+  label: string;
+  error?: string | null;
+  className?: string;
+  children: React.ReactNode;
+}> = ({ label, error, className = '', children }) => (
+  <View className={className}>
+    <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">
+      {label} <Text className="text-red-400">*</Text>
+    </Text>
+    {children}
+    {!!error && <Text className="text-[10px] text-red-400 mt-1.5">{error}</Text>}
+  </View>
+);
 
 const manager = new BleManager();
 const GETVARI_SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
@@ -107,6 +128,32 @@ const OnboardingScreen = ({ navigation }: any) => {
   const conditions = appConfig.medicalConditions.filter(c => c.enabled !== false);
   const activityLevels = appConfig.activityLevels.filter(level => level.enabled !== false);
   const workEnvironments = appConfig.workEnvironments.filter(env => env.enabled !== false);
+
+  /**
+   * Which required fields the user has left, once they have tried to move on.
+   *
+   * Errors appear on the first "Next" rather than while the field is still
+   * being filled in — flagging an email as invalid at "j@" is noise, and the
+   * user has not made a mistake yet.
+   */
+  const [showFieldErrors, setShowFieldErrors] = useState(false);
+
+  const nameError = fullName.trim().length < 2 ? 'Enter your name.' : null;
+  // Deliberately permissive: this only has to catch a typo or an empty field,
+  // and a stricter pattern rejects addresses that are perfectly deliverable.
+  const emailError = !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim())
+    ? 'Enter a valid email address.'
+    : null;
+  /** Fluid-restricted conditions are unsafe to pace without a doctor's number. */
+  const physicianLimitError =
+    ConfigService.requiresPhysicianLimit(medicalConditions) &&
+    !(Number.parseInt(physicianLimit, 10) > 0)
+      ? 'A physician daily limit is required for the conditions you selected.'
+      : null;
+
+  /** Blocks `Next` on the step that owns the offending field. */
+  const blockingError =
+    step === 2 ? nameError ?? emailError : step === 6 ? physicianLimitError : null;
 
   const sleepSchedule = { sleepStart, wakeUp };
   const sleepHours = sleepDurationMinutes(sleepSchedule) / 60;
@@ -187,6 +234,16 @@ const OnboardingScreen = ({ navigation }: any) => {
   }, [step, locationAttempted]);
 
   const handleNext = async () => {
+    // Defect 6: the user could walk past the identity step without a name or
+    // an email, so profiles arrived with neither and nothing said so.
+    if (blockingError) {
+      setShowFieldErrors(true);
+      setErrorMsg(blockingError);
+      return;
+    }
+    setShowFieldErrors(false);
+    setErrorMsg('');
+
     if (step < totalSteps) {
       setStep(step + 1);
     } else {
@@ -468,31 +525,58 @@ const OnboardingScreen = ({ navigation }: any) => {
                     <Text className="text-2xl font-black text-white mb-1">Biometric Blueprint</Text>
                     <Text className="text-[12px] text-neutral-400 mb-8">Provide basic values to adjust hydration metabolic models.</Text>
 
-                    <View className="mb-6">
-                      <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">Full Name</Text>
+                    <RequiredField
+                      label="Full Name"
+                      error={showFieldErrors ? nameError : null}
+                      className="mb-6"
+                    >
                       <TextInput
-                        className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        className="bg-white/5 border rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        style={{
+                          borderColor:
+                            showFieldErrors && nameError
+                              ? 'rgba(248,113,113,0.6)'
+                              : 'rgba(255,255,255,0.10)',
+                        }}
                         placeholder="e.g. John Doe"
                         placeholderTextColor="#475569"
                         value={fullName}
                         onChangeText={setFullName}
+                        autoCapitalize="words"
                       />
-                    </View>
+                    </RequiredField>
 
-                    <View className="mb-8">
-                      <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">Email Address</Text>
+                    <RequiredField
+                      label="Email Address"
+                      error={showFieldErrors ? emailError : null}
+                      className="mb-8"
+                    >
                       <TextInput
-                        className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        className="bg-white/5 border rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        style={{
+                          borderColor:
+                            showFieldErrors && emailError
+                              ? 'rgba(248,113,113,0.6)'
+                              : 'rgba(255,255,255,0.10)',
+                        }}
                         placeholder="e.g. john@example.com"
                         placeholderTextColor="#475569"
                         value={email}
                         onChangeText={setEmail}
                         keyboardType="email-address"
                         autoCapitalize="none"
+                        autoCorrect={false}
                       />
-                    </View>
+                    </RequiredField>
 
-                    <CustomSlider label="Age (years)" min={14} max={90} value={age} onChange={setAge} />
+                    <NumberField
+                      label="Age"
+                      unit="years"
+                      min={14}
+                      max={90}
+                      value={age}
+                      onChange={setAge}
+                    />
                     <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Gender</Text>
                     <View className="flex-row gap-2 mb-8">
                       {['Female', 'Male', 'Non-Binary'].map((g) => (
@@ -501,7 +585,15 @@ const OnboardingScreen = ({ navigation }: any) => {
                         </TouchableOpacity>
                       ))}
                     </View>
-                    <CustomSlider label="Baseline Weight" min={40} max={140} value={weight} onChange={setWeight} unit="kg" />
+                    <NumberField
+                      label="Baseline Weight"
+                      unit="kg"
+                      min={40}
+                      max={140}
+                      value={weight}
+                      onChange={setWeight}
+                      hint="Sets your daily goal"
+                    />
 
                     <View className="mt-4 pt-4 border-t border-white/5">
                       <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Location (Climate Tracking)</Text>
@@ -686,7 +778,9 @@ const OnboardingScreen = ({ navigation }: any) => {
                         repeated on every screen that asks. */}
                     {ConfigService.requiresPhysicianLimit(medicalConditions) && (
                       <View>
-                        <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">Physician Daily Limit (ml)</Text>
+                        <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">
+                          Physician Daily Limit (ml) <Text className="text-red-400">*</Text>
+                        </Text>
                         <TextInput
                           className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold mb-2"
                           placeholder="e.g. 2000"
@@ -696,8 +790,14 @@ const OnboardingScreen = ({ navigation }: any) => {
                           keyboardType="numeric"
                         />
                         <Text className="text-[10px] text-amber-500/80 leading-relaxed italic">
-                          Mandatory for gated conditions to ensure safety.
+                          Mandatory for the conditions you selected — the app will not pace your
+                          intake without your doctor's number.
                         </Text>
+                        {showFieldErrors && !!physicianLimitError && (
+                          <Text className="text-[10px] text-red-400 mt-1.5">
+                            {physicianLimitError}
+                          </Text>
+                        )}
                       </View>
                     )}
                   </Animated.View>

@@ -95,7 +95,17 @@ export interface HydrationRiskDetails {
   timeLoad: number | null;
 }
 
-export type HydrationSource = 'manual' | 'wearable_prediction' | 'smart_cap' | 'ai_chat';
+export type HydrationSource =
+  | 'manual'
+  | 'wearable_prediction'
+  | 'smart_cap'
+  | 'ai_chat'
+  /**
+   * A negative entry that takes back an over-log. Kept as its own row rather
+   * than by editing or deleting the original, so the day's history stays an
+   * append-only record of what the user actually told the app and when.
+   */
+  | 'correction';
 export type VerificationSource = 'user-reported' | 'sensor-verified';
 
 export interface HydrationLog {
