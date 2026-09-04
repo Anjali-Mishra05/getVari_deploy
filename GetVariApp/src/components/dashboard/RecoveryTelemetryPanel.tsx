@@ -12,7 +12,8 @@ interface RecoveryTelemetryPanelProps {
   absorptionRate: number;
   sweatLossRate: number;
   totalMl: number;
-  targetMl: number;
+  /** The daily goal, or null while the profile is still loading. */
+  targetMl: number | null;
   /**
    * Daily goal divided by waking hours, not by 24 — a pace built on the full
    * day would only be reachable by drinking in your sleep. Optional so the
@@ -37,6 +38,27 @@ interface MetricProps {
   caption: string;
 }
 
+/**
+ * A finite number, or the fallback.
+ *
+ * This panel is the "Activity" destination in the bottom bar, and it is where
+ * NaN surfaced: every figure on it is a quotient, and each of the denominators
+ * can legitimately be zero — an empty gut, a goal that has not loaded yet, a
+ * sleep window that covers the whole day. `toFixed` on the result of any of
+ * those prints the literal string "NaN", which is what the user was seeing.
+ * Each reading is now coerced at the point it is displayed.
+ */
+const finite = (value: unknown, fallback = 0): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+/** A percentage that is safe to render, or undefined when it cannot be formed. */
+const percentOf = (part: number, whole: number): number | undefined => {
+  if (!Number.isFinite(part) || !Number.isFinite(whole) || whole <= 0) return undefined;
+  return Math.max(0, Math.min(100, (part / whole) * 100));
+};
+
 const Metric: React.FC<MetricProps> = ({
   label,
   value,
@@ -60,7 +82,10 @@ const Metric: React.FC<MetricProps> = ({
       {fillPercent !== undefined && (
         <View
           className="h-full rounded-full"
-          style={{ width: `${Math.min(100, fillPercent)}%`, backgroundColor: fillColor }}
+          style={{
+            width: `${Math.max(0, Math.min(100, fillPercent))}%`,
+            backgroundColor: fillColor,
+          }}
         />
       )}
     </View>
@@ -105,8 +130,16 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
     );
   }
 
-  const remainingMl = Math.max(0, targetMl - totalMl);
-  const inBody = absorbedHydration + stomachVolume;
+  const gut = finite(stomachVolume);
+  const absorbed = finite(absorbedHydration);
+  const inBody = gut + absorbed;
+  const hasTarget = targetMl !== null && Number.isFinite(targetMl) && targetMl > 0;
+  const remainingMl = hasTarget ? Math.max(0, (targetMl as number) - finite(totalMl)) : null;
+
+  // Absorption is only meaningful once there is fluid in the system at all;
+  // with an empty gut and an empty pool the quotient is 0/0.
+  const absorbedPercent = inBody > 0 ? Math.round((absorbed / inBody) * 100) : null;
+  const paceMlPerHour = finite(targetMlPerAwakeHour, 0);
 
   return (
     <GlassCard className="mb-4 bg-cyan-950/5 rounded-[32px] border-cyan-500/10" style={{ padding: 20 }}>
@@ -130,16 +163,16 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
       <View className="flex-row gap-2.5">
         <Metric
           label="Water Awaiting Absorption"
-          value={String(Math.round(stomachVolume))}
+          value={String(Math.round(gut))}
           unit={`ml / ${STOMACH_CAPACITY_ML}ml`}
-          fillPercent={(stomachVolume / STOMACH_CAPACITY_ML) * 100}
+          fillPercent={percentOf(gut, STOMACH_CAPACITY_ML)}
           caption="Swallowed but not yet absorbed by the body."
         />
         <Metric
           label="Estimated Absorbed Hydration"
-          value={String(Math.round(absorbedHydration))}
+          value={String(Math.round(absorbed))}
           unit={`ml / ${ABSORBED_POOL_CAP_ML}ml`}
-          fillPercent={(absorbedHydration / ABSORBED_POOL_CAP_ML) * 100}
+          fillPercent={percentOf(absorbed, ABSORBED_POOL_CAP_ML)}
           fillColor="#10b981"
           caption="Hydration recovery progress."
         />
@@ -148,14 +181,14 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
       <View className="flex-row gap-2.5 mt-2.5">
         <Metric
           label="Absorption Speed"
-          value={`+${absorptionRate.toFixed(1)}`}
+          value={`+${finite(absorptionRate).toFixed(1)}`}
           unit="ml / min"
           valueColor={ACCENT}
           caption="Affected by exertion stress factor."
         />
         <Metric
           label="Estimated Sweat Loss"
-          value={`-${sweatLossRate.toFixed(1)}`}
+          value={`-${finite(sweatLossRate).toFixed(1)}`}
           unit="ml / min"
           valueColor="#f43f5e"
           caption="Scales with exertion & heat stress."
@@ -166,8 +199,8 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
         <View className="flex-row items-center justify-between">
           <Text className="text-[10px] text-neutral-400 font-mono">Absorption Status:</Text>
           <Text className="text-[10px] text-white font-mono font-black">
-            {stomachVolume > 0
-              ? `${Math.round((absorbedHydration / inBody) * 100)}% absorbed`
+            {gut > 0 && absorbedPercent !== null
+              ? `${absorbedPercent}% absorbed`
               : 'Gut empty / idle'}
           </Text>
         </View>
@@ -177,16 +210,20 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
             className="text-[10px] font-mono font-black"
             style={{ color: remainingMl === 0 ? '#34d399' : ACCENT }}
           >
-            {remainingMl} ml
+            {remainingMl === null ? 'Loading…' : `${remainingMl} ml`}
           </Text>
         </View>
-        {!!targetMlPerAwakeHour && (
+        {paceMlPerHour > 0 && (
           <View className="flex-row items-center justify-between">
             <Text className="text-[10px] text-neutral-400 font-mono">
-              Pace / Waking Hour{awakeHoursPerDay ? ` (${awakeHoursPerDay.toFixed(0)}h awake)` : ''}:
+              Pace / Waking Hour
+              {Number.isFinite(awakeHoursPerDay) && (awakeHoursPerDay as number) > 0
+                ? ` (${(awakeHoursPerDay as number).toFixed(0)}h awake)`
+                : ''}
+              :
             </Text>
             <Text className="text-[10px] text-white font-mono font-black">
-              {targetMlPerAwakeHour} ml / h
+              {Math.round(paceMlPerHour)} ml / h
             </Text>
           </View>
         )}

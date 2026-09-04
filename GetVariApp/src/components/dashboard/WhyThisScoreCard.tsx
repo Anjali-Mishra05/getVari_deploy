@@ -19,16 +19,23 @@ interface WhyThisScoreCardProps {
  * the solved total — the footnote below says so rather than hiding it.
  */
 const WhyThisScoreCard: React.FC<WhyThisScoreCardProps> = ({ risk }) => {
+  // A load can be null (the sensor said nothing) or, until the engine's field
+  // names were unified, undefined. Either way it contributes nothing and is
+  // shown as "--" rather than as the string "NaN".
+  const points = (value: number | null | undefined, weight: number): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.round(value * weight) : null;
+
   const rows = [
-    { label: 'Heart Load', value: risk.heartLoad, weight: 0.3 },
-    { label: 'Activity Load', value: risk.activityLoad, weight: 0.25 },
-    { label: 'Temperature Load', value: risk.temperatureLoad, weight: 0.2 },
-    { label: 'Humidity Load', value: risk.humidityLoad, weight: 0.1 },
-    { label: 'Time Load', value: risk.timeLoad, weight: 0.15 },
+    { label: 'Heart Load', pts: points(risk.heartLoad, 0.3), weight: 0.3 },
+    { label: 'Activity Load', pts: points(risk.activityLoad, 0.25), weight: 0.25 },
+    { label: 'Temperature Load', pts: points(risk.temperatureLoad, 0.2), weight: 0.2 },
+    { label: 'Humidity Load', pts: points(risk.humidityLoad, 0.1), weight: 0.1 },
+    { label: 'Time Load', pts: points(risk.timeLoad, 0.15), weight: 0.15 },
   ];
 
-  const baseTotal = rows.reduce((sum, row) => sum + Math.round(row.value * row.weight), 0);
-  const reweighted = Math.abs(baseTotal - risk.score) > 1;
+  const scored = typeof risk.score === 'number' && Number.isFinite(risk.score);
+  const baseTotal = rows.reduce((sum, row) => sum + (row.pts ?? 0), 0);
+  const reweighted = scored && Math.abs(baseTotal - (risk.score as number)) > 1;
 
   return (
     <GlassCard className="mb-4 bg-white/[0.01] rounded-[28px]" style={{ padding: 20 }}>
@@ -48,15 +55,18 @@ const WhyThisScoreCard: React.FC<WhyThisScoreCardProps> = ({ risk }) => {
             {row.label} ({Math.round(row.weight * 100)}%)
           </Text>
           <Text className="text-[11.5px] font-mono font-black text-white">
-            {Math.round(row.value * row.weight)} pts
+            {row.pts === null ? '--' : `${row.pts} pts`}
           </Text>
         </View>
       ))}
 
       <View className="flex-row justify-between items-center pt-3 mt-1 border-t border-white/10">
         <Text className="text-[12px] font-black text-cyan-400">Total Risk Score</Text>
-        <Text className="text-[15px] font-mono font-black" style={{ color: loadColor(risk.score) }}>
-          {risk.score}
+        <Text
+          className="text-[15px] font-mono font-black"
+          style={{ color: scored ? loadColor(risk.score as number) : '#64748b' }}
+        >
+          {scored ? risk.score : '--'}
         </Text>
       </View>
 

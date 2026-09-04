@@ -68,7 +68,8 @@ jest.mock('@notifee/react-native', () => ({
       Promise.resolve({ authorizationStatus: mockAuthStatus, android: { alarm: 1 } }),
   },
   AlarmType: { SET_ALARM_CLOCK: 1, SET_EXACT_AND_ALLOW_WHILE_IDLE: 0 },
-  AndroidImportance: { HIGH: 4 },
+  AndroidImportance: { DEFAULT: 3, HIGH: 4 },
+  AndroidStyle: { BIGTEXT: 1 },
   AndroidNotificationSetting: { ENABLED: 1 },
   AuthorizationStatus: { DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
   EventType: { PRESS: 1, DELIVERED: 3 },
@@ -276,6 +277,63 @@ describe('N17/N18: fixed-time daily messages', () => {
     mockAuthStatus = 0; // DENIED
     await NotificationService.scheduleDailyNotifications(Date.now());
     expect(dailyQueue()).toHaveLength(0);
+  });
+});
+
+describe('Notification body is readable when expanded', () => {
+  /** Notifee's `AndroidStyle.BIGTEXT`, which is a numeric enum member. */
+  const BIGTEXT = 1;
+
+  /**
+   * Android truncates a notification body to one line unless the notification
+   * carries a style to expand into. Without BigText the expand chevron showed
+   * the same clipped text again, so anything longer than about forty
+   * characters — the morning greeting, an AI-written nudge — could not be read
+   * from the shade at all.
+   */
+  test('every queued reminder can expand to its full body', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 10, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    await NotificationService.scheduleHydrationReminders(now);
+    expect(mockQueued.length).toBeGreaterThan(0);
+
+    for (const { notification } of mockQueued) {
+      expect(notification.android.style).toBeDefined();
+      expect(notification.android.style.type).toBe(BIGTEXT);
+      // The expanded text must be the body itself, not a truncation of it.
+      expect(notification.android.style.text).toBe(notification.body);
+    }
+  });
+
+  test('every fixed-time message can expand to its full body', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 10, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    await NotificationService.scheduleDailyNotifications(now);
+    const queued = mockQueued.filter(q => q.notification.id.startsWith('getvari-daily-'));
+    expect(queued.length).toBeGreaterThan(0);
+
+    for (const { notification } of queued) {
+      expect(notification.android.style.type).toBe(BIGTEXT);
+      expect(notification.android.style.text).toBe(notification.body);
+      // The summary line names the message once it is open.
+      expect(notification.android.style.summary).toBe(notification.title);
+    }
+  });
+
+  test('the daily bodies are long enough that this actually matters', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 8, 1, 10, 0, 0).getTime());
+
+    await NotificationService.scheduleDailyNotifications(Date.now());
+    const morning = mockQueued.find(q => q.notification.id.includes('morning'));
+
+    // Guards the premise: if every body were short, BigText would be
+    // decoration rather than a fix, and this suite would be testing nothing.
+    expect(morning!.notification.body.length).toBeGreaterThan(40);
   });
 });
 

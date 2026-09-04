@@ -1,16 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Modal,
+  Alert,
   ScrollView,
   Text,
   TouchableOpacity,
   View,
-  useWindowDimensions,
 } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
-import { AlarmClock, BellOff, Check, Droplets, MessageCircle, Trash2, X, Bell } from 'lucide-react-native';
+import { AlarmClock, BellOff, Check, Droplets, MessageCircle, Trash2, Bell } from 'lucide-react-native';
+
+import Sheet, { ICON_HIT_SLOP } from './ui/Sheet';
 
 import NotificationHistory, { isActionable } from '../services/NotificationHistory';
 import NotificationService from '../services/NotificationService';
@@ -180,7 +179,6 @@ const NotificationRow: React.FC<{
  * a reminder can fire while the sheet is sitting open.
  */
 const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClose }) => {
-  const { height: windowHeight } = useWindowDimensions();
   const [records, setRecords] = useState<NotificationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => Date.now());
@@ -228,9 +226,38 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
     };
   }, [visible, reload]);
 
-  const clearAll = async () => {
-    await NotificationHistory.clear();
-    await reload();
+  /**
+   * Empties the delivery log.
+   *
+   * Two things were wrong with this before. It threw away the whole log on a
+   * single tap with no way back, and — because the sheet animated itself with
+   * a Reanimated layout animation inside a Modal, which leaves Android's touch
+   * targets behind — the tap often never arrived at all, which is what made it
+   * look like the button did nothing. The animation now belongs to the Modal
+   * (see `Sheet`), and the action asks first.
+   */
+  const clearAll = () => {
+    if (records.length === 0) return;
+    Alert.alert(
+      'Clear notification history?',
+      'This removes the delivery log from this device. Your scheduled reminders are not affected.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await NotificationHistory.clear();
+              await reload();
+            } catch (error) {
+              console.error('[Notifications] Failed to clear history:', error);
+              Alert.alert('Could not clear history', 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   /**
@@ -251,80 +278,33 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
     }, CLOSE_ANIMATION_MS);
   };
 
+  const deliveredSummary =
+    records.length > 0
+      ? `${records.length} DELIVERED · ${records.filter(r => r.pressedAt !== null).length} OPENED`
+      : 'DELIVERY LOG';
+
   return (
-    <Modal
+    <Sheet
       visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      {/* RN's Modal opens its own native window outside the app root's
-          GestureHandlerRootView; without one here, gesture-handler swallows
-          touches inside the sheet on Android. */}
-      <GestureHandlerRootView
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'flex-end' }}
-      >
-        <TouchableOpacity activeOpacity={1} onPress={onClose} style={{ flex: 1 }} />
-
-        <Animated.View
-          entering={SlideInDown.duration(300)}
-          exiting={SlideOutDown.duration(250)}
-          style={{
-            height: Math.min(windowHeight * 0.78, windowHeight - 60),
-            backgroundColor: '#020617',
-            borderTopLeftRadius: 40,
-            borderTopRightRadius: 40,
-            borderTopWidth: 1,
-            borderColor: 'rgba(255,255,255,0.2)',
-            overflow: 'hidden',
-          }}
-        >
-          {/* Header */}
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingHorizontal: 24,
-              paddingVertical: 18,
-              borderBottomWidth: 1,
-              borderBottomColor: 'rgba(255,255,255,0.05)',
-            }}
+      onClose={onClose}
+      title="Notifications"
+      subtitle={deliveredSummary}
+      heightFraction={0.78}
+      headerActions={
+        records.length > 0 ? (
+          <TouchableOpacity
+            onPress={clearAll}
+            style={{ padding: 10 }}
+            hitSlop={ICON_HIT_SLOP}
+            accessibilityRole="button"
+            accessibilityLabel="Clear notification history"
+            testID="clear-notifications"
           >
-            <View>
-              <Text style={{ color: '#ffffff', fontWeight: '900', fontSize: 16 }}>
-                Notifications
-              </Text>
-              <Text
-                style={{
-                  color: '#64748b',
-                  fontSize: 9,
-                  fontWeight: '900',
-                  letterSpacing: 2,
-                  marginTop: 3,
-                }}
-              >
-                {records.length > 0
-                  ? `${records.length} DELIVERED · ${
-                      records.filter(r => r.pressedAt !== null).length
-                    } OPENED`
-                  : 'DELIVERY LOG'}
-              </Text>
-            </View>
-
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              {records.length > 0 && (
-                <TouchableOpacity onPress={clearAll} style={{ padding: 10 }}>
-                  <Trash2 color="#475569" size={20} />
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity onPress={onClose} style={{ padding: 10 }}>
-                <X color="#94a3b8" size={24} />
-              </TouchableOpacity>
-            </View>
-          </View>
-
+            <Trash2 color="#94a3b8" size={20} />
+          </TouchableOpacity>
+        ) : null
+      }
+    >
           {alarmsBatched && (
             <TouchableOpacity
               onPress={() => NotificationService.openExactAlarmSettings()}
@@ -425,9 +405,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
               ))}
             </ScrollView>
           )}
-        </Animated.View>
-      </GestureHandlerRootView>
-    </Modal>
+    </Sheet>
   );
 };
 

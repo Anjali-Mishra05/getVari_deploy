@@ -11,7 +11,7 @@ import {
   Settings
 } from 'lucide-react';
 
-export type NavItem = 'dashboard' | 'users' | 'devices' | 'alerts' | 'analytics' | 'feedback' | 'journey';
+export type NavItem = 'dashboard' | 'users' | 'devices' | 'alerts' | 'analytics' | 'feedback' | 'journey' | 'config';
 
 interface NavbarProps {
   activeTab: NavItem;
@@ -27,6 +27,7 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab, onTabChange }) => {
     { id: 'alerts', label: 'Safety Alerts' },
     { id: 'analytics', label: 'Bio-Analytics' },
     { id: 'feedback', label: 'User Feedback' },
+    { id: 'config', label: 'App Config' },
   ];
 
   return (

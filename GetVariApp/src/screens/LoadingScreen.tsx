@@ -2,6 +2,8 @@ import React, { useEffect } from 'react';
 import { View, SafeAreaView, Text, Platform, Dimensions } from 'react-native';
 import { AuthService } from '../services/AuthService';
 import NotificationService from '../services/NotificationService';
+import ConfigService from '../services/ConfigService';
+import { warmBackend } from '../config/backend';
 import Animated, {
   FadeIn,
   FadeOut,
@@ -44,6 +46,14 @@ const LoadingDot = ({ delay }: { delay: number }) => {
 
 const LoadingScreen = ({ navigation }: any) => {
   useEffect(() => {
+    // This screen already holds the user for a couple of seconds, so spend
+    // that time on the two things that would otherwise make them wait later:
+    // pulling the admin config, and waking the chat backend, which sleeps
+    // after 15 minutes of no traffic and takes half a minute to come back.
+    // Both are fire-and-forget — neither may delay the launch.
+    ConfigService.refresh().catch(() => undefined);
+    warmBackend();
+
     checkSession();
   }, [navigation]);
 

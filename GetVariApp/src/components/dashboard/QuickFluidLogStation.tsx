@@ -4,6 +4,7 @@ import { Plus } from 'lucide-react-native';
 
 import GlassCard from '../GlassCard';
 import { MAX_SINGLE_ENTRY_ML } from '../../services/HydrationService';
+import { quickLogAmounts } from '../../utils/hydrationAmounts';
 import { ACCENT } from './riskTheme';
 
 interface QuickFluidLogStationProps {
@@ -12,11 +13,18 @@ interface QuickFluidLogStationProps {
   disabled?: boolean;
 }
 
-/** The two amounts offered without any typing. */
-const PRESETS = [
-  { ml: 200, label: '+200ml Glass' },
-  { ml: 500, label: '+500ml Bottle' },
-];
+/**
+ * The amounts offered without any typing.
+ *
+ * Taken from the admin config's quick-log list, and capped at two so the deck
+ * keeps its "two presets plus custom" shape. This used to be its own hardcoded
+ * pair, which meant the dashboard offered 200ml and 500ml while the quick-log
+ * sheet and the chat offered 250ml, 500ml and a litre.
+ */
+const presets = (): { ml: number; label: string }[] =>
+  quickLogAmounts()
+    .slice(0, 2)
+    .map(amount => ({ ml: amount.ml, label: `+${amount.ml}ml ${amount.caption.replace(/^A /, '')}` }));
 
 /**
  * The three-button intake deck.
@@ -88,7 +96,7 @@ const QuickFluidLogStation: React.FC<QuickFluidLogStationProps> = ({ onSelectAmo
         </View>
       ) : (
         <View className="flex-row gap-2">
-          {PRESETS.map(preset => (
+          {presets().map(preset => (
             <TouchableOpacity
               key={preset.ml}
               onPress={() => onSelectAmount(preset.ml)}

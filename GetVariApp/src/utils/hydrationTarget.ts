@@ -7,70 +7,65 @@
  * same rules that produced it in the first place, so both callers compute it
  * here.
  *
- * Every adjustment is a product decision rather than a clinical one, and the
- * result is clamped to a range that stays safe whatever the inputs say.
+ * Every number it uses — millilitres per kilogram, the activity bonuses, the
+ * per-condition adjustments, the climate bands and the safe range — now comes
+ * from the admin config rather than from constants in this file. Changing how
+ * a diagnosis moves the goal is a change in the admin panel, not a release.
  */
 
+import AppConfigStore from '../config/appConfigStore';
 import type { UserProfile } from '../types';
-
-/** Millilitres per kilogram of body weight, before any adjustment. */
-const ML_PER_KG = 35;
-
-/** Extra allowance for sustained physical load. */
-const ACTIVITY_BONUS_ML: Record<string, number> = {
-  active: 600,
-  elite: 1200,
-};
-
-/** Condition-driven adjustments; kidney disease *lowers* the ceiling. */
-const CONDITION_ADJUSTMENT_ML: Record<string, number> = {
-  diabetes: 450,
-  kidney: -250,
-  hypertension: 150,
-};
-
-/** Cities whose baseline climate costs the user extra fluid. */
-const HOT_CITIES = ['Mumbai', 'Delhi', 'Chennai', 'Kolkata', 'Hyderabad', 'Ahmedabad', 'Jaipur'];
-const MODERATE_CITIES = ['Bengaluru', 'Pune', 'Tokyo', 'San Francisco'];
-
-export const MIN_TARGET_ML = 1500;
-export const MAX_TARGET_ML = 4500;
+import type { ClimateBandConfig } from '../config/appConfigSchema';
 
 export interface TargetInputs {
   weightKg: number;
   activityLevel?: string;
   medicalConditions?: string[];
-  /** The city chosen during onboarding, used only for its climate band. */
+  /** The resolved city, used only for its climate band. */
   selectedCity?: string;
 }
 
-/** Extra hydration allocation implied by the city's climate baseline. */
-export const climateModifierFor = (selectedCity?: string): number => {
-  if (!selectedCity) return 0;
-  if (HOT_CITIES.some(city => selectedCity.includes(city))) return 350;
-  if (MODERATE_CITIES.some(city => selectedCity.includes(city))) return 100;
-  return 0;
+/** The climate band a city falls in, or the catch-all band. */
+export const climateBandFor = (selectedCity?: string): ClimateBandConfig => {
+  const bands = AppConfigStore.current().climateBands;
+  if (selectedCity) {
+    const match = bands.find(band => band.cities.some(city => selectedCity.includes(city)));
+    if (match) return match;
+  }
+  // The catch-all is the last band with no cities named; fall back to the last
+  // entry so a misconfigured list can still resolve to something.
+  return bands.find(band => band.cities.length === 0) ?? bands[bands.length - 1];
 };
 
-/** The goal in ml, rounded to the nearest 50 and clamped to a safe range. */
+/** Extra hydration allocation implied by the city's climate baseline. */
+export const climateModifierFor = (selectedCity?: string): number =>
+  climateBandFor(selectedCity)?.targetAdjustmentMl ?? 0;
+
+/** The goal in ml, rounded and clamped to the configured safe range. */
 export const computeTargetDailyMl = ({
   weightKg,
   activityLevel,
   medicalConditions = [],
   selectedCity,
 }: TargetInputs): number => {
-  let targetMl = weightKg * ML_PER_KG;
+  const { mlPerKg, minTargetMl, maxTargetMl, roundToMl } = AppConfigStore.current().targetFormula;
 
-  targetMl += ACTIVITY_BONUS_ML[activityLevel ?? ''] ?? 0;
+  let targetMl = weightKg * mlPerKg;
 
-  for (const condition of medicalConditions) {
-    targetMl += CONDITION_ADJUSTMENT_ML[condition] ?? 0;
+  const activity = AppConfigStore.current().activityLevels.find(level => level.id === activityLevel);
+  targetMl += activity?.targetBonusMl ?? 0;
+
+  // Unknown ids contribute nothing rather than throwing: a condition retired
+  // from the admin panel is still sitting on profiles that selected it.
+  for (const condition of AppConfigStore.conditionsFor(medicalConditions)) {
+    targetMl += condition.targetAdjustmentMl;
   }
 
   targetMl += climateModifierFor(selectedCity);
 
-  targetMl = Math.round(targetMl / 50) * 50;
-  return Math.min(MAX_TARGET_ML, Math.max(MIN_TARGET_ML, targetMl));
+  const step = roundToMl > 0 ? roundToMl : 1;
+  targetMl = Math.round(targetMl / step) * step;
+  return Math.min(maxTargetMl, Math.max(minTargetMl, targetMl));
 };
 
 /** The same calculation over a stored profile blob. */

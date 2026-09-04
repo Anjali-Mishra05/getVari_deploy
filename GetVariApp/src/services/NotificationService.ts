@@ -2,6 +2,7 @@ import notifee, {
   AlarmType,
   AndroidImportance,
   AndroidNotificationSetting,
+  AndroidStyle,
   AuthorizationStatus,
   Event,
   EventType,
@@ -169,6 +170,47 @@ export const readReminderEventId = (notification?: Notification | null): string 
   if (notification?.id) return `${REMINDER_ID_PREFIX}${notification.id}`;
   return `${REMINDER_ID_PREFIX}unknown`;
 };
+
+
+/**
+ * The Android options every notification this app posts shares.
+ *
+ * The important part is `style`. Without it Android renders the body as a
+ * single truncated line and there is nothing behind the expand chevron — so a
+ * message like the morning greeting, or an AI-written nudge that runs to a
+ * sentence or two, was unreadable past the first line and expanding it showed
+ * the same truncated text again. BigText is what gives the notification
+ * something to expand *into*.
+ *
+ * `summary` fills the sub-line in the expanded view, so the shade still says
+ * which kind of message this is once it has been opened.
+ */
+const androidOptions = (
+  channelId: string,
+  body: string,
+  overrides: {
+    importance?: AndroidImportance;
+    pressAction?: { id: string; launchActivity?: string };
+    summary?: string;
+  } = {}
+) => ({
+  channelId,
+  importance: overrides.importance ?? AndroidImportance.DEFAULT,
+  pressAction: overrides.pressAction ?? { id: 'default', launchActivity: 'default' },
+  // Attached only when there is something to expand into. Notifee's validator
+  // rejects a BigText style with an empty `text` by throwing, and a push
+  // message can legitimately arrive with a title and no body — which would
+  // then take out the whole notification rather than just its expanded view.
+  ...(body
+    ? {
+        style: {
+          type: AndroidStyle.BIGTEXT as const,
+          text: body,
+          ...(overrides.summary ? { summary: overrides.summary } : {}),
+        },
+      }
+    : {}),
+});
 
 class NotificationService {
   /** Serialises reminder (re)scheduling so overlapping calls can't interleave. */
@@ -467,12 +509,7 @@ class NotificationService {
         type: kind,
         eventId: `${kind}:${Date.now()}:${(displayCounter++).toString(36)}`,
       },
-      android: {
-        channelId,
-        pressAction: {
-          id: 'default',
-        },
-      },
+      android: androidOptions(channelId, body),
     });
   }
 
@@ -560,11 +597,11 @@ class NotificationService {
               type: HYDRATION_REMINDER_TYPE,
               eventId: `${REMINDER_ID_PREFIX}${slot}@${timestamp}`,
             },
-            android: {
-              channelId: REMINDER_CHANNEL_ID,
+            android: androidOptions(REMINDER_CHANNEL_ID, REMINDER_BODY, {
               importance: AndroidImportance.HIGH,
               pressAction: { id: 'open-hydration-chat', launchActivity: 'default' },
-            },
+              summary: 'Hydration reminder',
+            }),
           },
           trigger
         );
@@ -659,11 +696,10 @@ class NotificationService {
                 key: message.key,
                 eventId: `${id}@${timestamp}`,
               },
-              android: {
-                channelId: REMINDER_CHANNEL_ID,
+              android: androidOptions(REMINDER_CHANNEL_ID, message.body, {
                 importance: AndroidImportance.DEFAULT,
-                pressAction: { id: 'default', launchActivity: 'default' },
-              },
+                summary: message.title,
+              }),
             },
             {
               type: TriggerType.TIMESTAMP,

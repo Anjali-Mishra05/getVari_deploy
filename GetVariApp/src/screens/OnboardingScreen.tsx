@@ -22,7 +22,6 @@ import {
   Info,
   CircleAlert,
   Bluetooth,
-  ChevronDown,
   Moon,
   Sunrise,
   BellOff,
@@ -35,16 +34,18 @@ import Animated, {
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 import { BleManager, Device } from 'react-native-ble-plx';
 import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
-import Geolocation from '@react-native-community/geolocation';
 
 import GlassCard from '../components/GlassCard';
-import CustomSlider from '../components/CustomSlider';
+import Button from '../components/ui/Button';
+import NumberField from '../components/ui/NumberField';
 import TimeField from '../components/TimeField';
 import CityPickerModal from '../components/CityPickerModal';
 import { supabase } from '../services/SupabaseClient';
 import { AuthService } from '../services/AuthService';
 import NotificationService from '../services/NotificationService';
-import { getClosestCity } from '../data/indianCities';
+import LocationService from '../services/LocationService';
+import ConfigService from '../services/ConfigService';
+import useAppConfig from '../hooks/useAppConfig';
 import { computeTargetDailyMl } from '../utils/hydrationTarget';
 import { WorkEnvironment } from '../types';
 import {
@@ -53,6 +54,27 @@ import {
   formatClockLabel,
   sleepDurationMinutes,
 } from '../utils/sleepWindow';
+
+/**
+ * A labelled field that says it is required, and why it is not satisfied.
+ *
+ * The asterisk is the visible half of defect 6: nothing marked these as
+ * mandatory, so walking past them looked allowed.
+ */
+const RequiredField: React.FC<{
+  label: string;
+  error?: string | null;
+  className?: string;
+  children: React.ReactNode;
+}> = ({ label, error, className = '', children }) => (
+  <View className={className}>
+    <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">
+      {label} <Text className="text-red-400">*</Text>
+    </Text>
+    {children}
+    {!!error && <Text className="text-[10px] text-red-400 mt-1.5">{error}</Text>}
+  </View>
+);
 
 const manager = new BleManager();
 const GETVARI_SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
@@ -74,6 +96,10 @@ const OnboardingScreen = ({ navigation }: any) => {
   const [isLocating, setIsLocating] = useState(false);
   const [locationErrorMsg, setLocationErrorMsg] = useState('');
   const [showCityPicker, setShowCityPicker] = useState(false);
+  /** True when the city came from the device rather than from the picker. */
+  const [locationAuto, setLocationAuto] = useState(false);
+  /** Guards the one automatic attempt per visit to the location step. */
+  const [locationAttempted, setLocationAttempted] = useState(false);
 
   // State for Step 3
   const [medicalConditions, setMedicalConditions] = useState<string[]>([]);
@@ -95,6 +121,39 @@ const OnboardingScreen = ({ navigation }: any) => {
   const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Subscribed, not sampled: the config arrives over the network and can land
+  // after this screen has painted, or change while it is open.
+  const appConfig = useAppConfig();
+  const conditions = appConfig.medicalConditions.filter(c => c.enabled !== false);
+  const activityLevels = appConfig.activityLevels.filter(level => level.enabled !== false);
+  const workEnvironments = appConfig.workEnvironments.filter(env => env.enabled !== false);
+
+  /**
+   * Which required fields the user has left, once they have tried to move on.
+   *
+   * Errors appear on the first "Next" rather than while the field is still
+   * being filled in — flagging an email as invalid at "j@" is noise, and the
+   * user has not made a mistake yet.
+   */
+  const [showFieldErrors, setShowFieldErrors] = useState(false);
+
+  const nameError = fullName.trim().length < 2 ? 'Enter your name.' : null;
+  // Deliberately permissive: this only has to catch a typo or an empty field,
+  // and a stricter pattern rejects addresses that are perfectly deliverable.
+  const emailError = !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim())
+    ? 'Enter a valid email address.'
+    : null;
+  /** Fluid-restricted conditions are unsafe to pace without a doctor's number. */
+  const physicianLimitError =
+    ConfigService.requiresPhysicianLimit(medicalConditions) &&
+    !(Number.parseInt(physicianLimit, 10) > 0)
+      ? 'A physician daily limit is required for the conditions you selected.'
+      : null;
+
+  /** Blocks `Next` on the step that owns the offending field. */
+  const blockingError =
+    step === 2 ? nameError ?? emailError : step === 6 ? physicianLimitError : null;
 
   const sleepSchedule = { sleepStart, wakeUp };
   const sleepHours = sleepDurationMinutes(sleepSchedule) / 60;
@@ -124,64 +183,67 @@ const OnboardingScreen = ({ navigation }: any) => {
     return true;
   };
 
-  const handleDetectLocation = async () => {
+  /**
+   * Resolve the user's city from the device.
+   *
+   * Runs on its own when the user reaches this step (see the effect below)
+   * rather than waiting for a "Detect" tap — where the user is is something
+   * the phone knows, and asking them to type it produced profiles that were
+   * wrong the moment they travelled. The picker stays as a correction for a
+   * bad fix or a refused permission, not as the primary path.
+   *
+   * @param prompt Whether a permission dialog may be raised. False for the
+   *   automatic attempt on a step the user did not ask anything of yet.
+   */
+  const detectLocation = async (prompt: boolean) => {
     setIsLocating(true);
     setLocationErrorMsg('');
-    setSelectedCity('');
 
     try {
-      const hasPermission = await request(
-        Platform.OS === 'android' ? PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION : PERMISSIONS.IOS.LOCATION_WHEN_IN_USE
-      );
+      const result = await LocationService.resolveCurrentLocation({ prompt });
 
-      if (hasPermission !== RESULTS.GRANTED) {
-        setLocationErrorMsg('Location permission denied.');
-        setIsLocating(false);
-        return;
+      // Coordinates are worth keeping even when no city matched: they are what
+      // a future climate lookup would use, and they record where the profile
+      // was actually created.
+      if (result.latitude !== null) setLatitude(result.latitude);
+      if (result.longitude !== null) setLongitude(result.longitude);
+
+      if (result.city) {
+        setSelectedCity(result.city);
+        setLocationAuto(true);
+      } else {
+        setLocationAuto(false);
+        setLocationErrorMsg(LocationService.describeFailure(result.status));
       }
-
-      // 1. Try High Accuracy (GPS)
-      Geolocation.getCurrentPosition(
-        (position) => {
-          const lat = position.coords.latitude;
-          const lon = position.coords.longitude;
-          setLatitude(lat);
-          setLongitude(lon);
-          setIsLocating(false);
-          const city = getClosestCity(lat, lon);
-          setSelectedCity(city);
-        },
-        (error) => {
-          console.warn('GPS failed, trying network fallback...', error);
-          // 2. Fallback to Network-based location
-          Geolocation.getCurrentPosition(
-            (pos) => {
-              const lat = pos.coords.latitude;
-              const lon = pos.coords.longitude;
-              setLatitude(lat);
-              setLongitude(lon);
-              setIsLocating(false);
-              const city = getClosestCity(lat, lon);
-              setSelectedCity(city);
-            },
-            (err) => {
-              console.error(err);
-              setLocationErrorMsg('Unable to retrieve location. Select a city manually.');
-              setIsLocating(false);
-            },
-            { enableHighAccuracy: false, timeout: 5000 }
-          );
-        },
-        { enableHighAccuracy: true, timeout: 5000 }
-      );
-    } catch (err) {
-      console.error(err);
-      setLocationErrorMsg('An error occurred during location detection.');
+    } catch (error) {
+      console.error('[Onboarding] Location detection failed:', error);
+      setLocationErrorMsg('Could not detect your location. Pick your city instead.');
+    } finally {
       setIsLocating(false);
     }
   };
 
+  // One automatic attempt per visit to the location step. `prompt` is true so
+  // the permission dialog appears in context, next to the field it explains,
+  // rather than at some unrelated moment later.
+  useEffect(() => {
+    if (step !== 2 || locationAttempted) return;
+    setLocationAttempted(true);
+    detectLocation(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, locationAttempted]);
+
   const handleNext = async () => {
+    // Defect 6: the user could walk past the identity step without a name or
+    // an email, so profiles arrived with neither and nothing said so.
+    if (blockingError) {
+      setShowFieldErrors(true);
+      setErrorMsg(blockingError);
+      return;
+    }
+    setShowFieldErrors(false);
+    setErrorMsg('');
+
     if (step < totalSteps) {
       setStep(step + 1);
     } else {
@@ -463,31 +525,58 @@ const OnboardingScreen = ({ navigation }: any) => {
                     <Text className="text-2xl font-black text-white mb-1">Biometric Blueprint</Text>
                     <Text className="text-[12px] text-neutral-400 mb-8">Provide basic values to adjust hydration metabolic models.</Text>
 
-                    <View className="mb-6">
-                      <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">Full Name</Text>
+                    <RequiredField
+                      label="Full Name"
+                      error={showFieldErrors ? nameError : null}
+                      className="mb-6"
+                    >
                       <TextInput
-                        className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        className="bg-white/5 border rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        style={{
+                          borderColor:
+                            showFieldErrors && nameError
+                              ? 'rgba(248,113,113,0.6)'
+                              : 'rgba(255,255,255,0.10)',
+                        }}
                         placeholder="e.g. John Doe"
                         placeholderTextColor="#475569"
                         value={fullName}
                         onChangeText={setFullName}
+                        autoCapitalize="words"
                       />
-                    </View>
+                    </RequiredField>
 
-                    <View className="mb-8">
-                      <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">Email Address</Text>
+                    <RequiredField
+                      label="Email Address"
+                      error={showFieldErrors ? emailError : null}
+                      className="mb-8"
+                    >
                       <TextInput
-                        className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        className="bg-white/5 border rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        style={{
+                          borderColor:
+                            showFieldErrors && emailError
+                              ? 'rgba(248,113,113,0.6)'
+                              : 'rgba(255,255,255,0.10)',
+                        }}
                         placeholder="e.g. john@example.com"
                         placeholderTextColor="#475569"
                         value={email}
                         onChangeText={setEmail}
                         keyboardType="email-address"
                         autoCapitalize="none"
+                        autoCorrect={false}
                       />
-                    </View>
+                    </RequiredField>
 
-                    <CustomSlider label="Age (years)" min={14} max={90} value={age} onChange={setAge} />
+                    <NumberField
+                      label="Age"
+                      unit="years"
+                      min={14}
+                      max={90}
+                      value={age}
+                      onChange={setAge}
+                    />
                     <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Gender</Text>
                     <View className="flex-row gap-2 mb-8">
                       {['Female', 'Male', 'Non-Binary'].map((g) => (
@@ -496,51 +585,72 @@ const OnboardingScreen = ({ navigation }: any) => {
                         </TouchableOpacity>
                       ))}
                     </View>
-                    <CustomSlider label="Baseline Weight" min={40} max={140} value={weight} onChange={setWeight} unit="kg" />
+                    <NumberField
+                      label="Baseline Weight"
+                      unit="kg"
+                      min={40}
+                      max={140}
+                      value={weight}
+                      onChange={setWeight}
+                      hint="Sets your daily goal"
+                    />
 
                     <View className="mt-4 pt-4 border-t border-white/5">
                       <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Location (Climate Tracking)</Text>
-                      <View className="flex-row gap-2">
+
+                      {/* The city is measured, not asked for. This block
+                          reports what the device found; the picker below is
+                          the correction, which is why it is a quiet link and
+                          not the primary control it used to be. */}
+                      {isLocating ? (
+                        <View className="flex-row items-center gap-3 bg-white/5 border border-white/10 rounded-xl px-4 py-3.5">
+                          <ActivityIndicator size="small" color="#00f2fe" />
+                          <Text className="text-[12px] text-neutral-400 font-medium">
+                            Finding your location…
+                          </Text>
+                        </View>
+                      ) : selectedCity ? (
+                        <View className="flex-row items-center gap-3 bg-emerald-500/[0.07] border border-emerald-500/25 rounded-xl px-4 py-3.5">
+                          <MapPin size={16} color="#10b981" />
+                          <View className="flex-1">
+                            <Text className="text-[14px] font-black text-white">{selectedCity}</Text>
+                            <Text className="text-[10px] text-emerald-500/80 font-mono mt-0.5">
+                              {locationAuto ? 'Detected automatically' : 'Chosen manually'}
+                            </Text>
+                          </View>
+                        </View>
+                      ) : (
+                        <View className="flex-row items-center gap-3 bg-amber-500/[0.07] border border-amber-500/25 rounded-xl px-4 py-3.5">
+                          <CircleAlert size={16} color="#f59e0b" />
+                          <Text className="text-[11px] text-amber-500/90 leading-[16px] flex-1">
+                            {locationErrorMsg || 'Location not set yet.'}
+                          </Text>
+                        </View>
+                      )}
+
+                      <View className="flex-row items-center gap-4 mt-3">
+                        <TouchableOpacity
+                          onPress={() => detectLocation(true)}
+                          disabled={isLocating}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Detect my location again"
+                        >
+                          <Text className="text-[11px] font-black uppercase text-[#00f2fe] tracking-wider">
+                            Detect again
+                          </Text>
+                        </TouchableOpacity>
                         <TouchableOpacity
                           onPress={() => setShowCityPicker(true)}
-                          activeOpacity={0.7}
-                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 flex-row items-center justify-between"
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Choose a city manually"
                         >
-                          <Text className={`text-[13px] font-bold ${selectedCity ? 'text-white' : 'text-neutral-500'}`}>
-                            {selectedCity || "Select City"}
-                          </Text>
-                          <ChevronDown size={14} color="#64748b" />
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          onPress={handleDetectLocation}
-                          disabled={isLocating}
-                          className={`flex-row items-center gap-2 px-4 py-3 rounded-xl border transition-all ${
-                            latitude !== null
-                              ? 'border-emerald-500/50 bg-emerald-950/20'
-                              : 'border-[#00f2fe]/30 bg-[#00f2fe]/10'
-                          }`}
-                        >
-                          <MapPin size={14} color={latitude !== null ? "#10b981" : "#00f2fe"} />
-                          <Text className={`text-[11px] font-black uppercase ${latitude !== null ? 'text-emerald-400' : 'text-[#00f2fe]'}`}>
-                            {isLocating ? 'Locating...' : latitude !== null ? 'Located' : 'Detect'}
+                          <Text className="text-[11px] font-black uppercase text-neutral-400 tracking-wider">
+                            Choose manually
                           </Text>
                         </TouchableOpacity>
                       </View>
-
-                      {selectedCity && (
-                        <View className="mt-3 flex-row items-center gap-2 bg-emerald-500/10 p-2 rounded-lg border border-emerald-500/20">
-                          <Check size={12} color="#10b981" />
-                          <Text className="text-[10px] text-emerald-500 font-mono">Captured: <Text className="font-bold">{selectedCity}</Text></Text>
-                        </View>
-                      )}
-
-                      {locationErrorMsg && (
-                        <View className="mt-3 flex-row items-center gap-2">
-                          <CircleAlert size={12} color="#f87171" />
-                          <Text className="text-[10px] text-red-400 font-mono">{locationErrorMsg}</Text>
-                        </View>
-                      )}
                     </View>
 
                     <CityPickerModal
@@ -550,6 +660,10 @@ const OnboardingScreen = ({ navigation }: any) => {
                         setSelectedCity(city);
                         setLatitude(lat);
                         setLongitude(lon);
+                        // A manual pick overrides the fix, and says so, so the
+                        // user can tell which one they are looking at.
+                        setLocationAuto(false);
+                        setLocationErrorMsg('');
                         setShowCityPicker(false);
                       }}
                       onClose={() => setShowCityPicker(false)}
@@ -561,17 +675,11 @@ const OnboardingScreen = ({ navigation }: any) => {
                   <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
                     <Text className="text-2xl font-black text-white mb-1">Pre-existing Medical States</Text>
                     <Text className="text-[12px] text-neutral-400 mb-8 leading-relaxed">Select any active diagnoses. GetVari dynamically tunes cardiovascular fluid strain thresholds and sweat predictions accordingly.</Text>
-                    {[
-                      { id: 'diabetes', title: 'Diabetes (Type I/II)', desc: 'Heightened systemic glucose requires higher osmotic dilution.' },
-                      { id: 'hypertension', title: 'Hypertension / High BP', desc: 'Heart pressure feedback active. Physician limit recommended.' },
-                      { id: 'ckd', title: 'Kidney Disease / CKD', desc: 'Ensures strict clearance limit control to relieve tubules. Physician limit mandatory.' },
-                      { id: 'heart', title: 'Heart Condition', desc: 'Prevents rapid blood volume expansion. Physician limit mandatory.' },
-                      { id: 'stones', title: 'Kidney Stone History', desc: 'Prompts for higher base target to prevent crystallization.' },
-                    ].map((cond) => (
+                    {conditions.map((cond) => (
                       <TouchableOpacity key={cond.id} onPress={() => toggleCondition(cond.id)} activeOpacity={0.7} className={`w-full p-4 rounded-2xl border mb-3 flex-row items-center justify-between ${medicalConditions.includes(cond.id) ? 'bg-[#00f2fe]/5 border-[#00f2fe]/50' : 'bg-white/[0.02] border-white/5'}`}>
                         <View className="flex-1 pr-4">
                           <Text className="text-white font-bold text-[14px] mb-1">{cond.title}</Text>
-                          <Text className="text-neutral-500 text-[10px] leading-relaxed">{cond.desc}</Text>
+                          <Text className="text-neutral-500 text-[10px] leading-relaxed">{cond.description}</Text>
                         </View>
                         <View className={`w-6 h-6 rounded-lg border items-center justify-center ${medicalConditions.includes(cond.id) ? 'bg-[#00f2fe] border-[#00f2fe]' : 'border-white/20'}`}>
                           {medicalConditions.includes(cond.id) && <Check size={14} color="#01040a" strokeWidth={4} />}
@@ -642,16 +750,10 @@ const OnboardingScreen = ({ navigation }: any) => {
                     <Text className="text-2xl font-black text-white mb-1">Metabolic Dynamics</Text>
                     <Text className="text-[12px] text-neutral-400 mb-8">Lifestyle habits dramatically update cellular sweating thresholds.</Text>
                     <Text className="text-[10px] text-neutral-500 font-mono uppercase tracking-[2px] mb-4">Daily Activity Strain</Text>
-                    {[
-                      { id: 'sedentary', title: 'Sedentary', desc: 'Minimal physical exertion. Remote work style.' },
-                      { id: 'light', title: 'Light Active', desc: 'Slight exertion. Light walks or stretching/yoga.' },
-                      { id: 'moderate', title: 'Moderate Load', desc: 'Moderate physical load, gym session 3-4x/week.' },
-                      { id: 'active', title: 'High Strain', desc: 'Daily athletic strain, high sweating baseline.' },
-                      { id: 'elite', title: 'Elite / Hybrid', desc: 'Double sessions daily or intensive endurance sports.' },
-                    ].map((opt) => (
+                    {activityLevels.map((opt) => (
                       <TouchableOpacity key={opt.id} onPress={() => setActivityLevel(opt.id)} activeOpacity={0.7} className={`w-full p-4 rounded-2xl border mb-3 ${activityLevel === opt.id ? 'bg-[#00f2fe]/5 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`}>
                         <Text className={`font-bold text-[14px] mb-0.5 ${activityLevel === opt.id ? 'text-[#00f2fe]' : 'text-white'}`}>{opt.title}</Text>
-                        <Text className="text-neutral-500 text-[10px]">{opt.desc}</Text>
+                        <Text className="text-neutral-500 text-[10px]">{opt.description}</Text>
                       </TouchableOpacity>
                     ))}
                   </Animated.View>
@@ -664,22 +766,21 @@ const OnboardingScreen = ({ navigation }: any) => {
 
                     <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Work Environment</Text>
                     <View className="flex-row flex-wrap gap-2 mb-8">
-                      {[
-                        { id: 'indoor', label: 'Indoor/Office' },
-                        { id: 'ac_office', label: 'AC Office' },
-                        { id: 'hybrid', label: 'Hybrid' },
-                        { id: 'outdoor', label: 'Outdoor' },
-                        { id: 'heavy_outdoor', label: 'Heavy Outdoor' }
-                      ].map((env) => (
+                      {workEnvironments.map((env) => (
                         <TouchableOpacity key={env.id} onPress={() => setWorkEnvironment(env.id as any)} className={`px-4 py-3 rounded-xl border items-center ${workEnvironment === env.id ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`}>
                           <Text className={`text-[11px] font-bold ${workEnvironment === env.id ? 'text-[#00f2fe]' : 'text-neutral-400'}`}>{env.label}</Text>
                         </TouchableOpacity>
                       ))}
                     </View>
 
-                    {(medicalConditions.includes('hypertension') || medicalConditions.includes('ckd') || medicalConditions.includes('heart')) && (
+                    {/* Which diagnoses need a doctor's limit is a property of
+                        the condition in the admin config, not a list of ids
+                        repeated on every screen that asks. */}
+                    {ConfigService.requiresPhysicianLimit(medicalConditions) && (
                       <View>
-                        <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">Physician Daily Limit (ml)</Text>
+                        <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">
+                          Physician Daily Limit (ml) <Text className="text-red-400">*</Text>
+                        </Text>
                         <TextInput
                           className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold mb-2"
                           placeholder="e.g. 2000"
@@ -689,8 +790,14 @@ const OnboardingScreen = ({ navigation }: any) => {
                           keyboardType="numeric"
                         />
                         <Text className="text-[10px] text-amber-500/80 leading-relaxed italic">
-                          Mandatory for gated conditions to ensure safety.
+                          Mandatory for the conditions you selected — the app will not pace your
+                          intake without your doctor's number.
                         </Text>
+                        {showFieldErrors && !!physicianLimitError && (
+                          <Text className="text-[10px] text-red-400 mt-1.5">
+                            {physicianLimitError}
+                          </Text>
+                        )}
                       </View>
                     )}
                   </Animated.View>
@@ -785,31 +892,43 @@ const OnboardingScreen = ({ navigation }: any) => {
                 </View>
               )}
 
-              <View className="flex-row gap-4 mt-auto pt-6 border-t border-white/5">
+              {/* Step 1 has no Back button, so its single action is centred
+                  rather than left to sit against the start of the row.
+                  `alignSelf: 'stretch'` was the wrong tool for that: in a row
+                  container it stretches the cross axis, so the button kept its
+                  content width and stayed pinned to the left edge. */}
+              <View
+                className="flex-row gap-4 mt-auto pt-6 border-t border-white/5"
+                style={step === 1 ? { justifyContent: 'center' } : undefined}
+              >
                 {step > 1 && (
-                  <TouchableOpacity onPress={handleBack} className="flex-1 py-4 bg-white/5 rounded-[22px] border border-white/5 flex-row items-center justify-center">
-                    <ChevronLeft color="#64748b" size={18} strokeWidth={3} />
-                    <Text className="text-slate-500 text-[13px] font-black uppercase tracking-wider ml-1">Back</Text>
-                  </TouchableOpacity>
+                  <Button
+                    label="Back"
+                    onPress={handleBack}
+                    variant="secondary"
+                    size="lg"
+                    icon={<ChevronLeft color="#64748b" size={18} strokeWidth={3} />}
+                    style={{ flex: 1 }}
+                    textStyle={{ textTransform: 'uppercase' }}
+                  />
                 )}
-                <TouchableOpacity
+                <Button
+                  label={step === totalSteps ? 'Finalize connection' : 'Next'}
                   onPress={handleNext}
-                  activeOpacity={0.8}
-                  disabled={isFinalizing}
-                  className={`${step === 1 ? 'w-full' : 'flex-[2]'} py-4 bg-[#00f2fe] rounded-[22px] flex-row items-center justify-center shadow-2xl ${isFinalizing ? 'opacity-50' : ''}`}
-                  style={{ shadowColor: '#00f2fe', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 12, elevation: 10 }}
-                >
-                  {isFinalizing ? (
-                    <ActivityIndicator color="#020617" size="small" />
-                  ) : (
-                    <>
-                      <Text className="text-[#020617] text-[13px] font-black uppercase tracking-wider mr-1">
-                        {step === totalSteps ? 'Finalize connection' : 'Next'}
-                      </Text>
-                      <ChevronRight color="#020617" size={18} strokeWidth={3} />
-                    </>
-                  )}
-                </TouchableOpacity>
+                  size="lg"
+                  loading={isFinalizing}
+                  style={{
+                    // Centred and comfortably wide on step 1; sharing the row
+                    // with Back on every step after it.
+                    ...(step === 1 ? { minWidth: 200 } : { flex: 2 }),
+                    shadowColor: '#00f2fe',
+                    shadowOffset: { width: 0, height: 6 },
+                    shadowOpacity: 0.4,
+                    shadowRadius: 12,
+                    elevation: 10,
+                  }}
+                  textStyle={{ textTransform: 'uppercase' }}
+                />
               </View>
             </GlassCard>
           </Animated.View>

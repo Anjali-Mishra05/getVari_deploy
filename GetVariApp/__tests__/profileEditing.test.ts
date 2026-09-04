@@ -96,7 +96,7 @@ describe('computeTargetDailyMl', () => {
 
   it('applies each condition, including the one that lowers the ceiling', () => {
     expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] })).toBe(2550);
-    expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['kidney'] })).toBe(1850);
+    expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['ckd'] })).toBe(1850);
     expect(
       computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes', 'hypertension'] })
     ).toBe(2700);
@@ -115,7 +115,7 @@ describe('computeTargetDailyMl', () => {
   });
 
   it('clamps to a safe range whatever the inputs say', () => {
-    expect(computeTargetDailyMl({ weightKg: 40, medicalConditions: ['kidney'] })).toBe(1500);
+    expect(computeTargetDailyMl({ weightKg: 40, medicalConditions: ['ckd'] })).toBe(1500);
     expect(
       computeTargetDailyMl({
         weightKg: 140,

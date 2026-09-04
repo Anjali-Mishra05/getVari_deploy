@@ -158,17 +158,61 @@ export const INDIAN_CITIES = popularCities.map(city => {
 });
 
 /** Nearest known city to a GPS fix, by plain planar distance. */
-export const getClosestCity = (lat: number, lon: number): string => {
-  let closestCity = 'Bengaluru';
-  let minDistance = Infinity;
+/** Kilometres per degree of latitude — good enough for a nearest-city search. */
+const KM_PER_DEGREE = 111;
+
+export interface NearestCity {
+  city: string;
+  /** Great-circle-ish distance from the fix, in kilometres. */
+  distanceKm: number;
+}
+
+/**
+ * The closest city in the table to a fix, with how far away it is.
+ *
+ * The distance matters. This table is Indian cities only, so a fix taken
+ * anywhere else still returns *something* — the old version answered with the
+ * nearest Indian city and no way for the caller to know it was 6,000km out,
+ * and defaulted to "Bengaluru" for a fix it could not place at all. Callers
+ * now decide what is close enough to call the user's city.
+ *
+ * Longitude degrees are scaled by cos(latitude) so the comparison is in real
+ * distance rather than in degrees, which would bias the result northwards.
+ */
+export const findNearestCity = (lat: number, lon: number): NearestCity | null => {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+
+  const latScale = Math.cos((lat * Math.PI) / 180);
+  let nearest: NearestCity | null = null;
+
   for (const [city, coords] of Object.entries(CITY_COORDINATES)) {
-    const distance = Math.sqrt(Math.pow(coords.lat - lat, 2) + Math.pow(coords.lon - lon, 2));
-    if (distance < minDistance) {
-      minDistance = distance;
-      closestCity = city;
+    const dLat = (coords.lat - lat) * KM_PER_DEGREE;
+    const dLon = (coords.lon - lon) * KM_PER_DEGREE * latScale;
+    const distanceKm = Math.sqrt(dLat * dLat + dLon * dLon);
+    if (!nearest || distanceKm < nearest.distanceKm) {
+      nearest = { city, distanceKm };
     }
   }
-  return closestCity;
+
+  return nearest;
+};
+
+/**
+ * Beyond this, the nearest entry in the table is not the user's city and
+ * saying so would be a guess. Roughly the radius within which a city's climate
+ * band is still the right one to apply.
+ */
+export const NEAREST_CITY_LIMIT_KM = 150;
+
+/**
+ * The user's city for a fix, or null when no entry is close enough.
+ *
+ * Prefer this to `findNearestCity` unless you need the distance.
+ */
+export const getClosestCity = (lat: number, lon: number): string | null => {
+  const nearest = findNearestCity(lat, lon);
+  if (!nearest || nearest.distanceKm > NEAREST_CITY_LIMIT_KM) return null;
+  return nearest.city;
 };
 
 export interface CityEntry {

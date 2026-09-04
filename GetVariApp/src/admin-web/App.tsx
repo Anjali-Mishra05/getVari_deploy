@@ -9,6 +9,7 @@ import AlertsPage from './pages/AlertsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import FeedbackPage from './pages/FeedbackPage';
 import JourneyPage from './pages/JourneyPage';
+import AppConfigPage from './pages/AppConfigPage';
 import AdminLoginPage from './pages/AdminLoginPage';
 import { supabase } from '../services/SupabaseClient';
 
@@ -64,6 +65,10 @@ const App: React.FC = () => {
       <div className={activeTab === 'feedback' ? 'block' : 'hidden'}>
         <FeedbackPage />
       </div>
+      {/* Mounted only when open: the config editor holds unsaved edits, and a
+          hidden-but-mounted copy would keep them across a tab switch and
+          publish them the next time someone pressed Save. */}
+      {activeTab === 'config' && <AppConfigPage />}
     </AdminLayout>
   );
 };

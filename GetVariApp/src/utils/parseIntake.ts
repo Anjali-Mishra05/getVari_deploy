@@ -55,7 +55,27 @@ export interface IntakeMatch {
   amountMl: number;
   /** True when the text named a unit ("500 ml", "2 glasses") rather than a bare number. */
   hasUnit: boolean;
+  /**
+   * Whether the user is adding to the day's intake or taking some back.
+   *
+   * "reduce 4 litres" used to parse as an intake of 4,000ml — the opposite of
+   * what was asked — which then tripped the unrealistic-amount check and left
+   * the dashboard unchanged. A mis-log has to be correctable.
+   */
+  direction: 'add' | 'remove';
 }
+
+/**
+ * Phrases that mean "take this back off today's total".
+ *
+ * Anchored on the verb rather than matched loosely, so "I drank less than a
+ * litre" is still an intake and only an explicit instruction is a correction.
+ */
+const REMOVE_INTENT =
+  /\b(reduce|remove|subtract|deduct|minus|undo|revert|take\s+(?:off|back|out)|cancel|delete|correct|logged?\s+too\s+much|by\s+mistake|wrongly|accidentally)\b/i;
+
+/** True when the message asks for intake to be taken back rather than added. */
+export const isRemovalRequest = (text: string): boolean => REMOVE_INTENT.test(text);
 
 /**
  * Finds the intake amount in `text`.
@@ -90,21 +110,31 @@ export const matchIntake = (text: string): IntakeMatch | null => {
     }
   }
 
-  if (best) return { amountMl: best.amountMl, hasUnit: true };
+  const direction: 'add' | 'remove' = isRemovalRequest(trimmed) ? 'remove' : 'add';
+
+  if (best) return { amountMl: best.amountMl, hasUnit: true, direction };
 
   // Bare number with no unit: small counts read as glasses, larger ones as ml.
   // Anything in between is too ambiguous to guess — let the caller re-ask.
-  const bare = trimmed.match(/^(\d+(?:\.\d+)?)$/);
+  //
+  // Normally the *whole* message has to be the number, so "I drank at 500" is
+  // not read as 500ml. A correction is the exception: "reduce 500" carries a
+  // verb that has already settled what the number is for, so the number is
+  // safe to pick out of the sentence.
+  const bare =
+    direction === 'remove'
+      ? trimmed.match(/\b(\d+(?:\.\d+)?)\b/)
+      : trimmed.match(/^(\d+(?:\.\d+)?)$/);
   if (bare) {
     const quantity = toQuantity(bare[1]);
     if (quantity !== null) {
       if (quantity <= 10) {
         const amountMl = clamp(quantity * GLASS_ML);
-        if (amountMl !== null) return { amountMl, hasUnit: false };
+        if (amountMl !== null) return { amountMl, hasUnit: false, direction };
       }
       if (quantity >= 50) {
         const amountMl = clamp(quantity);
-        if (amountMl !== null) return { amountMl, hasUnit: false };
+        if (amountMl !== null) return { amountMl, hasUnit: false, direction };
       }
     }
   }

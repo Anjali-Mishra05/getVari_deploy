@@ -1,5 +1,19 @@
 import { UserProfile } from '../types';
 import TelemetryHistoryService from './TelemetryHistoryService';
+import AppConfigStore from '../config/appConfigStore';
+
+/**
+ * A finite number, or the supplied fallback.
+ *
+ * Every stage of this pipeline multiplies and then compares, so one missing
+ * field (a profile row saved before `weightKg` existed, say) turns the whole
+ * breakdown into NaN and puts "NaN ml" on the dashboard. Coercing at the edge
+ * is what keeps a partial profile showing a conservative number instead.
+ */
+const num = (value: unknown, fallback = 0): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
 
 /**
  * PBWRService - 100% Compliant Implementation of Personalized Base Water Requirement (PBWR)
@@ -68,21 +82,8 @@ class PBWRService {
     { min: 0, adj: 0 },      // Low
   ];
 
-  // Stage 3 - Work Environment
-  private WORK_ENV_ADJ = {
-    indoor: 0,
-    ac_office: 250,
-    hybrid: 500,
-    outdoor: 750,
-    heavy_outdoor: 1300,
-  };
-
-  // Stage 3 - Health Conditions
-  private HEALTH_ADJ = {
-    diabetes: 400,
-    stones: 500,
-    // Hypertension/CKD/Heart are physician-gated, adj = +0
-  };
+  // Stage 3 work-environment and health adjustments, and which conditions are
+  // physician-gated, all come from the admin config — see AppConfigStore.
 
   // Stage 4 - Upper Limits
   private UPPER_LIMITS = {
@@ -98,8 +99,12 @@ class PBWRService {
   async calculatePBWR(profile: UserProfile, waterConsumedMl: number, userId?: string): Promise<PBWRBreakdown> {
     // 1. Stage 1 - PBWR Baseline
     const genderRate = profile.gender === 'Female' ? this.GENDER_RATES.Female : this.GENDER_RATES.Male;
-    const ageFactor = this.AGE_FACTORS.find(f => profile.age >= f.min && profile.age <= f.max)?.factor || 0.90;
-    const pbwrBaseline = profile.weightKg * genderRate * ageFactor;
+    const age = num(profile.age, 30);
+    const ageFactor = this.AGE_FACTORS.find(f => age >= f.min && age <= f.max)?.factor || 0.90;
+    // A profile with no usable weight cannot be personalised, so it falls back
+    // to the safety floor rather than producing NaN all the way to the screen.
+    const weightKg = num(profile.weightKg, 0);
+    const pbwrBaseline = weightKg > 0 ? weightKg * genderRate * ageFactor : 1500;
 
     // 2. Stage 2 - 7-Day Calibration
     // Logic: With mock fallback, snapshots.length will be 7 for any valid userId/profile.
@@ -132,23 +137,14 @@ class PBWRService {
         humidityAdj = 0;
     }
 
-    const workEnvAdj = this.WORK_ENV_ADJ[profile.workEnvironment] || 0;
+    const workEnvAdj = num(
+      AppConfigStore.current().workEnvironments.find(env => env.id === profile.workEnvironment)
+        ?.pbwrAdjustmentMl
+    );
 
-    let healthAdj = 0;
-    let isPhysicianGated = false;
-    if (profile.medicalConditions) {
-        if (profile.medicalConditions.includes('diabetes')) healthAdj += this.HEALTH_ADJ.diabetes;
-        if (profile.medicalConditions.includes('stones')) healthAdj += this.HEALTH_ADJ.stones;
-
-        // Physician-gated conditions
-        if (
-            profile.medicalConditions.includes('hypertension') ||
-            profile.medicalConditions.includes('ckd') ||
-            profile.medicalConditions.includes('heart')
-        ) {
-            isPhysicianGated = true;
-        }
-    }
+    const conditions = AppConfigStore.conditionsFor(profile.medicalConditions);
+    const healthAdj = conditions.reduce((total, condition) => total + num(condition.pbwrAdjustmentMl), 0);
+    const isPhysicianGated = conditions.some(condition => condition.requiresPhysicianLimit);
 
     const adjustedTotal = pbwrBaseline + activityAdj + tempAdj + humidityAdj + workEnvAdj + healthAdj;
 
@@ -164,15 +160,20 @@ class PBWRService {
             qualifyingLimits.push(profile.gender === 'Female' ? this.UPPER_LIMITS.Healthy_Female : this.UPPER_LIMITS.Healthy_Male);
         }
     } else {
-        // Find qualifying categories for MIN logic
-        // Healthy applies only if no other "active" categories apply
+        // Find qualifying categories for MIN logic.
+        // Healthy applies only if no other "active" category applies. Each
+        // condition brings its own ceiling from the config; a condition with
+        // no ceiling contributes none.
+        const conditionLimits = conditions
+            .map(condition => condition.pbwrUpperLimitMl)
+            .filter((limit): limit is number => typeof limit === 'number' && limit > 0);
+
         const hasActiveCategories =
             profile.activityLevel === 'active' ||
             profile.activityLevel === 'elite' ||
             profile.workEnvironment === 'outdoor' ||
             profile.workEnvironment === 'heavy_outdoor' ||
-            profile.medicalConditions?.includes('diabetes') ||
-            profile.medicalConditions?.includes('stones');
+            conditionLimits.length > 0;
 
         if (!hasActiveCategories) {
             qualifyingLimits.push(profile.gender === 'Female' ? this.UPPER_LIMITS.Healthy_Female : this.UPPER_LIMITS.Healthy_Male);
@@ -180,29 +181,34 @@ class PBWRService {
             if (profile.activityLevel === 'active' || profile.activityLevel === 'elite') qualifyingLimits.push(this.UPPER_LIMITS.Gym);
             if (profile.workEnvironment === 'outdoor') qualifyingLimits.push(this.UPPER_LIMITS.Outdoor);
             if (profile.workEnvironment === 'heavy_outdoor') qualifyingLimits.push(this.UPPER_LIMITS.Heavy_Outdoor);
-            if (profile.medicalConditions?.includes('diabetes')) qualifyingLimits.push(this.UPPER_LIMITS.Diabetes);
-            if (profile.medicalConditions?.includes('stones')) qualifyingLimits.push(this.UPPER_LIMITS.Kidney_Stone_History);
+            qualifyingLimits.push(...conditionLimits);
         }
     }
 
-    const upperLimit = isPhysicianGated && profile.physicianLimitMl
-        ? profile.physicianLimitMl
-        : Math.min(...qualifyingLimits);
+    // `Math.min()` of an empty list is Infinity, which would print as
+    // "Infinity ml" on the breakdown card, so the healthy ceiling stands in.
+    const defaultCeiling =
+        profile.gender === 'Female' ? this.UPPER_LIMITS.Healthy_Female : this.UPPER_LIMITS.Healthy_Male;
+    const upperLimit = isPhysicianGated && num(profile.physicianLimitMl) > 0
+        ? num(profile.physicianLimitMl)
+        : qualifyingLimits.length > 0
+          ? Math.min(...qualifyingLimits)
+          : defaultCeiling;
 
     // 5. Stage 5 - Safety Floor
-    const finalDailyWaterTarget = Math.max(1500, Math.min(adjustedTotal, upperLimit));
+    const finalDailyWaterTarget = Math.round(Math.max(1500, Math.min(adjustedTotal, upperLimit)));
 
     return {
-      pbwrBaseline: pbwrBaseline,
+      pbwrBaseline: Math.round(pbwrBaseline),
       activityAdj,
       tempAdj,
       humidityAdj,
       workEnvAdj,
       healthAdj,
-      adjustedTotal: adjustedTotal,
-      upperLimit: upperLimit,
+      adjustedTotal: Math.round(adjustedTotal),
+      upperLimit: Math.round(upperLimit),
       finalTarget: finalDailyWaterTarget,
-      remaining: Math.max(0, finalDailyWaterTarget - waterConsumedMl),
+      remaining: Math.max(0, finalDailyWaterTarget - num(waterConsumedMl)),
       isCalibrationPeriod,
       isPhysicianGated,
       physicianLimitEntered: !!profile.physicianLimitMl,

@@ -21,7 +21,8 @@ jest.mock('@notifee/react-native', () => ({
   requestPermission: jest.fn(() => Promise.resolve(true)),
   getTriggerNotificationIds: jest.fn(() => Promise.resolve([])),
   getDisplayedNotifications: jest.fn(() => Promise.resolve([])),
-  AndroidImportance: { HIGH: 4 },
+  AndroidImportance: { DEFAULT: 3, HIGH: 4 },
+  AndroidStyle: { BIGTEXT: 1 },
   AndroidVisibility: { PUBLIC: 1 },
 }));
 

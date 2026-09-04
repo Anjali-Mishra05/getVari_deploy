@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 from typing import List, Optional, TypedDict
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
@@ -97,7 +99,10 @@ def get_jina_embedding(text: str):
         "dimensions": 1024,
         "input": [text]
     }
-    response = requests.post(url, headers=headers, json=data)
+    # Without a timeout a hung embedding call holds the request open until the
+    # client gives up, which the user experiences as the assistant thinking for
+    # a minute and then failing.
+    response = requests.post(url, headers=headers, json=data, timeout=10)
     response.raise_for_status()
     return response.json()["data"][0]["embedding"]
 
@@ -113,16 +118,82 @@ def rerank(query: str, documents: List[dict]):
         "documents": [d["content"] for d in documents],
         "top_n": 4
     }
-    response = requests.post(url, headers=headers, json=data)
+    response = requests.post(url, headers=headers, json=data, timeout=10)
     response.raise_for_status()
     results = response.json()["results"]
     return [documents[r["index"]] for r in results]
 
+# ---------------------------------------------------------------------------
+# Fast paths
+# ---------------------------------------------------------------------------
+#
+# "Who are you?" used to cost a full pipeline: an LLM call to rephrase, a Jina
+# embedding, a Supabase vector search, a Jina rerank and a second LLM call —
+# five network round trips to answer a question that has one fixed answer, on
+# top of a free-tier cold start. That is where the 45 seconds went.
+#
+# Two shortcuts fix it. Questions with a fixed answer are answered from a
+# table and never reach the graph at all; questions that plainly need no
+# document skip retrieval and go straight to the model.
+
+IDENTITY_PATTERNS = (
+    "who are you", "what are you", "who r u", "your name", "what is your name",
+    "what should i call you", "introduce yourself", "who am i talking to",
+    "what can you do", "how can you help", "what do you do",
+)
+
+GREETING_PATTERNS = ("hi", "hello", "hey", "yo", "hola", "namaste", "good morning",
+                     "good afternoon", "good evening", "thanks", "thank you", "ty")
+
+IDENTITY_ANSWER = (
+    "I'm **Vari**, the hydration assistant inside getVāri. 💧\n\n"
+    "I read your profile and today's intake to answer questions about water and "
+    "hydration, work out your **daily target**, explain your **hydration score**, "
+    "and log a drink for you — just tell me how much you had."
+)
+
+GREETING_ANSWER = "Hey! 👋 I'm **Vari**. Ask me anything about hydration, or tell me how much water you just drank."
+
+
+def canned_answer(question: str) -> Optional[str]:
+    """A fixed reply for a question that has one, or None to run the graph."""
+    text = question.strip().lower().rstrip("?!. ")
+    if not text:
+        return None
+    if any(pattern in text for pattern in IDENTITY_PATTERNS):
+        return IDENTITY_ANSWER
+    # Greetings are matched whole, so "hi" answers instantly but "high heat and
+    # hydration" still goes to the model.
+    if text in GREETING_PATTERNS:
+        return GREETING_ANSWER
+    return None
+
+
+# Words that mean the answer is in the getVāri documents rather than in the
+# model's general knowledge. Anything else skips retrieval, which is two
+# network calls and most of the latency on a question the corpus cannot help with.
+RETRIEVAL_KEYWORDS = (
+    "getvari", "get vari", "vāri", "vari app", "my score", "my target", "my risk",
+    "pbwr", "algorithm", "report", "recovery engine", "smartcap", "wearable",
+    "my profile", "my data", "my hydration", "score", "target", "risk",
+)
+
+
+def needs_retrieval(question: str) -> bool:
+    text = question.lower()
+    return any(keyword in text for keyword in RETRIEVAL_KEYWORDS)
+
+
 # Node 1: Rephrase
 def rephrase_question(state: AgentState):
     print(f"--- NODE: REPHRASE ---")
-    if not state["chat_history"]:
-        print(f"No history, using raw question: {state['question']}")
+    # Rephrasing exists to resolve pronouns against earlier turns. With no
+    # earlier *user* turn there is nothing to resolve, and the opening greeting
+    # the app posts on its own does not count — treating it as history bought a
+    # whole extra LLM round trip on the very first question of every session.
+    prior_user_turns = [m for m in state["chat_history"] if m.role == "user"]
+    if not prior_user_turns:
+        print(f"No user history, using raw question: {state['question']}")
         return {"standalone_question": state["question"]}
 
     history_str = "\n".join([f"{m.role}: {m.content}" for m in state["chat_history"]])
@@ -144,7 +215,13 @@ Standalone Question:"""
 def retrieve(state: AgentState):
     print(f"--- NODE: RETRIEVE ---")
     print(f"Retrieving for: {state['standalone_question']}")
-    embedding = get_jina_embedding(state["standalone_question"])
+    try:
+        embedding = get_jina_embedding(state["standalone_question"])
+    except Exception as e:  # noqa: BLE001
+        # The model answers from general knowledge when the corpus is
+        # unreachable, which is far better than failing the whole request.
+        print(f"Embedding failed, answering without context: {e}")
+        return {"context": ""}
 
     # RPC match_documents needs to be created in Supabase
     res = supabase.rpc("match_documents", {
@@ -159,7 +236,11 @@ def retrieve(state: AgentState):
         return {"context": ""}
 
     print(f"Found {len(documents)} potential chunks. Reranking...")
-    reranked = rerank(state["standalone_question"], documents)
+    try:
+        reranked = rerank(state["standalone_question"], documents)
+    except Exception as e:  # noqa: BLE001
+        print(f"Rerank failed, using vector order: {e}")
+        reranked = documents[:4]
     context = "\n\n---\n\n".join([f"[Source: {d['metadata']['source']}]\n{d['content']}" for d in reranked])
     return {"context": context}
 
@@ -229,7 +310,7 @@ KNOWN USER INFO:
 
 ==========================
 Retrieved Context (getVāri Source of Truth):
-{state['context'] if state['context'] else 'No specific getVāri document context found.'}
+{state.get('context') or 'No specific getVāri document context found.'}
 ==========================
 
 User Question: {state['standalone_question']}
@@ -256,7 +337,13 @@ workflow.add_node("retrieve", retrieve)
 workflow.add_node("generate", generate)
 
 workflow.add_edge(START, "rephrase")
-workflow.add_edge("rephrase", "retrieve")
+# Retrieval is skipped for questions the corpus cannot answer — a general
+# hydration fact does not need an embedding, a vector search and a rerank.
+workflow.add_conditional_edges(
+    "rephrase",
+    lambda state: "retrieve" if needs_retrieval(state["standalone_question"] or state["question"]) else "generate",
+    {"retrieve": "retrieve", "generate": "generate"},
+)
 workflow.add_edge("retrieve", "generate")
 workflow.add_edge("generate", END)
 
@@ -270,10 +357,83 @@ async def root():
 async def ping():
     return {"status": "ok"}
 
+# ---------------------------------------------------------------------------
+# Runtime configuration
+# ---------------------------------------------------------------------------
+#
+# Disease definitions and everything derived from them (goal adjustments, risk
+# weights, PBWR ceilings, which diagnoses need a physician's limit) used to be
+# typed into the app in several places at once, under several different spellings
+# of the same id. They now live in one Supabase row that the admin console edits
+# and the app fetches from here.
+#
+# The endpoint is deliberately forgiving: it merges the stored document over the
+# defaults below and always answers 200 with something usable, because a config
+# fetch that fails is a hydration app that cannot show its onboarding screen.
+
+CONFIG_TABLE = "getvari_app_config"
+CONFIG_ROW_ID = "active"
+
+# The shipped defaults, shared verbatim with the app.
+#
+# `default_app_config.json` is imported by src/config/appConfigSchema.ts as
+# well, so the fallback the server returns and the fallback a device uses
+# before its first fetch are the same bytes. They were two hand-maintained
+# copies for about an hour, which is roughly how long it takes for two
+# hand-maintained copies of anything to disagree.
+_DEFAULTS_PATH = Path(__file__).with_name("default_app_config.json")
+
+with _DEFAULTS_PATH.open(encoding="utf-8") as _defaults_file:
+    DEFAULT_CONFIG = json.load(_defaults_file)
+
+
+@app.get("/config")
+async def get_config(x_api_key: Optional[str] = Header(default=None)):
+    """The app's runtime configuration, as edited in the admin console.
+
+    Merged one level deep over the defaults: a stored document that names only
+    `medicalConditions` keeps the shipped activity levels rather than losing
+    them, which is what makes a partial edit in the console safe.
+    """
+    require_api_key(x_api_key)
+
+    merged = dict(DEFAULT_CONFIG)
+    try:
+        res = (
+            supabase.table(CONFIG_TABLE)
+            .select("version, config, updated_at")
+            .eq("id", CONFIG_ROW_ID)
+            .maybe_single()
+            .execute()
+        )
+        row = res.data if res else None
+        if row:
+            stored = row.get("config") or {}
+            for key, value in stored.items():
+                # An explicitly empty section is a mistake far more often than
+                # it is an intention ("hide every disease"), and adopting it
+                # would empty the onboarding screen. Ignore it.
+                if value in (None, [], {}):
+                    continue
+                merged[key] = value
+            merged["version"] = row.get("version", merged["version"])
+            merged["updatedAt"] = row.get("updated_at", merged["updatedAt"])
+    except Exception as e:  # noqa: BLE001 - a config read must never 500
+        print(f"[Config] Falling back to defaults: {e}")
+
+    return merged
+
+
 @app.post("/chat")
 async def chat(request: ChatRequest, x_api_key: Optional[str] = Header(default=None)):
     require_api_key(x_api_key)
     print(f"\n>>> INCOMING REQUEST: {request.question}")
+
+    quick = canned_answer(request.question)
+    if quick is not None:
+        print("--- FAST PATH: canned answer ---")
+        return {"answer": quick}
+
     try:
         inputs = {
             "question": request.question,

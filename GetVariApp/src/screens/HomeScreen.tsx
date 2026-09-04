@@ -1,16 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {
-  Activity,
-  Droplets,
-  Bell,
-  BellOff,
-  Plus,
-  Battery,
-  TrendingUp,
-  Cpu,
-} from 'lucide-react-native';
+import { Bell, BellOff, Plus, Battery, Cpu } from 'lucide-react-native';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
 import BrandLogo from '../components/BrandLogo';
@@ -28,10 +19,13 @@ import ChatBus from '../services/ChatBus';
 import HydrationService from '../services/HydrationService';
 import ProfileService from '../services/ProfileService';
 import useHydrationTelemetry from '../hooks/useHydrationTelemetry';
+import useAppConfig from '../hooks/useAppConfig';
 import generateInsights from '../utils/hydrationInsights';
 import nextHydrationTip from '../utils/hydrationTips';
 import { normaliseSleepSchedule } from '../utils/sleepWindow';
 
+import DashboardNav, { DashboardTab } from '../components/dashboard/DashboardNav';
+import DashboardSkeleton from '../components/dashboard/DashboardSkeleton';
 import RiskScoreCard from '../components/dashboard/RiskScoreCard';
 import VitalsRow from '../components/dashboard/VitalsRow';
 import AmbientCard from '../components/dashboard/AmbientCard';
@@ -46,7 +40,8 @@ import PBWRBreakdownCard from '../components/dashboard/PBWRBreakdownCard';
 import PBWRService, { PBWRBreakdown } from '../services/PBWRService';
 import TelemetryHistoryService from '../services/TelemetryHistoryService';
 import NotificationEngine from '../services/NotificationEngine';
-import { STALENESS_LIMIT_MS } from '../config/edgeCaseConfig';
+import ConfigService from '../services/ConfigService';
+import { warmBackend } from '../config/backend';
 
 const HomeScreen = ({ navigation }: any) => {
   const [waterLogs, setWaterLogs] = useState<HydrationLog[]>([]);
@@ -72,8 +67,32 @@ const HomeScreen = ({ navigation }: any) => {
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [pbwrBreakdown, setPbwrBreakdown] = useState<PBWRBreakdown | null>(null);
 
-  const targetMl = userProfile?.targetDailyMl || 2500;
-  const totalWaterConsumed = waterLogs.reduce((acc, curr) => acc + curr.amountMl, 0);
+  /**
+   * True until the first read of the profile and today's entries has finished,
+   * whether it succeeded or not.
+   *
+   * The dashboard used to render immediately against a hardcoded 2,500ml goal
+   * and an empty log, then swap in the real figures a second or two later —
+   * so the first thing a user saw after signing in was a set of numbers that
+   * were not theirs, presented exactly like the ones that were. Everything
+   * derived from the profile now waits, visibly, for the profile.
+   */
+  const [loadingUserData, setLoadingUserData] = useState(true);
+
+  // One screen, so one destination. See `DashboardNav` for why this is not the
+  // four-item bar it used to be.
+  const [activeTab, setActiveTab] = useState<DashboardTab>('dashboard');
+
+  /** The daily goal, or null while it is still being read. Never a stand-in. */
+  const targetMl = Number.isFinite(userProfile?.targetDailyMl as number)
+    ? (userProfile!.targetDailyMl as number)
+    : null;
+  const totalWaterConsumed = waterLogs.reduce((acc, curr) => acc + (Number(curr.amountMl) || 0), 0);
+
+  // Subscribed rather than read once: the config arrives over the network, so
+  // a screen that only sampled it at mount would keep showing the previous
+  // one until something unrelated re-rendered it.
+  const appConfig = useAppConfig();
 
   const telemetry = useHydrationTelemetry(userProfile, waterLogs);
 
@@ -89,6 +108,17 @@ const HomeScreen = ({ navigation }: any) => {
   useEffect(() => {
     fetchUserData();
     setupNotifications();
+
+    // Disease definitions, activity bands and the goal formula all come from
+    // the admin API. Refreshed here rather than only at launch so a config
+    // published while the app was open is picked up on the next foreground.
+    ConfigService.refresh().catch(error =>
+      console.error('[Config] Initial refresh failed:', error)
+    );
+
+    // Start the chat backend waking now, on a screen the user is reading,
+    // rather than when they open the chat and have to watch it.
+    warmBackend();
 
     // Reminder presses are forwarded with the id of the press that produced
     // them. Deduping and the "ask once" rule live in the chat's prompt
@@ -139,7 +169,11 @@ const HomeScreen = ({ navigation }: any) => {
       if (ingestedLogIds.current.has(entry.id)) return;
       ingestedLogIds.current.add(entry.id);
 
-      ingestFluidRef.current(entry.amountMl);
+      // A correction takes millilitres off the day's *total*; it cannot take
+      // them out of the stomach, because the water was either drunk or never
+      // drunk. Feeding a negative amount to the recovery model would drain a
+      // gut that may hold nothing.
+      if (entry.amountMl > 0) ingestFluidRef.current(entry.amountMl);
       setWaterLogs(prev => (prev.some(log => log.id === entry.id) ? prev : [entry, ...prev]));
     });
 
@@ -160,6 +194,8 @@ const HomeScreen = ({ navigation }: any) => {
       replayPendingPrompts();
       refreshTodayLogs();
       refreshUnseen();
+      ConfigService.refresh().catch(() => undefined);
+      warmBackend();
       NotificationService.scheduleHydrationReminders();
       // Tops the fixed-time queue back up to a full week ahead.
       NotificationService.scheduleDailyNotifications();
@@ -196,21 +232,26 @@ const HomeScreen = ({ navigation }: any) => {
   };
 
   const fetchUserData = async () => {
+    setLoadingUserData(true);
     try {
       const uId = await AuthService.getCurrentUserId();
       console.log('[Supabase] Fetching data for user:', uId);
       if (!uId) return;
       setUserId(uId);
 
+      // `uId`, not the `userId` state: that setter has not been applied yet on
+      // this pass, so every call below used to be handed a stale null and had
+      // to re-resolve the id for itself.
+      //
       // A user who has not finished onboarding simply has no row yet, which
       // the service reports as `null` rather than as an error.
-      const profile = await ProfileService.fetchProfile(userId);
+      const profile = await ProfileService.fetchProfile(uId);
       if (profile) {
         console.log('[Supabase] Profile data loaded:', profile);
         setUserProfile(profile);
 
         // Sync local telemetry history to Supabase for Admin parity
-        TelemetryHistoryService.syncLocalToCloud(userId);
+        TelemetryHistoryService.syncLocalToCloud(uId);
 
         // Reminders are scheduled by the OS from contexts that never see this
         // row, so the sleep window is handed to the notification layer on
@@ -224,11 +265,15 @@ const HomeScreen = ({ navigation }: any) => {
 
       // Today's hydration logs — the widget reports a *daily* total, so
       // yesterday's entries must not be counted in it.
-      const logs = await HydrationService.fetchTodayLogs(userId);
+      const logs = await HydrationService.fetchTodayLogs(uId);
       console.log('[Supabase] Logs data loaded:', logs.length, "of today's entries");
       setWaterLogs(logs);
     } catch (error) {
       console.error('[Supabase] Fatal error fetching data:', error);
+    } finally {
+      // Cleared whether the read succeeded or failed: a screen stuck on a
+      // spinner after a failed fetch is worse than one showing what it has.
+      setLoadingUserData(false);
     }
   };
 
@@ -389,10 +434,20 @@ const HomeScreen = ({ navigation }: any) => {
     }
   }, [telemetry.sensorData, userProfile, userId, telemetry.solvedRisk, waterLogs]);
 
-  const isPhysicianGated = useMemo(() => {
-    const gated = ['hypertension', 'ckd', 'heart'];
-    return userProfile?.medicalConditions?.some(c => gated.includes(c)) ?? false;
-  }, [userProfile]);
+  // Which diagnoses require a doctor's daily limit is a property of the
+  // condition in the admin config, not a list of ids repeated on each screen.
+  // Read from `appConfig` rather than through ConfigService so the dependency
+  // on the config is visible to React (and to the linter): a condition
+  // re-flagged in the admin panel changes this gate without a reload.
+  const isPhysicianGated = useMemo(
+    () =>
+      (userProfile?.medicalConditions ?? []).some(id =>
+        appConfig.medicalConditions.some(
+          condition => condition.id === id && condition.requiresPhysicianLimit
+        )
+      ),
+    [userProfile, appConfig]
+  );
 
   return (
     <View className="flex-1 bg-[#02050e]">
@@ -469,16 +524,24 @@ const HomeScreen = ({ navigation }: any) => {
             </View>
           </View>
 
-          <RiskScoreCard
-            risk={telemetry.solvedRisk}
-            totalMl={totalWaterConsumed}
-            targetMl={targetMl}
-            hoursSinceDrink={hoursSinceLastLog}
-            lastIntakeMl={newestLog?.amountMl ?? null}
-            absorbing={telemetry.stomachVolume > 0}
-          />
+          {loadingUserData ? (
+            <DashboardSkeleton />
+          ) : (
+            <RiskScoreCard
+              risk={telemetry.solvedRisk}
+              totalMl={totalWaterConsumed}
+              targetMl={targetMl}
+              hoursSinceDrink={hoursSinceLastLog}
+              lastIntakeMl={newestLog?.amountMl ?? null}
+              absorbing={telemetry.stomachVolume > 0}
+              updatedAt={telemetry.riskUpdatedAt}
+            />
+          )}
 
-          <VitalsRow sensorData={telemetry.sensorData} />
+          {/* `connected` is what puts `--` in the tiles until a reading has
+              actually arrived, instead of the plausible-looking placeholder
+              values the stream used to open with. */}
+          <VitalsRow sensorData={telemetry.sensorData} connected={telemetry.streaming} />
 
           {!notificationsEnabled && (
             <GlassCard className="mb-4 bg-amber-500/10 border-amber-500/20 rounded-2xl p-4 flex-row items-center gap-3">
@@ -563,46 +626,14 @@ const HomeScreen = ({ navigation }: any) => {
 
         </ScrollView>
 
-        {/* Persistent Navigation Bar */}
-        <View className="absolute bottom-8 left-8 right-8 h-20 bg-neutral-950/90 border border-white/10 rounded-[28px] flex-row items-center justify-around px-4 shadow-2xl">
-          <TouchableOpacity className="items-center">
-            <View className="w-12 h-12 rounded-2xl bg-neutral-800 border border-white/5 items-center justify-center">
-              <TrendingUp color="#00f2fe" size={22} strokeWidth={2.5} />
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            className="items-center"
-            onPress={() => setQuickLogOpen(true)}
-            accessibilityRole="button"
-            accessibilityLabel="Log water"
-          >
-            <View className="w-12 h-12 items-center justify-center">
-              <Droplets color="#475569" size={22} />
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            className="items-center"
-            onPress={() => setTelemetryExpanded(prev => !prev)}
-            accessibilityRole="button"
-            accessibilityLabel="Toggle recovery engine telemetry"
-          >
-            <View className="w-12 h-12 items-center justify-center">
-              <Activity color={telemetryExpanded ? '#00f2fe' : '#475569'} size={22} />
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            className="items-center"
-            onPress={() => setProfileOpen(true)}
-            accessibilityRole="button"
-            accessibilityLabel="Profile and account settings"
-          >
-            <View className="w-12 h-12 items-center justify-center">
-              <View className="w-7 h-7 rounded-full bg-neutral-800 border border-white/10 items-center justify-center">
-                <Text className="text-[10px] font-black text-neutral-500">{profileInitial}</Text>
-              </View>
-            </View>
-          </TouchableOpacity>
-        </View>
+        {/* One destination, two actions — see `DashboardNav`. */}
+        <DashboardNav
+          active={activeTab}
+          onSelect={setActiveTab}
+          onLogWater={() => setQuickLogOpen(true)}
+          onOpenProfile={() => setProfileOpen(true)}
+          profileInitial={profileInitial}
+        />
 
         <NotificationCenter
           visible={notificationsOpen}

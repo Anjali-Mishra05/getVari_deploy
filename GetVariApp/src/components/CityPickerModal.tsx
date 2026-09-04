@@ -1,16 +1,8 @@
 import React, { useState } from 'react';
-import {
-  Modal,
-  SafeAreaView,
-  ScrollView,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import Animated, { FadeInUp } from 'react-native-reanimated';
+import { ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Check, Search } from 'lucide-react-native';
 
+import Sheet from './ui/Sheet';
 import { INDIAN_CITIES } from '../data/indianCities';
 
 interface CityPickerModalProps {
@@ -48,39 +40,37 @@ const CityPickerModal: React.FC<CityPickerModalProps> = ({
   );
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={dismiss}>
-      <View className="flex-1 bg-black/40 justify-end">
-        <TouchableOpacity activeOpacity={1} onPress={dismiss} className="absolute inset-0" />
-
-        <Animated.View
-          entering={FadeInUp.duration(300)}
-          className="w-full bg-[#01040a] border-t border-white/10 rounded-t-[42px] overflow-hidden h-[85%]"
-        >
-          <View className="items-center pt-3 pb-1">
-            <View className="w-12 h-1 bg-white/10 rounded-full" />
-          </View>
-
-          <View className="p-6">
-            <Text className="text-white font-black text-xl mb-6">Select Your City</Text>
-
-            <View className="flex-row items-center bg-white/[0.03] border border-white/10 rounded-[24px] px-5 py-2">
-              <Search size={20} color="#64748b" />
-              <TextInput
-                className="flex-1 ml-3 text-white text-[16px] font-medium h-12"
-                placeholder="Search Indian cities..."
-                placeholderTextColor="#475569"
-                value={query}
-                onChangeText={setQuery}
-                autoFocus={false}
-                underlineColorAndroid="transparent"
-              />
-              {query.length > 0 && (
-                <TouchableOpacity onPress={() => setQuery('')}>
-                  <Text className="text-[#64748b] font-bold px-2">Clear</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
+    <Sheet
+      visible={visible}
+      onClose={dismiss}
+      title="Select your city"
+      subtitle="CLIMATE BASELINE"
+      heightFraction={0.85}
+    >
+      <View className="px-6 pt-4 pb-2">
+        <View className="flex-row items-center bg-white/[0.03] border border-white/10 rounded-[24px] px-5 py-2">
+          <Search size={20} color="#64748b" />
+          <TextInput
+            className="flex-1 ml-3 text-white text-[16px] font-medium h-12"
+            placeholder="Search Indian cities..."
+            placeholderTextColor="#475569"
+            value={query}
+            onChangeText={setQuery}
+            autoFocus={false}
+            underlineColorAndroid="transparent"
+          />
+          {query.length > 0 && (
+            <TouchableOpacity
+              onPress={() => setQuery('')}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
+            >
+              <Text className="text-[#64748b] font-bold px-2">Clear</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
 
           <ScrollView
             className="flex-1 px-4"
@@ -126,19 +116,9 @@ const CityPickerModal: React.FC<CityPickerModalProps> = ({
                 </Text>
               </View>
             )}
-            <View className="h-10" />
-          </ScrollView>
-
-          <SafeAreaView>
-            <TouchableOpacity onPress={dismiss} className="p-6 items-center border-t border-white/5">
-              <Text className="text-[#64748b] text-[12px] font-black uppercase tracking-widest">
-                Close Picker
-              </Text>
-            </TouchableOpacity>
-          </SafeAreaView>
-        </Animated.View>
-      </View>
-    </Modal>
+        <View className="h-10" />
+      </ScrollView>
+    </Sheet>
   );
 };
 

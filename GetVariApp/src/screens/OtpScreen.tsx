@@ -7,13 +7,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
-  ActivityIndicator,
   Dimensions,
 } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
-import { AuthService, AuthChallenge, DEMO_PASSCODE } from '../services/AuthService';
+import { AuthService, DEMO_PASSCODE } from '../services/AuthService';
+import Button from '../components/ui/Button';
 import { Cpu } from 'lucide-react-native';
 import { cssInterop } from 'react-native-css-interop';
 import GlassCard from '../components/GlassCard';
@@ -72,7 +72,8 @@ const OtpScreen = ({ route, navigation }: any) => {
       navigation.setParams({ confirmation: newConfirmation });
       setCountdown(60);
       setError('');
-    } catch (err: any) {
+    } catch (error) {
+      console.error('[Auth] Resend failed:', error);
       setError('System failure. Could not resend code.');
     } finally {
       setLoading(false);
@@ -195,8 +196,13 @@ const OtpScreen = ({ route, navigation }: any) => {
                 </View>
               </View>
 
-              <TouchableOpacity
-                className={`w-full py-5 rounded-[22px] items-center ${loading ? 'bg-cyan-600' : 'bg-[#00f2fe]'} shadow-2xl`}
+              <Button
+                label="VERIFY & LOG IN"
+                onPress={handleVerifyOtp}
+                size="lg"
+                loading={loading}
+                fullWidth
+                textStyle={{ letterSpacing: 2.2 }}
                 style={{
                   shadowColor: '#00f2fe',
                   shadowOffset: { width: 0, height: 10 },
@@ -204,16 +210,7 @@ const OtpScreen = ({ route, navigation }: any) => {
                   shadowRadius: 20,
                   elevation: 15,
                 }}
-                activeOpacity={0.8}
-                onPress={handleVerifyOtp}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#020617" size="small" />
-                ) : (
-                  <Text className="text-[#020617] text-[15px] font-black font-mono tracking-[0.22em] uppercase">VERIFY &amp; LOG IN</Text>
-                )}
-              </TouchableOpacity>
+              />
 
               <View className="mt-6 bg-black/60 p-4 rounded-[24px] border border-white/[0.05] w-full">
                 <View className="flex-row items-center gap-2 mb-3">

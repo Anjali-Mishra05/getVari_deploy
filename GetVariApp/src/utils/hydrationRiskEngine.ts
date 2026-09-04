@@ -1,4 +1,6 @@
 import { UserProfile } from '../types';
+import AppConfigStore from '../config/appConfigStore';
+import { climateBandFor } from './hydrationTarget';
 
 /**
  * Hydration Risk Engine Configuration
@@ -89,6 +91,48 @@ export const RISK_CONFIG = {
   },
 };
 
+/** The five load channels the engine weighs. */
+type Channel = 'heart' | 'activity' | 'temp' | 'humidity' | 'time';
+type Channels = Record<Channel, number>;
+
+const CHANNELS: Channel[] = ['heart', 'activity', 'temp', 'humidity', 'time'];
+
+/**
+ * Applies every diagnosis- and climate-driven adjustment to the weights and
+ * load multipliers, in one place.
+ *
+ * This used to be written out twice — once in `getNormalizedWeights` and once
+ * in `solveRisk` — and both copies matched conditions by their *display name*
+ * (`'Kidney Disease'`), while onboarding has always stored ids (`'ckd'`). The
+ * result was that no clinical adjustment had ever actually fired. Reading the
+ * ids from the shared config removes both the duplication and the mismatch.
+ */
+const applyProfileTweaks = (w: Channels, m: Channels, profile?: UserProfile): void => {
+  if (!profile) return;
+
+  if (profile.weightKg > RISK_CONFIG.THRESHOLDS.WEIGHT_LIMIT) {
+    m.activity = Math.min(1.4, profile.weightKg * RISK_CONFIG.TWEAKS.WEIGHT.m_activity_scale);
+    w.activity += RISK_CONFIG.TWEAKS.WEIGHT.w_activity;
+    w.time += RISK_CONFIG.TWEAKS.WEIGHT.w_time;
+  }
+
+  for (const condition of AppConfigStore.conditionsFor(profile.medicalConditions)) {
+    for (const channel of CHANNELS) {
+      w[channel] += condition.riskWeightDeltas?.[channel] ?? 0;
+      m[channel] *= condition.riskLoadMultipliers?.[channel] ?? 1;
+    }
+  }
+
+  const band = climateBandFor(profile.location ?? profile.selectedCity);
+  if (band) {
+    m.temp *= band.riskLoadMultiplier ?? 1;
+    m.humidity *= band.riskLoadMultiplier ?? 1;
+    for (const channel of CHANNELS) {
+      w[channel] += band.riskWeightDeltas?.[channel] ?? 0;
+    }
+  }
+};
+
 export interface HydrationEngineInput {
   heartRate: number | null;              // BPM
   activityLoad: number | null;           // 0-100 active movement index
@@ -108,7 +152,16 @@ export interface HydrationEngineOutput {
   
   // Intermediate debug and analytics load values
   heartLoad: number | null;
-  activityLoadScore: number | null;
+  /**
+   * Named to match `HydrationRiskDetails.activityLoad`, which is what every
+   * consumer indexes into. It was `activityLoad` here and `activityLoad`
+   * there, and the dashboard reads the engine's output directly — so
+   * `risk.activityLoad` was `undefined`, `Math.round(undefined)` was `NaN`,
+   * and the Activity tile in the risk breakdown printed "NaN". The insight
+   * generator had the same mismatch, which is why "sustained physical
+   * exertion" could never be reported as the dominant driver.
+   */
+  activityLoad: number | null;
   temperatureLoad: number | null;
   humidityLoad: number | null;
   timeLoad: number | null;
@@ -152,49 +205,11 @@ export class HydrationRiskEngine {
    * Returns the normalized weights for a given user profile.
    */
   public static getNormalizedWeights(profile?: UserProfile): { heart: number; activity: number; temp: number; humidity: number; time: number } {
-    let w = { ...RISK_CONFIG.BASELINE_WEIGHTS };
-
-    if (profile) {
-      if (profile.weightKg > RISK_CONFIG.THRESHOLDS.WEIGHT_LIMIT) {
-        w.activity += RISK_CONFIG.TWEAKS.WEIGHT.w_activity;
-        w.time += RISK_CONFIG.TWEAKS.WEIGHT.w_time;
-      }
-
-      if (profile.medicalConditions) {
-        if (profile.medicalConditions.includes('Diabetes')) {
-          const t = RISK_CONFIG.TWEAKS.DIABETES;
-          w.heart += t.w_heart;
-          w.time += t.w_time;
-          w.humidity += t.w_humidity;
-          w.temp += t.w_temp;
-        }
-        if (profile.medicalConditions.includes('Kidney Disease')) {
-          const t = RISK_CONFIG.TWEAKS.KIDNEY_DISEASE;
-          w.time += t.w_time;
-          w.humidity += t.w_humidity;
-          w.temp += t.w_temp;
-        }
-        if (profile.medicalConditions.includes('Hypertension')) {
-          w.heart += RISK_CONFIG.TWEAKS.HYPERTENSION.w_heart;
-          w.activity += RISK_CONFIG.TWEAKS.HYPERTENSION.w_activity;
-        }
-        if (profile.medicalConditions.includes('Chronic Heat-Stress')) {
-          w.temp += RISK_CONFIG.TWEAKS.CHRONIC_HEAT_STRESS.w_temp;
-          w.time += RISK_CONFIG.TWEAKS.CHRONIC_HEAT_STRESS.w_time;
-        }
-      }
-
-      if (profile.location) {
-        const isHot = RISK_CONFIG.THRESHOLDS.HOT_CITIES.some(city => profile.location!.includes(city));
-        if (isHot) {
-          const t = RISK_CONFIG.TWEAKS.HOT_CLIMATE;
-          w.temp += t.w_temp;
-          w.humidity += t.w_humidity;
-          w.time += t.w_time;
-          w.activity += t.w_activity;
-        }
-      }
-    }
+    const w: Channels = { ...RISK_CONFIG.BASELINE_WEIGHTS };
+    // Multipliers are irrelevant to a weight query, but the tweaks are applied
+    // as one unit so this can never disagree with `solveRisk`.
+    const m: Channels = { heart: 1, activity: 1, temp: 1, humidity: 1, time: 1 };
+    applyProfileTweaks(w, m, profile);
 
     const sum = w.heart + w.activity + w.temp + w.humidity + w.time;
     return {
@@ -217,19 +232,21 @@ export class HydrationRiskEngine {
   ): HydrationEngineOutput {
     // 1. Determine base metrics with fallback to historical data if real-time is missing/stale
     const heartRate = inputs.heartRate ?? historicalAverages?.avgHR ?? null;
-    const activityLoad = inputs.activityLoad ?? (historicalAverages?.avgSteps ? Math.min(100, (historicalAverages.avgSteps / 10000) * 80) : null);
+    // The raw 0-100 movement index, before it is mapped to a load band. Named
+    // apart from `activityLoad` below, which is the mapped result.
+    const activityIndex = inputs.activityLoad ?? (historicalAverages?.avgSteps ? Math.min(100, (historicalAverages.avgSteps / 10000) * 80) : null);
     const temperature = inputs.temperature ?? historicalAverages?.avgTemp ?? null;
     const humidity = inputs.humidity ?? historicalAverages?.avgHumidity ?? null;
     const timeSinceWaterIntake = inputs.timeSinceWaterIntake; // No historical fallback for delay
 
     const heartLoad = this.calculateHeartLoad(heartRate);
-    const activityLoadScore = this.calculateActivityLoad(activityLoad);
+    const activityLoad = this.calculateActivityLoad(activityIndex);
     const temperatureLoad = this.calculateTemperatureLoad(temperature);
     const humidityLoad = this.calculateHumidityLoad(humidity);
     const timeLoad = this.calculateTimeLoad(timeSinceWaterIntake);
 
     // If core metrics are missing even after historical fallback, we report insufficient data.
-    const missingCount = [heartLoad, activityLoadScore, temperatureLoad, humidityLoad, timeLoad].filter(l => l === null).length;
+    const missingCount = [heartLoad, activityLoad, temperatureLoad, humidityLoad, timeLoad].filter(l => l === null).length;
 
     if (missingCount >= 2) {
       return {
@@ -238,7 +255,7 @@ export class HydrationRiskEngine {
         meaning: 'Not enough valid sensor or historical data to calculate a reliable score.',
         suggestedAction: 'Ensure your wearable is connected or wait for more history to accumulate.',
         heartLoad,
-        activityLoadScore,
+        activityLoad,
         temperatureLoad,
         humidityLoad,
         timeLoad
@@ -253,85 +270,31 @@ export class HydrationRiskEngine {
          status: 'Device Error',
          meaning: 'Abnormal sensor readings detected. Your wearable may be damaged or incorrectly worn.',
          suggestedAction: 'Inspect your device for water or physical damage.',
-         heartLoad, activityLoadScore, temperatureLoad, humidityLoad, timeLoad
+         heartLoad, activityLoad, temperatureLoad, humidityLoad, timeLoad
        };
     }
 
-    // 2. Start with base weights and multipliers
-    let w = { ...RISK_CONFIG.BASELINE_WEIGHTS };
-    let m = { heart: 1.0, activity: 1.0, temp: 1.0, humidity: 1.0, time: 1.0 };
-
-    // Apply Dynamic Personalization (Adjusting m and w)
-    if (profile) {
-      // Weight scaling
-      if (profile.weightKg > RISK_CONFIG.THRESHOLDS.WEIGHT_LIMIT) {
-        m.activity = Math.min(1.4, profile.weightKg * RISK_CONFIG.TWEAKS.WEIGHT.m_activity_scale);
-        w.activity += RISK_CONFIG.TWEAKS.WEIGHT.w_activity;
-        w.time += RISK_CONFIG.TWEAKS.WEIGHT.w_time;
-      }
-
-      // Clinical Adjustments
-      if (profile.medicalConditions) {
-        if (profile.medicalConditions.includes('Diabetes')) {
-          const t = RISK_CONFIG.TWEAKS.DIABETES;
-          m.heart *= t.m_heart;
-          m.time *= t.m_time;
-          w.heart += t.w_heart;
-          w.time += t.w_time;
-          w.humidity += t.w_humidity;
-          w.temp += t.w_temp;
-        }
-        if (profile.medicalConditions.includes('Kidney Disease')) {
-          const t = RISK_CONFIG.TWEAKS.KIDNEY_DISEASE;
-          m.time *= t.m_time;
-          w.time += t.w_time;
-          w.humidity += t.w_humidity;
-          w.temp += t.w_temp;
-        }
-        if (profile.medicalConditions.includes('Hypertension')) {
-          const t = RISK_CONFIG.TWEAKS.HYPERTENSION;
-          m.heart *= t.m_heart;
-          w.heart += t.w_heart;
-          w.activity += t.w_activity;
-        }
-        if (profile.medicalConditions.includes('Chronic Heat-Stress')) {
-          const t = RISK_CONFIG.TWEAKS.CHRONIC_HEAT_STRESS;
-          m.temp *= t.m_temp;
-          w.temp += t.w_temp;
-          w.time += t.w_time;
-        }
-      }
-
-      // Hot Climates
-      if (profile.location) {
-        const isHot = RISK_CONFIG.THRESHOLDS.HOT_CITIES.some(city => profile.location!.includes(city));
-        if (isHot) {
-          const t = RISK_CONFIG.TWEAKS.HOT_CLIMATE;
-          m.temp *= t.m_temp;
-          m.humidity *= t.m_humidity;
-          w.temp += t.w_temp;
-          w.humidity += t.w_humidity;
-          w.time += t.w_time;
-          w.activity += t.w_activity;
-        }
-      }
-    }
+    // 2. Base weights and multipliers, personalised in one shared step so the
+    //    published weights and the solve can never disagree.
+    const w: Channels = { ...RISK_CONFIG.BASELINE_WEIGHTS };
+    const m: Channels = { heart: 1.0, activity: 1.0, temp: 1.0, humidity: 1.0, time: 1.0 };
+    applyProfileTweaks(w, m, profile);
 
     // 3. Normalize Weights (only for available metrics)
     let sumWeights = 0;
     if (heartLoad !== null) sumWeights += w.heart;
-    if (activityLoadScore !== null) sumWeights += w.activity;
+    if (activityLoad !== null) sumWeights += w.activity;
     if (temperatureLoad !== null) sumWeights += w.temp;
     if (humidityLoad !== null) sumWeights += w.humidity;
     if (timeLoad !== null) sumWeights += w.time;
 
     if (sumWeights === 0) {
-       return { score: null, status: 'Insufficient Data', meaning: 'Insufficient valid data.', suggestedAction: 'Check sensors.', heartLoad, activityLoadScore, temperatureLoad, humidityLoad, timeLoad };
+       return { score: null, status: 'Insufficient Data', meaning: 'Insufficient valid data.', suggestedAction: 'Check sensors.', heartLoad, activityLoad, temperatureLoad, humidityLoad, timeLoad };
     }
 
     const wNorm = {
       heart: heartLoad !== null ? w.heart / sumWeights : 0,
-      activity: activityLoadScore !== null ? w.activity / sumWeights : 0,
+      activity: activityLoad !== null ? w.activity / sumWeights : 0,
       temp: temperatureLoad !== null ? w.temp / sumWeights : 0,
       humidity: humidityLoad !== null ? w.humidity / sumWeights : 0,
       time: timeLoad !== null ? w.time / sumWeights : 0,
@@ -339,7 +302,7 @@ export class HydrationRiskEngine {
 
     // 4. Calculate Adjusted Loads (Clamped at 100)
     const adjHeart = heartLoad !== null ? Math.min(100, heartLoad * m.heart) : 0;
-    const adjActivity = activityLoadScore !== null ? Math.min(100, activityLoadScore * m.activity) : 0;
+    const adjActivity = activityLoad !== null ? Math.min(100, activityLoad * m.activity) : 0;
     const adjTemp = temperatureLoad !== null ? Math.min(100, temperatureLoad * m.temp) : 0;
     const adjHumid = humidityLoad !== null ? Math.min(100, humidityLoad * m.humidity) : 0;
     const adjTime = timeLoad !== null ? Math.min(100, timeLoad * m.time) : 0;
@@ -388,7 +351,7 @@ export class HydrationRiskEngine {
       suggestedAction,
       glassesRequired,
       heartLoad,
-      activityLoadScore,
+      activityLoad,
       temperatureLoad,
       humidityLoad,
       timeLoad

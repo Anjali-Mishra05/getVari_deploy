@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { HydrationLog, HydrationRiskDetails, SensorData, UserProfile } from '../types';
-import { calculateRecoveryEstimation, calculatePredictedRiskAfterDrink } from '../utils/hydrationModel';
+import { toRiskDetails } from '../utils/hydrationModel';
 import {
   SleepSchedule,
   awakeHoursBetween,
   awakeHoursPerDay,
   isAsleepAt,
-  mlPerAwakeHour,
   normaliseSleepSchedule,
 } from '../utils/sleepWindow';
 import TelemetryHistoryService from '../services/TelemetryHistoryService';
+import AppConfigStore from '../config/appConfigStore';
+import { climateBandFor } from '../utils/hydrationTarget';
 import { AuthService } from '../services/AuthService';
 import { HydrationRiskEngine } from '../utils/hydrationRiskEngine';
 
@@ -41,17 +42,56 @@ const BASELINE_ABSORPTION_ML_PER_MIN = 12;
 /** Fluid lost to perspiration and respiration at rest. */
 const BASELINE_SWEAT_ML_PER_MIN = 1.4;
 
-/** Where the sensor stream starts before the first tick lands. */
-const INITIAL_SENSORS: SensorData = {
-  heartRate: 55,
-  activityLoad: 14,
-  temperature: 25.2,
-  humidity: 45,
-  sweatGSR: 2.0,
+/**
+ * What the screen shows before the first reading arrives: nothing.
+ *
+ * This used to hold a full set of plausible numbers — 55 bpm, 25.2°C, 84%
+ * battery — which the dashboard rendered instantly and then replaced two
+ * seconds later when the stream started. Every one of those was invented, and
+ * presenting an invented vital sign as a measurement is the worst version of
+ * the "shows fake data, then the real data" problem: a user cannot tell which
+ * frame they were looking at. Nulls render as `--`, which is true.
+ */
+const NO_READINGS: SensorData = {
+  heartRate: null,
+  steps: null,
+  activityLoad: null,
+  temperature: null,
+  humidity: null,
+  sweatGSR: null,
   hydrationScore: 0,
-  batteryLevel: 84,
-  rssi: -58,
-  lastUpdated: new Date().toISOString(),
+  batteryLevel: null,
+  rssi: null,
+  lastUpdated: new Date(0).toISOString(),
+};
+
+/**
+ * The readings the stream settles around, for this user.
+ *
+ * They come from the profile rather than from a fixed set of numbers: the
+ * activity band sets the resting heart rate and movement index, and the
+ * climate band of the user's resolved city sets the ambient temperature and
+ * humidity. That is what makes the dashboard reflect *where the user is* — a
+ * profile in Chennai is modelled against Chennai's heat — and it is what makes
+ * the documented use cases reproducible instead of landing on a different
+ * score every time the screen is opened.
+ */
+const baselineFor = (profile?: UserProfile): SensorData => {
+  const config = AppConfigStore.current();
+  const activity = config.activityLevels.find(level => level.id === profile?.activityLevel);
+  const band = climateBandFor(profile?.location ?? profile?.selectedCity);
+
+  return {
+    ...NO_READINGS,
+    heartRate: activity?.baselineHeartRate ?? 72,
+    activityLoad: activity?.baselineActivityIndex ?? 15,
+    temperature: band?.ambientTempC ?? 24,
+    humidity: band?.ambientHumidity ?? 50,
+    sweatGSR: 2.0,
+    batteryLevel: 84,
+    rssi: -58,
+    lastUpdated: new Date().toISOString(),
+  };
 };
 
 /**
@@ -64,16 +104,65 @@ const NO_LOG_ASSUMED_GAP_HOURS = 2;
 /** Ceiling on the hydration gap the engine is asked to score. */
 const MAX_GAP_HOURS = 8;
 
+/**
+ * How the published score is allowed to move.
+ *
+ * The score is a weighted sum of *band-mapped* loads — heart rate under 80 BPM
+ * is a load of 10, over it a load of 40 — so a reading drifting across a band
+ * edge moves the score by nine points in one tick. The simulated stream used to
+ * be an unanchored random walk of ±2 BPM and ±3 activity every two seconds,
+ * which crossed those edges constantly: that is the reported "sometimes 25,
+ * sometimes 36".
+ *
+ * Freezing the output on a clock was the wrong answer to that — it fixes the
+ * flicker by making the score wrong for up to an hour, including right after
+ * the user drinks something. The jitter is an *input* problem and is fixed at
+ * the input (see `BASELINE_PULL` and `bandStableSensors`).
+ *
+ * What remains here is a floor, not a hold: the score follows the algorithm,
+ * and these rules only stop it repainting on residual noise.
+ *
+ *  - A drink, a change of risk band, or the engine gaining or losing the
+ *    ability to score publishes immediately. Intake and the recovery engine
+ *    are the things the user acts on, so they must never wait.
+ *  - Otherwise a move is published once it is worth reading: at least
+ *    `MIN_SCORE_DELTA` points, and no more often than `MIN_REPUBLISH_MS`.
+ */
+const MIN_REPUBLISH_MS = 60 * 1000;
+
+/** Point change worth repainting for. Below this it is noise, not news. */
+const MIN_SCORE_DELTA = 3;
+
+/**
+ * How strongly each tick pulls a reading back to its baseline.
+ *
+ * The stream is now mean-reverting rather than a free walk: noise is added, but
+ * the value is drawn back toward the anchor the profile and climate imply, so
+ * it stays inside one load band instead of wandering across several. Without
+ * this the sensors have no anchor at all and a long session drifts anywhere.
+ */
+const BASELINE_PULL = 0.25;
+
 export interface HydrationTelemetry {
   sensorData: SensorData;
-  /** Full risk solve over the current sensors and hydration gap. */
+  /**
+   * The risk solve the screen shows.
+   *
+   * Follows the algorithm — intake, the recovery engine and the hydration gap
+   * all move it immediately — while residual sensor noise does not. See
+   * `MIN_REPUBLISH_MS`.
+   */
   solvedRisk: HydrationRiskDetails;
+  /** When `solvedRisk` was last allowed to change, epoch ms. */
+  riskUpdatedAt: number;
   /** Hydration gap the engine actually scored, after absorption credit. */
   effectiveHoursSinceDrink: number;
   /** Swallowed water not yet in the bloodstream, in ml. */
   stomachVolume: number;
   /** Circulating fluid pool, in ml. */
   absorbedHydration: number;
+  /** False until the first reading has arrived; the screen shows `--` until then. */
+  streaming: boolean;
   /** Current gastric emptying speed, ml/min. */
   absorptionRate: number;
   /** Current perspiration + respiration loss, ml/min. */
@@ -155,11 +244,14 @@ export const useHydrationTelemetry = (
   // gets the previous, sleep-blind behaviour rather than a broken screen.
   const sleepSchedule = useMemo(() => normaliseSleepSchedule(profile), [profile]);
 
-  const [sensorData, setSensorData] = useState<SensorData>(INITIAL_SENSORS);
+  const [sensorData, setSensorData] = useState<SensorData>(NO_READINGS);
   const [historicalAverages, setHistoricalAverages] = useState<{ avgHR: number | null; avgSteps: number | null; avgTemp: number | null; avgHumidity: number | null } | null>(null);
   const [isDamaged, setIsDamaged] = useState(false);
   const [stomachVolume, setStomachVolume] = useState(0);
-  const [absorbedHydration, setAbsorbedHydration] = useState(180);
+  // Starts empty rather than at an assumed 180ml. The pool is filled by drinks
+  // the user actually logs; seeding it credited every new account with water
+  // they had not drunk.
+  const [absorbedHydration, setAbsorbedHydration] = useState(0);
   const [effectiveHoursSinceDrink, setEffectiveHoursSinceDrink] = useState(() =>
     gapFromLogs(logs, sleepSchedule)
   );
@@ -174,6 +266,11 @@ export const useHydrationTelemetry = (
   // cannot report that back.
   const sensorRef = useRef(sensorData);
   sensorRef.current = sensorData;
+  // The simulation tick is mounted once; the baseline changes when the profile
+  // loads or the user edits their city, so it is reached through a ref rather
+  // than by restarting the interval.
+  const baselineRef = useRef(baselineFor(profile));
+  baselineRef.current = baselineFor(profile);
   const stomachRef = useRef(stomachVolume);
   stomachRef.current = stomachVolume;
   const sleepScheduleRef = useRef(sleepSchedule);
@@ -193,21 +290,38 @@ export const useHydrationTelemetry = (
   // Sensor stream + physiological step.
   useEffect(() => {
     const interval = setInterval(() => {
-      // 1. Sensor drift. A random walk around the current reading, bounded to
-      //    survivable ranges so a long session cannot wander into nonsense.
+      // 1. Sensor drift, pulled back toward the profile's baseline.
+      //
+      //    Previously a free random walk: each tick added ±2 BPM and ±3
+      //    activity to the *previous* reading with nothing holding it in
+      //    place, so over a few minutes it wandered across the load-band
+      //    edges (80 BPM, activity 20/50, 22°C, 40% RH) and back. Each
+      //    crossing moves the risk score by eight to ten points, which is
+      //    what "sometimes 25, sometimes 36" was.
+      //
+      //    Mean reversion keeps a reading near its anchor: noise still moves
+      //    it, but the pull is proportional to how far it has strayed, so it
+      //    settles inside one band instead of touring several.
       setSensorData(prev => {
-        const heartRate = Math.min(170, Math.max(45, prev.heartRate + Math.round(Math.random() * 4 - 2)));
-        const activityLoad = Math.min(100, Math.max(5, prev.activityLoad + Math.round(Math.random() * 6 - 3)));
-        const temperature = Number(
-          Math.min(41, Math.max(18, prev.temperature + (Math.random() * 0.2 - 0.1))).toFixed(1)
-        );
-        const humidity = Math.min(95, Math.max(20, prev.humidity + Math.round(Math.random() * 2 - 1)));
-        const sweatGSR = Number(
-          Math.min(15, Math.max(0.1, prev.sweatGSR + (Math.random() * 0.4 - 0.2))).toFixed(2)
-        );
+        const baseline = baselineRef.current;
+
+        /** One channel's next value: pulled toward `anchor`, plus noise. */
+        const step = (current: number | null, anchor: number, noise: number, lo: number, hi: number) => {
+          const from = current ?? anchor;
+          const drift = (anchor - from) * BASELINE_PULL + (Math.random() * 2 - 1) * noise;
+          return Math.min(hi, Math.max(lo, from + drift));
+        };
+
+        const heartRate = Math.round(step(prev.heartRate, baseline.heartRate!, 1.5, 45, 170));
+        const activityLoad = Math.round(step(prev.activityLoad, baseline.activityLoad!, 2, 0, 100));
+        const temperature = Number(step(prev.temperature, baseline.temperature!, 0.15, 18, 45).toFixed(1));
+        const humidity = Math.round(step(prev.humidity, baseline.humidity!, 1, 10, 100));
+        const sweatGSR = Number(step(prev.sweatGSR, baseline.sweatGSR!, 0.15, 0.1, 15).toFixed(2));
 
         return {
           ...prev,
+          batteryLevel: prev.batteryLevel ?? baseline.batteryLevel,
+          rssi: prev.rssi ?? baseline.rssi,
           heartRate,
           activityLoad,
           temperature,
@@ -281,7 +395,7 @@ export const useHydrationTelemetry = (
     }
   }, [profile]);
 
-  const solvedRisk = useMemo(() => {
+  const liveRisk = useMemo<HydrationRiskDetails>(() => {
     const fresh = TelemetryHistoryService.isFresh(sensorData.lastUpdated);
 
     // 1. Enforce staleness: if data is old, treat it as null for the solve
@@ -301,31 +415,92 @@ export const useHydrationTelemetry = (
 
     // 2. Hardware failure override
     if (isDamaged) {
-      return {
+      return toRiskDetails({
         ...result,
         status: 'Device Error',
         meaning: 'Persistent sensor failure detected. Your wearable may be damaged.',
-        suggestedAction: 'Inspect your device for water or physical damage.'
-      };
+        suggestedAction: 'Inspect your device for water or physical damage.',
+      });
     }
-    return result;
+
+    // Dressed as `HydrationRiskDetails` rather than handed over raw: the cards
+    // read `color`/`bgColor`/`textGlow` off this object, and passing the bare
+    // engine output is what left those fields undefined.
+    return toRiskDetails(result);
   }, [sensorData, effectiveHoursSinceDrink, profile, historicalAverages, isDamaged]);
+
+  /**
+   * The solve as published to the screen.
+   *
+   * `liveRisk` is recomputed on every tick; this is the one the user reads.
+   * The rules are at `MIN_REPUBLISH_MS` — in short, anything the user did or
+   * that changed their risk band shows at once, and gradual drift shows once
+   * it is worth reading.
+   */
+  const [publishedRisk, setPublishedRisk] = useState<HydrationRiskDetails>(liveRisk);
+  const [riskUpdatedAt, setRiskUpdatedAt] = useState(() => Date.now());
+
+  // Set when a drink is logged. Intake and the recovery engine are what the
+  // user acts on, so a log must move the score in the same breath — waiting
+  // even a minute reads as the app having ignored it.
+  const forcePublishRef = useRef(true);
+
+  useEffect(() => {
+    const now = Date.now();
+    const scored = (risk: HydrationRiskDetails) => risk.score !== null;
+    const sinceLast = now - riskUpdatedAt;
+
+    // A band change is a change in what the app is telling the user to do, so
+    // it is never withheld — in either direction. Escalation matters for
+    // safety; de-escalation matters because it is usually the user's own drink
+    // taking effect, and holding that back is exactly what made the score feel
+    // disconnected from the recovery engine.
+    const bandChanged = liveRisk.status !== publishedRisk.status;
+    const availabilityChanged = scored(liveRisk) !== scored(publishedRisk);
+
+    const movedEnough =
+      scored(liveRisk) &&
+      scored(publishedRisk) &&
+      Math.abs((liveRisk.score as number) - (publishedRisk.score as number)) >= MIN_SCORE_DELTA;
+
+    const shouldPublish =
+      forcePublishRef.current ||
+      bandChanged ||
+      availabilityChanged ||
+      (movedEnough && sinceLast >= MIN_REPUBLISH_MS);
+
+    if (!shouldPublish) return;
+
+    forcePublishRef.current = false;
+    setPublishedRisk(liveRisk);
+    setRiskUpdatedAt(now);
+  }, [liveRisk, publishedRisk, riskUpdatedAt]);
 
   const ingestFluid = useCallback((amountMl: number) => {
     stomachRef.current = Number(Math.min(STOMACH_CAPACITY_ML, stomachRef.current + amountMl).toFixed(1));
     setStomachVolume(stomachRef.current);
+    // A logged drink is a real event, so it breaks the hourly hold.
+    forcePublishRef.current = true;
   }, []);
 
   const applySensorPatch = useCallback((patch: Partial<SensorData>) => {
     setSensorData(prev => ({ ...prev, ...patch, lastUpdated: new Date().toISOString() }));
   }, []);
 
-  const awakeHours = sleepSchedule ? awakeHoursPerDay(sleepSchedule) : 24;
-  const targetMl = profile?.targetDailyMl ?? 0;
+  const rawAwakeHours = sleepSchedule ? awakeHoursPerDay(sleepSchedule) : 24;
+  // A sleep window covering the whole day leaves no waking hours to divide by.
+  const awakeHours = Number.isFinite(rawAwakeHours) && rawAwakeHours > 0 ? rawAwakeHours : 24;
+  const targetMl = Number.isFinite(profile?.targetDailyMl as number)
+    ? (profile!.targetDailyMl as number)
+    : 0;
 
   return {
     sensorData,
-    solvedRisk,
+    // The epoch timestamp on `NO_READINGS` is what marks "nothing yet"; a real
+    // reading always stamps `lastUpdated` with the moment it arrived.
+    streaming: sensorData.lastUpdated !== NO_READINGS.lastUpdated,
+    solvedRisk: publishedRisk,
+    riskUpdatedAt,
     effectiveHoursSinceDrink,
     stomachVolume,
     absorbedHydration,
@@ -335,9 +510,7 @@ export const useHydrationTelemetry = (
     awakeHoursPerDay: awakeHours,
     // Averages are per waking hour: spreading the goal over 24 would quietly
     // set a pace the user could only hit by drinking in their sleep.
-    targetMlPerAwakeHour: sleepSchedule
-      ? Math.round(mlPerAwakeHour(targetMl, sleepSchedule))
-      : Math.round(targetMl / 24),
+    targetMlPerAwakeHour: Math.round(targetMl / awakeHours),
     ingestFluid,
     applySensorPatch,
   };
