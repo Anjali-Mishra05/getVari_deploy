@@ -17,7 +17,7 @@ const SOURCE_LABEL: Record<HydrationSource, string> = {
   manual: 'Manual Sync',
   smart_cap: 'GetVari Proprietary SmartCap®',
   wearable_prediction: 'Wearable Prediction',
-  ai_chat: 'AquaSage Chat',
+  ai_chat: 'Vari Chat',
 };
 
 /** Today's entries, newest first — the audit trail behind the day's total. */

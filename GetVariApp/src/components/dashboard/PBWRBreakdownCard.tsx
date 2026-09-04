@@ -4,6 +4,19 @@ import { Droplet, Info, AlertTriangle } from 'lucide-react-native';
 import { PBWRBreakdown } from '../../services/PBWRService';
 import GlassCard from '../GlassCard';
 
+/**
+ * Millilitres as litres, to two places.
+ *
+ * Every figure on this card is a division, and the breakdown behind them can
+ * legitimately arrive incomplete — a profile saved without a weight, or an
+ * upper limit with no qualifying category. `toFixed` on any of those prints
+ * "NaN", so the conversion happens here, once, with a guard.
+ */
+const litres = (ml: unknown): string => {
+  const value = Number(ml);
+  return Number.isFinite(value) ? `${(value / 1000).toFixed(2)}` : '--';
+};
+
 interface Props {
   breakdown: PBWRBreakdown;
   hasPhysicianLimit: boolean;
@@ -31,30 +44,30 @@ const PBWRBreakdownCard: React.FC<Props> = ({ breakdown, hasPhysicianLimit, isPh
       )}
 
       <View style={styles.pipeline}>
-        <PipelineItem label="PBWR Baseline" value={`${(breakdown.pbwrBaseline / 1000).toFixed(2)}L`} />
-        <PipelineItem label="Activity" value={`+${(breakdown.activityAdj / 1000).toFixed(2)}L`} isAdj />
-        <PipelineItem label="Temperature" value={`+${(breakdown.tempAdj / 1000).toFixed(2)}L`} isAdj />
-        <PipelineItem label="Humidity" value={`+${(breakdown.humidityAdj / 1000).toFixed(2)}L`} isAdj />
-        <PipelineItem label="Work Env" value={`+${(breakdown.workEnvAdj / 1000).toFixed(2)}L`} isAdj />
-        <PipelineItem label="Health" value={`+${(breakdown.healthAdj / 1000).toFixed(2)}L`} isAdj />
+        <PipelineItem label="PBWR Baseline" value={`${litres(breakdown.pbwrBaseline)}L`} />
+        <PipelineItem label="Activity" value={`+${litres(breakdown.activityAdj)}L`} isAdj />
+        <PipelineItem label="Temperature" value={`+${litres(breakdown.tempAdj)}L`} isAdj />
+        <PipelineItem label="Humidity" value={`+${litres(breakdown.humidityAdj)}L`} isAdj />
+        <PipelineItem label="Work Env" value={`+${litres(breakdown.workEnvAdj)}L`} isAdj />
+        <PipelineItem label="Health" value={`+${litres(breakdown.healthAdj)}L`} isAdj />
 
         <View style={styles.divider} />
 
-        <PipelineItem label="Adjusted Total" value={`${(breakdown.adjustedTotal / 1000).toFixed(2)}L`} isBold />
+        <PipelineItem label="Adjusted Total" value={`${litres(breakdown.adjustedTotal)}L`} isBold />
         <PipelineItem
           label="Upper Limit"
-          value={`${(breakdown.upperLimit / 1000).toFixed(2)}L`}
+          value={`${litres(breakdown.upperLimit)}L`}
           subLabel={isPhysicianGated ? (hasPhysicianLimit ? "Physician-Set" : "Safety Cap") : "Algorithm Cap"}
         />
 
         <View style={styles.finalRow}>
           <View>
             <Text style={styles.finalLabel}>Final Daily Target</Text>
-            <Text style={styles.finalValue}>{(breakdown.finalTarget / 1000).toFixed(2)} L</Text>
+            <Text style={styles.finalValue}>{litres(breakdown.finalTarget)} L</Text>
           </View>
           <View style={styles.remainingBox}>
             <Text style={styles.remainingLabel}>Remaining</Text>
-            <Text style={styles.remainingValue}>{(breakdown.remaining / 1000).toFixed(2)} L</Text>
+            <Text style={styles.remainingValue}>{litres(breakdown.remaining)} L</Text>
           </View>
         </View>
       </View>

@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { HydrationLog, HydrationRiskDetails, SensorData, UserProfile } from '../types';
-import { calculateRecoveryEstimation, calculatePredictedRiskAfterDrink } from '../utils/hydrationModel';
+import { toRiskDetails } from '../utils/hydrationModel';
 import {
   SleepSchedule,
   awakeHoursBetween,
   awakeHoursPerDay,
   isAsleepAt,
-  mlPerAwakeHour,
   normaliseSleepSchedule,
 } from '../utils/sleepWindow';
 import TelemetryHistoryService from '../services/TelemetryHistoryService';
@@ -41,14 +40,37 @@ const BASELINE_ABSORPTION_ML_PER_MIN = 12;
 /** Fluid lost to perspiration and respiration at rest. */
 const BASELINE_SWEAT_ML_PER_MIN = 1.4;
 
-/** Where the sensor stream starts before the first tick lands. */
-const INITIAL_SENSORS: SensorData = {
+/**
+ * What the screen shows before the first reading arrives: nothing.
+ *
+ * This used to hold a full set of plausible numbers — 55 bpm, 25.2°C, 84%
+ * battery — which the dashboard rendered instantly and then replaced two
+ * seconds later when the stream started. Every one of those was invented, and
+ * presenting an invented vital sign as a measurement is the worst version of
+ * the "shows fake data, then the real data" problem: a user cannot tell which
+ * frame they were looking at. Nulls render as `--`, which is true.
+ */
+const NO_READINGS: SensorData = {
+  heartRate: null,
+  steps: null,
+  activityLoad: null,
+  temperature: null,
+  humidity: null,
+  sweatGSR: null,
+  hydrationScore: 0,
+  batteryLevel: null,
+  rssi: null,
+  lastUpdated: new Date(0).toISOString(),
+};
+
+/** Where the simulation starts once it does begin producing readings. */
+const BASELINE_SENSORS: SensorData = {
+  ...NO_READINGS,
   heartRate: 55,
   activityLoad: 14,
   temperature: 25.2,
   humidity: 45,
   sweatGSR: 2.0,
-  hydrationScore: 0,
   batteryLevel: 84,
   rssi: -58,
   lastUpdated: new Date().toISOString(),
@@ -64,16 +86,60 @@ const NO_LOG_ASSUMED_GAP_HOURS = 2;
 /** Ceiling on the hydration gap the engine is asked to score. */
 const MAX_GAP_HOURS = 8;
 
+/**
+ * How long a published risk score stands before it is allowed to move.
+ *
+ * The engine re-solves on every sensor tick — twice a minute of simulated
+ * drift — and the ring was repainting a different number every two seconds.
+ * A score that never settles cannot be read, let alone acted on, and the
+ * movement was noise rather than physiology: the underlying drift is a random
+ * walk, not a change in the user's state.
+ *
+ * The published score therefore holds for an hour. Three things still move it
+ * immediately, because each is a real event rather than noise:
+ *
+ *  - the user logs a drink, so the screen must show what that did;
+ *  - the engine gains or loses the ability to score at all (a wearable that
+ *    drops out, or one that reconnects);
+ *  - the solve crosses into a *worse* risk band, which is the case where
+ *    holding a stale number could matter to someone.
+ */
+const SCORE_HOLD_MS = 60 * 60 * 1000;
+
+/** Bands in ascending severity, for deciding whether a change is escalation. */
+const SEVERITY: HydrationRiskDetails['status'][] = [
+  'Insufficient Data',
+  'Device Error',
+  'Hydrated',
+  'Mild Risk',
+  'High Risk',
+  'Critical',
+];
+
+/** True when `next` is a worse band than `previous`. */
+const isEscalation = (
+  previous: HydrationRiskDetails['status'],
+  next: HydrationRiskDetails['status']
+): boolean => SEVERITY.indexOf(next) > SEVERITY.indexOf(previous);
+
 export interface HydrationTelemetry {
   sensorData: SensorData;
-  /** Full risk solve over the current sensors and hydration gap. */
+  /**
+   * The risk solve the screen shows. Held for an hour between updates — see
+   * `SCORE_HOLD_MS` — so the number is readable rather than twitching on every
+   * sensor tick.
+   */
   solvedRisk: HydrationRiskDetails;
+  /** When `solvedRisk` was last allowed to change, epoch ms. */
+  riskUpdatedAt: number;
   /** Hydration gap the engine actually scored, after absorption credit. */
   effectiveHoursSinceDrink: number;
   /** Swallowed water not yet in the bloodstream, in ml. */
   stomachVolume: number;
   /** Circulating fluid pool, in ml. */
   absorbedHydration: number;
+  /** False until the first reading has arrived; the screen shows `--` until then. */
+  streaming: boolean;
   /** Current gastric emptying speed, ml/min. */
   absorptionRate: number;
   /** Current perspiration + respiration loss, ml/min. */
@@ -155,11 +221,14 @@ export const useHydrationTelemetry = (
   // gets the previous, sleep-blind behaviour rather than a broken screen.
   const sleepSchedule = useMemo(() => normaliseSleepSchedule(profile), [profile]);
 
-  const [sensorData, setSensorData] = useState<SensorData>(INITIAL_SENSORS);
+  const [sensorData, setSensorData] = useState<SensorData>(NO_READINGS);
   const [historicalAverages, setHistoricalAverages] = useState<{ avgHR: number | null; avgSteps: number | null; avgTemp: number | null; avgHumidity: number | null } | null>(null);
   const [isDamaged, setIsDamaged] = useState(false);
   const [stomachVolume, setStomachVolume] = useState(0);
-  const [absorbedHydration, setAbsorbedHydration] = useState(180);
+  // Starts empty rather than at an assumed 180ml. The pool is filled by drinks
+  // the user actually logs; seeding it credited every new account with water
+  // they had not drunk.
+  const [absorbedHydration, setAbsorbedHydration] = useState(0);
   const [effectiveHoursSinceDrink, setEffectiveHoursSinceDrink] = useState(() =>
     gapFromLogs(logs, sleepSchedule)
   );
@@ -196,18 +265,32 @@ export const useHydrationTelemetry = (
       // 1. Sensor drift. A random walk around the current reading, bounded to
       //    survivable ranges so a long session cannot wander into nonsense.
       setSensorData(prev => {
-        const heartRate = Math.min(170, Math.max(45, prev.heartRate + Math.round(Math.random() * 4 - 2)));
-        const activityLoad = Math.min(100, Math.max(5, prev.activityLoad + Math.round(Math.random() * 6 - 3)));
+        // The first tick publishes the baseline; every later one drifts from
+        // the previous reading. Reading through the baseline also means a
+        // channel that is somehow null (or NaN) recovers rather than
+        // propagating into every subsequent value.
+        const from = {
+          heartRate: prev.heartRate ?? BASELINE_SENSORS.heartRate!,
+          activityLoad: prev.activityLoad ?? BASELINE_SENSORS.activityLoad!,
+          temperature: prev.temperature ?? BASELINE_SENSORS.temperature!,
+          humidity: prev.humidity ?? BASELINE_SENSORS.humidity!,
+          sweatGSR: prev.sweatGSR ?? BASELINE_SENSORS.sweatGSR!,
+        };
+
+        const heartRate = Math.min(170, Math.max(45, from.heartRate + Math.round(Math.random() * 4 - 2)));
+        const activityLoad = Math.min(100, Math.max(5, from.activityLoad + Math.round(Math.random() * 6 - 3)));
         const temperature = Number(
-          Math.min(41, Math.max(18, prev.temperature + (Math.random() * 0.2 - 0.1))).toFixed(1)
+          Math.min(41, Math.max(18, from.temperature + (Math.random() * 0.2 - 0.1))).toFixed(1)
         );
-        const humidity = Math.min(95, Math.max(20, prev.humidity + Math.round(Math.random() * 2 - 1)));
+        const humidity = Math.min(95, Math.max(20, from.humidity + Math.round(Math.random() * 2 - 1)));
         const sweatGSR = Number(
-          Math.min(15, Math.max(0.1, prev.sweatGSR + (Math.random() * 0.4 - 0.2))).toFixed(2)
+          Math.min(15, Math.max(0.1, from.sweatGSR + (Math.random() * 0.4 - 0.2))).toFixed(2)
         );
 
         return {
           ...prev,
+          batteryLevel: prev.batteryLevel ?? BASELINE_SENSORS.batteryLevel,
+          rssi: prev.rssi ?? BASELINE_SENSORS.rssi,
           heartRate,
           activityLoad,
           temperature,
@@ -281,7 +364,7 @@ export const useHydrationTelemetry = (
     }
   }, [profile]);
 
-  const solvedRisk = useMemo(() => {
+  const liveRisk = useMemo<HydrationRiskDetails>(() => {
     const fresh = TelemetryHistoryService.isFresh(sensorData.lastUpdated);
 
     // 1. Enforce staleness: if data is old, treat it as null for the solve
@@ -301,31 +384,78 @@ export const useHydrationTelemetry = (
 
     // 2. Hardware failure override
     if (isDamaged) {
-      return {
+      return toRiskDetails({
         ...result,
         status: 'Device Error',
         meaning: 'Persistent sensor failure detected. Your wearable may be damaged.',
-        suggestedAction: 'Inspect your device for water or physical damage.'
-      };
+        suggestedAction: 'Inspect your device for water or physical damage.',
+      });
     }
-    return result;
+
+    // Dressed as `HydrationRiskDetails` rather than handed over raw: the cards
+    // read `color`/`bgColor`/`textGlow` off this object, and passing the bare
+    // engine output is what left those fields undefined.
+    return toRiskDetails(result);
   }, [sensorData, effectiveHoursSinceDrink, profile, historicalAverages, isDamaged]);
+
+  /**
+   * The solve as published to the screen.
+   *
+   * `liveRisk` above is recomputed on every tick; this is the one the user
+   * reads, and it only moves on the conditions described at `SCORE_HOLD_MS`.
+   */
+  const [publishedRisk, setPublishedRisk] = useState<HydrationRiskDetails>(liveRisk);
+  const [riskUpdatedAt, setRiskUpdatedAt] = useState(() => Date.now());
+
+  // Set when a drink is logged, so the next solve is published immediately
+  // rather than waiting out the hold — logging water and seeing the score sit
+  // still would read as the app ignoring it.
+  const forcePublishRef = useRef(true);
+
+  useEffect(() => {
+    const now = Date.now();
+    const scored = (risk: HydrationRiskDetails) => risk.score !== null;
+
+    const shouldPublish =
+      forcePublishRef.current ||
+      now - riskUpdatedAt >= SCORE_HOLD_MS ||
+      // The engine gained or lost the ability to score at all.
+      scored(liveRisk) !== scored(publishedRisk) ||
+      // Never sit on a stale number while the situation is getting worse.
+      isEscalation(publishedRisk.status, liveRisk.status);
+
+    if (!shouldPublish) return;
+
+    forcePublishRef.current = false;
+    setPublishedRisk(liveRisk);
+    setRiskUpdatedAt(now);
+  }, [liveRisk, publishedRisk, riskUpdatedAt]);
 
   const ingestFluid = useCallback((amountMl: number) => {
     stomachRef.current = Number(Math.min(STOMACH_CAPACITY_ML, stomachRef.current + amountMl).toFixed(1));
     setStomachVolume(stomachRef.current);
+    // A logged drink is a real event, so it breaks the hourly hold.
+    forcePublishRef.current = true;
   }, []);
 
   const applySensorPatch = useCallback((patch: Partial<SensorData>) => {
     setSensorData(prev => ({ ...prev, ...patch, lastUpdated: new Date().toISOString() }));
   }, []);
 
-  const awakeHours = sleepSchedule ? awakeHoursPerDay(sleepSchedule) : 24;
-  const targetMl = profile?.targetDailyMl ?? 0;
+  const rawAwakeHours = sleepSchedule ? awakeHoursPerDay(sleepSchedule) : 24;
+  // A sleep window covering the whole day leaves no waking hours to divide by.
+  const awakeHours = Number.isFinite(rawAwakeHours) && rawAwakeHours > 0 ? rawAwakeHours : 24;
+  const targetMl = Number.isFinite(profile?.targetDailyMl as number)
+    ? (profile!.targetDailyMl as number)
+    : 0;
 
   return {
     sensorData,
-    solvedRisk,
+    // The epoch timestamp on `NO_READINGS` is what marks "nothing yet"; a real
+    // reading always stamps `lastUpdated` with the moment it arrived.
+    streaming: sensorData.lastUpdated !== NO_READINGS.lastUpdated,
+    solvedRisk: publishedRisk,
+    riskUpdatedAt,
     effectiveHoursSinceDrink,
     stomachVolume,
     absorbedHydration,
@@ -335,9 +465,7 @@ export const useHydrationTelemetry = (
     awakeHoursPerDay: awakeHours,
     // Averages are per waking hour: spreading the goal over 24 would quietly
     // set a pace the user could only hit by drinking in their sleep.
-    targetMlPerAwakeHour: sleepSchedule
-      ? Math.round(mlPerAwakeHour(targetMl, sleepSchedule))
-      : Math.round(targetMl / 24),
+    targetMlPerAwakeHour: Math.round(targetMl / awakeHours),
     ingestFluid,
     applySensorPatch,
   };

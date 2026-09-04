@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,10 @@ import Animated, { FadeInUp } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
 import { AuthService, AuthChallenge, DEMO_PASSCODE } from '../services/AuthService';
+import PhoneNumberService from '../services/PhoneNumberService';
+import { warmBackend } from '../config/backend';
+import ConfigService from '../services/ConfigService';
+import Button from '../components/ui/Button';
 import { AlertTriangle, Cpu } from 'lucide-react-native';
 import { cssInterop } from 'react-native-css-interop';
 import GlassCard from '../components/GlassCard';
@@ -48,6 +52,53 @@ const LoginScreen = ({ navigation }: any) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [phoneFocused, setPhoneFocused] = useState(false);
+  /** True while the system SIM-number sheet is open. */
+  const [pickingNumber, setPickingNumber] = useState(false);
+  /** False once we know this device cannot offer the picker. */
+  const [canPickNumber, setCanPickNumber] = useState(PhoneNumberService.isSupported());
+
+  /**
+   * Offer the device's own number instead of asking for it.
+   *
+   * Play Services shows a sheet of the numbers on the phone's SIMs; the user
+   * taps one and the field fills itself. Nothing is read without that tap, so
+   * there is no permission to grant and nothing happens if they dismiss it.
+   *
+   * A number that does not parse as an Indian mobile is discarded rather than
+   * half-filled into the field — see `toIndianSubscriberNumber`.
+   */
+  const pickFromSim = useCallback(async () => {
+    if (pickingNumber) return;
+    setPickingNumber(true);
+    try {
+      const hint = await PhoneNumberService.requestPhoneNumber();
+      const local = PhoneNumberService.toIndianSubscriberNumber(hint.phoneNumber);
+      if (local) {
+        setPhoneNumber(local);
+        setError('');
+      } else if (!hint.dismissed) {
+        // Not a dismissal: the device cannot offer this at all, so stop
+        // advertising a button that will never do anything.
+        setCanPickNumber(false);
+      }
+    } finally {
+      setPickingNumber(false);
+    }
+  }, [pickingNumber]);
+
+  useEffect(() => {
+    // Warm the chat backend and pull the latest admin config while the user is
+    // reading this screen, so neither costs them a wait later on.
+    warmBackend();
+    ConfigService.refresh().catch(() => undefined);
+
+    // One automatic offer per visit. It is a system sheet the user can dismiss
+    // with a tap, and it saves typing a number the phone already knows.
+    if (PhoneNumberService.isSupported()) {
+      pickFromSim();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSendOtp = async () => {
     if (!phoneNumber || phoneNumber.length < 10) {
@@ -192,6 +243,22 @@ const LoginScreen = ({ navigation }: any) => {
                   />
                 </View>
 
+                {canPickNumber && (
+                  <TouchableOpacity
+                    onPress={pickFromSim}
+                    disabled={pickingNumber}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Use a number from this phone's SIM"
+                    className="flex-row items-center gap-2 mb-4 self-start"
+                  >
+                    {pickingNumber && <ActivityIndicator size="small" color="#00f2fe" />}
+                    <Text className="text-[11px] font-black uppercase tracking-wider text-[#00f2fe]">
+                      {pickingNumber ? 'Opening…' : "Use this phone's number"}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
                 <TouchableOpacity
                   className="flex-row items-center bg-black/30 p-3.5 rounded-[20px] border border-white/[0.04] mb-5"
                   activeOpacity={0.7}
@@ -222,8 +289,13 @@ const LoginScreen = ({ navigation }: any) => {
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  className={`w-full h-[52px] rounded-[24px] items-center justify-center ${loading ? 'bg-cyan-600' : 'bg-[#00f2fe]'} shadow-2xl`}
+                <Button
+                  label="SEND OTP"
+                  onPress={handleSendOtp}
+                  size="lg"
+                  loading={loading}
+                  fullWidth
+                  textStyle={{ letterSpacing: 4 }}
                   style={{
                     shadowColor: '#00f2fe',
                     shadowOffset: { width: 0, height: 10 },
@@ -231,16 +303,7 @@ const LoginScreen = ({ navigation }: any) => {
                     shadowRadius: 24,
                     elevation: 20,
                   }}
-                  activeOpacity={0.8}
-                  onPress={handleSendOtp}
-                  disabled={loading}
-                >
-                  {loading ? (
-                    <ActivityIndicator color="#020617" size="small" />
-                  ) : (
-                    <Text className="text-[#020617] text-[15px] font-black font-mono tracking-[0.4em] uppercase">SEND OTP</Text>
-                  )}
-                </TouchableOpacity>
+                />
 
                 <View className="mt-7 bg-black/60 p-4 rounded-[22px] border border-white/[0.05]">
                   <View className="flex-row items-center gap-2 mb-3">

@@ -20,14 +20,12 @@ import { MessageCircle, X, Send, Trash2, Droplets, Pencil } from 'lucide-react-n
 import Animated, {
   FadeIn,
   LinearTransition,
-  SlideInDown,
-  SlideOutDown,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
-import { BACKEND_API_KEY, CONFIGURED_BACKEND_URL, backendCandidates } from '../config/backend';
+import { BACKEND_API_KEY, backendCandidates, resolveBackendUrl, warmBackend } from '../config/backend';
 import ChatBus from '../services/ChatBus';
 import HydrationService from '../services/HydrationService';
 import HydrationPromptSession from '../services/HydrationPromptSession';
@@ -35,7 +33,7 @@ import { parseIntakeMl } from '../utils/parseIntake';
 import { detectHydrationLogIntent, looksLikeQuestion } from '../utils/hydrationIntent';
 import { buildLogConfirmation } from '../utils/hydrationFormat';
 import { withHydrationTip } from '../utils/hydrationTips';
-import { QUICK_LOG_AMOUNTS } from '../utils/hydrationAmounts';
+import { quickLogAmounts } from '../utils/hydrationAmounts';
 import type { HydrationLogResult } from '../types';
 
 interface Message {
@@ -63,7 +61,20 @@ interface AquaSageChatProps {
   onLogWater?: (amountMl: number, requestId: string) => Promise<HydrationLogResult>;
 }
 
-const INITIAL_GREETING = "Hi, I'm **AquaSage AI**! 💧 How can I help?";
+/** The assistant's name, used everywhere the user can see it. */
+export const ASSISTANT_NAME = 'Vari';
+
+const INITIAL_GREETING = `Hi, I'm **${ASSISTANT_NAME}**! 💧 How can I help?`;
+
+/**
+ * How long an answer may take before the wait is explained rather than left as
+ * a spinner.
+ *
+ * The chat backend runs on a plan that stops the instance after 15 minutes of
+ * inactivity, so the first question after a quiet spell pays for a cold start.
+ * The app cannot make that faster, but it can stop it looking like a hang.
+ */
+const SLOW_RESPONSE_NOTICE_MS = 4000;
 const BOT_AVATAR_IMAGE = 'https://cdn-icons-png.flaticon.com/512/4712/4712109.png';
 
 // Every string below is one short line. The closing tip is added by
@@ -97,20 +108,28 @@ interface QuickReply {
  * re-parsed. Guessing the intent back out of the label is what used to make
  * these taps unreliable.
  */
-const QUICK_REPLIES: Record<Exclude<LogFlowState, 'idle'>, QuickReply[]> = {
+/**
+ * A function rather than a constant, because the amounts come from the admin
+ * config and that arrives over the network after this module is imported. A
+ * captured array would have pinned the chat to whatever the app booted with,
+ * while the quick-log sheet moved on.
+ */
+const quickRepliesFor = (state: Exclude<LogFlowState, 'idle'>): QuickReply[] => {
   // No emoji in the label: the icon is drawn as its own element, and the label
   // also becomes the user's chat message, where it reads better as plain text.
-  awaiting_choice: [
-    { label: 'Log it for me', action: { kind: 'choice', choice: 'assisted' }, tone: 'primary' },
-    { label: "I'll do it manually", action: { kind: 'choice', choice: 'manual' } },
-  ],
+  if (state === 'awaiting_choice') {
+    return [
+      { label: 'Log it for me', action: { kind: 'choice', choice: 'assisted' }, tone: 'primary' },
+      { label: "I'll do it manually", action: { kind: 'choice', choice: 'manual' } },
+    ];
+  }
   // Derived from the shared list, so the chat and the home screen's quick-log
   // sheet always offer the same amounts.
-  awaiting_amount: QUICK_LOG_AMOUNTS.map(({ label, primary }) => ({
+  return quickLogAmounts().map(({ label, primary }) => ({
     label,
     action: { kind: 'amount', text: label },
     tone: primary ? 'primary' : undefined,
-  })),
+  }));
 };
 
 /** Horizontal padding of the sheet's input area, which the buttons sit in. */
@@ -286,6 +305,12 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   const [teaserIndex, setTeaserIndex] = useState(0);
   const [teaserShown, setTeaserShown] = useState(true);
   const [serverUrl, setServerUrl] = useState<string | null>(null);
+  /**
+   * Set once an answer has been outstanding long enough that the silence needs
+   * explaining. Shown beside the spinner, never posted as a message — it is a
+   * status, not something the assistant said.
+   */
+  const [slowResponse, setSlowResponse] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const { width: windowWidth } = useWindowDimensions();
   /**
@@ -313,9 +338,9 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
    */
   const QUICK_REPLY_GAP = 10;
   const quickReplyWidth = windowWidth - SHEET_SIDE_PADDING * 2;
+  const amountCount = Math.max(1, quickLogAmounts().length);
   const amountButtonWidth =
-    (quickReplyWidth - QUICK_REPLY_GAP * (QUICK_LOG_AMOUNTS.length - 1)) /
-    QUICK_LOG_AMOUNTS.length;
+    (quickReplyWidth - QUICK_REPLY_GAP * (amountCount - 1)) / amountCount;
 
   // RN's Modal opens its own Android window, which never inherits the
   // activity's `adjustResize`, so KeyboardAvoidingView can't lift the input.
@@ -391,45 +416,25 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   }, [isOpen, teaserShown, showNextTeaser, teaserOpacity]);
 
   // Server Discovery Logic
-  const discoverServer = async () => {
-    // A configured backend needs no discovery, and must not be probed.
-    //
-    // Discovery exists to find a developer's machine on an unknown address.
-    // When the build has been told where the server is, probing only adds a
-    // way to fail: a free-tier host sleeps when idle and takes half a minute
-    // to wake, so a 6-second /ping aborts, the probe moves on to addresses
-    // that cannot possibly answer on a real phone, and the user is told the
-    // AI is unreachable — for a server that was merely asleep.
-    if (CONFIGURED_BACKEND_URL) {
-      setServerUrl(CONFIGURED_BACKEND_URL);
-      return CONFIGURED_BACKEND_URL;
-    }
-
-    const candidates = backendCandidates();
-    const startTime = Date.now();
-
-    for (const base of candidates) {
-      try {
-        const controller = new AbortController();
-        // Increase timeout to 6s to account for slow cold-starts on some dev machines
-        const id = setTimeout(() => controller.abort(), 6000);
-        const res = await fetch(`${base}/ping`, { signal: controller.signal });
-        clearTimeout(id);
-        if (res.ok) {
-          console.log(`[AquaSage] Backend discovered at ${base} in ${Date.now() - startTime}ms`);
-          setServerUrl(base);
-          return base;
-        }
-      } catch (e: any) {
-        console.log(`[AquaSage] Probing ${base} failed: ${e?.message ?? e}`);
-      }
-    }
-    console.warn('[AquaSage] No backend found on any candidate address:', candidates);
-    return null;
+  /**
+   * The backend address, resolved once per app run and shared with the config
+   * service — see `resolveBackendUrl`. The chat used to run its own probe,
+   * which meant a second cold start on a sleeping host for no benefit.
+   */
+  const discoverServer = async (): Promise<string | null> => {
+    const base = await resolveBackendUrl();
+    setServerUrl(base);
+    return base;
   };
 
+  // Opening the sheet is late to start waking a sleeping backend, so the app
+  // also warms it on launch and on every foreground (see HomeScreen). This is
+  // the backstop for a session that never hit either.
   useEffect(() => {
-    if (isOpen) discoverServer();
+    if (isOpen) {
+      discoverServer();
+      warmBackend();
+    }
   }, [isOpen]);
 
   /**
@@ -542,7 +547,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
         appendAssistant(NO_AUTH_MESSAGE);
         setLogFlow('awaiting_amount');
       } else if (result.status === 'error') {
-        console.error('[AquaSage] Hydration write rejected:', result.error);
+        console.error('[Vari] Hydration write rejected:', result.error);
         appendAssistant(ERROR_MESSAGE);
         setLogFlow('awaiting_amount');
       } else {
@@ -554,7 +559,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
         setLogFlow('idle');
       }
     } catch (error) {
-      console.error('[AquaSage] Failed to log water:', error);
+      console.error('[Vari] Failed to log water:', error);
       appendAssistant(ERROR_MESSAGE);
       setLogFlow('awaiting_amount');
     } finally {
@@ -566,6 +571,10 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   /** Sends the question to the RAG backend and appends the answer. */
   const askBackend = async (text: string) => {
     setIsLoading(true);
+    setSlowResponse(false);
+    // A spinner that has been turning for five seconds reads as a broken app.
+    // Saying *why* it is slow costs nothing and is true.
+    const slowTimer = setTimeout(() => setSlowResponse(true), SLOW_RESPONSE_NOTICE_MS);
 
     try {
       const chatHistory = messages.slice(-5).map(m => ({
@@ -602,17 +611,22 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
       const data = await response.json();
       appendAssistant(data.answer || 'No response from AI.');
     } catch (error: any) {
-      console.error('[AquaSage] Chat request failed:', error?.message ?? error);
+      console.error('[Vari] Chat request failed:', error?.message ?? error);
 
-      const candidates = backendCandidates();
-      const triedList = candidates.join(', ');
-      const androidHint = Platform.OS === 'android' ? '\n\nOn Android? Run: adb reverse tcp:8000 tcp:8000' : '';
+      // What the user needs is "try again", not a list of IP addresses; the
+      // addresses go to the log, where a developer will actually look.
+      console.warn('[Vari] Tried addresses:', backendCandidates().join(', '));
+      if (Platform.OS === 'android') {
+        console.warn('[Vari] Local backend? Run: adb reverse tcp:8000 tcp:8000');
+      }
 
       appendMessage(
         'assistant',
-        `Error: Unable to reach AI server (${error?.message ?? 'unknown error'}).\n\nTried addresses: ${triedList}${androidHint}`
+        "**I couldn't reach the server just now.** Check your connection and ask again — the assistant sometimes needs a moment to wake up."
       );
     } finally {
+      clearTimeout(slowTimer);
+      setSlowResponse(false);
       setIsLoading(false);
     }
   };
@@ -629,7 +643,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
     setLogFlow('awaiting_amount');
     appendAssistant(choice === 'assisted' ? AMOUNT_PROMPT : MANUAL_PROMPT);
     HydrationPromptSession.markResolved().catch(error =>
-      console.error('[AquaSage] Failed to persist prompt state:', error)
+      console.error('[Vari] Failed to persist prompt state:', error)
     );
   };
 
@@ -638,7 +652,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
     setLogFlow('idle');
     appendAssistant(CANCEL_ACK);
     HydrationPromptSession.markResolved().catch(error =>
-      console.error('[AquaSage] Failed to persist prompt state:', error)
+      console.error('[Vari] Failed to persist prompt state:', error)
     );
   };
 
@@ -706,7 +720,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
       // A write that never settles (a hung request, say) would otherwise leave
       // these guards raised forever, swallowing every tap in silence.
       console.warn(
-        '[AquaSage] Ignoring amount tap; a write is still in flight:',
+        '[Vari] Ignoring amount tap; a write is still in flight:',
         reply.label
       );
       return;
@@ -722,7 +736,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
     setPendingReply(reply.label);
     commitLog(amountMl, `chat:${messageId}`)
       .catch(error => {
-        console.error('[AquaSage] Quick reply failed:', error);
+        console.error('[Vari] Quick reply failed:', error);
         appendAssistant(ERROR_MESSAGE);
       })
       .finally(() => setPendingReply(null));
@@ -865,7 +879,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
       <Modal
         visible={isOpen}
         transparent
-        animationType="fade"
+        animationType="slide"
         onRequestClose={toggleChat}
         statusBarTranslucent
       >
@@ -880,9 +894,13 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
               style={{ flex: 1 }}
             />
 
-            <Animated.View
-              entering={SlideInDown.duration(300)}
-              exiting={SlideOutDown.duration(250)}
+            {/* A plain View, not an Animated one. A Reanimated layout
+                animation inside an RN Modal moves the rendered view on Android
+                without moving its touch targets, which left the close X, the
+                bin and the quick replies responding somewhere other than where
+                they were drawn. The Modal's own `animationType` slides the
+                sheet natively, targets and all. */}
+            <View
               style={{
                 height: sheetHeight,
                 marginBottom: keyboardHeight,
@@ -912,7 +930,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                     />
                   </View>
                   <View>
-                    <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 16 }}>AquaSage AI</Text>
+                    <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 16 }}>{ASSISTANT_NAME}</Text>
                   </View>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -975,7 +993,14 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                         style={{ width: '100%', height: '100%' }}
                       />
                     </View>
-                    <ActivityIndicator size="small" color="#00f2fe" />
+                    <View style={{ flex: 1 }}>
+                      <ActivityIndicator size="small" color="#00f2fe" style={{ alignSelf: 'flex-start' }} />
+                      {slowResponse && (
+                        <Text style={{ color: '#64748b', fontSize: 11, marginTop: 8, lineHeight: 16 }}>
+                          Waking the assistant up — the first answer after a quiet spell takes a little longer.
+                        </Text>
+                      )}
+                    </View>
                   </View>
                 )}
               </ScrollView>
@@ -1017,7 +1042,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                         touches) nor by an ancestor's measurement (which was
                         collapsing them to nothing). */}
                     <View style={logFlow === 'awaiting_amount' ? styles.amountRow : undefined}>
-                      {QUICK_REPLIES[logFlow].map((reply, index) => {
+                      {quickRepliesFor(logFlow).map((reply, index) => {
                         const isPending = pendingReply === reply.label;
                         const isBusy = pendingReply !== null;
                         const isPrimary = reply.tone === 'primary';
@@ -1109,10 +1134,10 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                   onSend={submitMessage}
                 />
                 <Text style={{ color: '#475569', fontSize: 9, textAlign: 'center', marginTop: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  AquaSage AI answers strictly from research documents
+                  {ASSISTANT_NAME} answers on hydration only, from getVāri's research documents
                 </Text>
               </View>
-            </Animated.View>
+            </View>
           </View>
         </GestureHandlerRootView>
       </Modal>

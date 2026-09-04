@@ -75,7 +75,8 @@ jest.mock('../src/services/TelemetryHistoryService', () => ({
 jest.mock('@notifee/react-native', () => ({
   __esModule: true,
   default: {},
-  AndroidImportance: { HIGH: 4 },
+  AndroidImportance: { DEFAULT: 3, HIGH: 4 },
+  AndroidStyle: { BIGTEXT: 1 },
 }));
 
 jest.mock('@react-native-firebase/messaging', () => ({}));

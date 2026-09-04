@@ -12,14 +12,31 @@ const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 interface RiskScoreCardProps {
   risk: HydrationRiskDetails;
   totalMl: number;
-  targetMl: number;
+  /** The daily goal, or null while the profile is still loading. */
+  targetMl: number | null;
   /** Hours since the last logged drink, before absorption credit. */
   hoursSinceDrink: number;
   /** Millilitres of the most recent entry, or null when nothing is logged. */
   lastIntakeMl: number | null;
   /** True while water is still moving from gut to bloodstream. */
   absorbing: boolean;
+  /**
+   * When the score last moved, epoch ms. Shown because the score is held for
+   * an hour between updates — without saying so, a number that does not change
+   * for an hour reads as a frozen screen rather than a settled one.
+   */
+  updatedAt?: number;
 }
+
+/** "just now" / "12m ago" / "1h ago", for the freshness line under the ring. */
+const sinceLabel = (updatedAt?: number): string | null => {
+  if (!updatedAt || !Number.isFinite(updatedAt)) return null;
+  const minutes = Math.floor((Date.now() - updatedAt) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
+};
 
 /** Circumference of the r=76 ring, matched to the web dashboard's geometry. */
 const RING_LENGTH = 477;
@@ -69,8 +86,10 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
   hoursSinceDrink,
   lastIntakeMl,
   absorbing,
+  updatedAt,
 }) => {
   const accent = statusColor(risk.status);
+  const updatedLabel = sinceLabel(updatedAt);
 
   // The ring is eased on the UI thread rather than by re-rendering the screen:
   // the solve updates every sensor tick, and animating it in JS would repaint
@@ -83,16 +102,31 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
   const ringProps = useAnimatedProps(() => ({
     strokeDashoffset: RING_LENGTH - RING_LENGTH * ringProgress.value,
   }));
-  const remainingMl = Math.max(0, targetMl - totalMl);
-  const goalMet = targetMl - totalMl <= 0;
-  const targetPercent = Math.min(100, Math.round((totalMl / targetMl) * 100));
+  // The goal is null until the profile row lands, and used to arrive as a
+  // hardcoded 2500 in the meantime — a number the user had never been given,
+  // shown as though it were theirs, and then quietly replaced. It is now
+  // absent until it is real, and the tiles that depend on it say so.
+  //
+  // Dividing by it while it was absent is also where "NaN% of goal" came from.
+  const hasTarget = targetMl !== null && Number.isFinite(targetMl) && targetMl > 0;
+  const remainingMl = hasTarget ? Math.max(0, (targetMl as number) - totalMl) : null;
+  const goalMet = hasTarget && (targetMl as number) - totalMl <= 0;
+  const targetPercent = hasTarget
+    ? Math.min(100, Math.round((totalMl / (targetMl as number)) * 100))
+    : null;
+
+  // `Number.isFinite`, not `!== null`: a load that arrives as undefined or NaN
+  // has to read as "no data" too. Checking only for null is what let
+  // `Math.round(undefined)` reach the screen as the literal text "NaN".
+  const loadValue = (value: number | null | undefined): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null;
 
   const loads = [
-    { label: 'Heart', value: risk.heartLoad },
-    { label: 'Activity', value: risk.activityLoad },
-    { label: 'Temp', value: risk.temperatureLoad },
-    { label: 'Humidity', value: risk.humidityLoad },
-    { label: 'Time', value: risk.timeLoad },
+    { label: 'Heart', value: loadValue(risk.heartLoad) },
+    { label: 'Activity', value: loadValue(risk.activityLoad) },
+    { label: 'Temp', value: loadValue(risk.temperatureLoad) },
+    { label: 'Humidity', value: loadValue(risk.humidityLoad) },
+    { label: 'Time', value: loadValue(risk.timeLoad) },
   ];
 
   return (
@@ -144,6 +178,11 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
             <Text className="text-[9px] uppercase tracking-[0.25em] text-neutral-500 font-mono font-black mt-[-4px]">
               {risk.score !== null ? 'Dehydration Risk' : 'Insufficient Data'}
             </Text>
+            {!!updatedLabel && (
+              <Text className="text-[8px] text-neutral-600 font-mono mt-1.5">
+                Updated {updatedLabel} · refreshes hourly
+              </Text>
+            )}
           </View>
         </View>
       </View>
@@ -194,14 +233,22 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
           text fits at a readable size. */}
       <View className="mt-3 gap-2">
         <View className="flex-row gap-2">
-          <StatTile label="Consumed" value={`${totalMl} ml`} caption={`${targetPercent}% of goal`} />
-          <StatTile label="Daily Target" value={`${targetMl} ml`} caption="Goal baseline" />
+          <StatTile
+            label="Consumed"
+            value={`${totalMl} ml`}
+            caption={targetPercent !== null ? `${targetPercent}% of goal` : 'Loading goal…'}
+          />
+          <StatTile
+            label="Daily Target"
+            value={hasTarget ? `${targetMl} ml` : '--'}
+            caption={hasTarget ? 'Goal baseline' : 'Loading…'}
+          />
         </View>
         <View className="flex-row gap-2">
           <StatTile
             label="Remaining"
-            value={`${remainingMl} ml`}
-            caption={goalMet ? 'Goal met' : 'Deficit left'}
+            value={remainingMl !== null ? `${remainingMl} ml` : '--'}
+            caption={!hasTarget ? 'Loading…' : goalMet ? 'Goal met' : 'Deficit left'}
             valueColor={goalMet ? '#10b981' : '#ffffff'}
           />
           <StatTile
@@ -211,7 +258,7 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
                 ? '--'
                 : hoursSinceDrink < 0.1
                 ? 'Just now'
-                : `${Math.floor(hoursSinceDrink * 60)}m ago`
+                : `${Math.max(0, Math.floor((Number.isFinite(hoursSinceDrink) ? hoursSinceDrink : 0) * 60))}m ago`
             }
             caption={lastIntakeMl === null ? 'No sync' : `${lastIntakeMl}ml logged`}
           />
@@ -239,7 +286,7 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
                 <View
                   className="h-full rounded-full"
                   style={{
-                    width: `${load.value !== null ? load.value : 0}%`,
+                    width: `${load.value !== null ? Math.max(0, Math.min(100, load.value)) : 0}%`,
                     backgroundColor: load.value !== null ? loadColor(load.value) : '#334155'
                   }}
                 />
