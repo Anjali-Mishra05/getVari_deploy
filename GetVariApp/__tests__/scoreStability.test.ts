@@ -149,7 +149,7 @@ describe('defect 8: an 85kg diabetic in Mumbai', () => {
   });
 
   it('reproduces the document exactly at the telemetry the document uses', () => {
-    // getVari_algo.pdf Use Case 1 is this profile at a 1.5h hydration gap, and
+    // The algorithm document's Use Case 1 is this profile at a 1.5h gap, and
     // publishes 64. The climate band's ambient figures are calibrated so
     // Mumbai lands on the same loads the document uses (30C -> 60, 68% -> 70),
     // which is what makes the app and the specification agree.
