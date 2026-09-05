@@ -264,13 +264,28 @@ const performWrite = async (
   const entry = data?.[0] ? mapRow(data[0]) : mapRow(row);
   const result: HydrationLogResult = { status: 'logged', requestId, amountMl, entry, ...totals };
 
-  // Resetting the reminder countdown is a side effect of the entry, not part
-  // of it, so it is deliberately *not* awaited. Awaiting it made the user's
-  // confirmation hostage to the OS: notifee's scheduling stalled behind other
-  // native work and the chat sat on "Saving…" indefinitely for a row that was
-  // already safely written.
-  NotificationService.scheduleHydrationReminders().catch(reminderError => {
-    console.error('[Hydration] Failed to reset reminders:', reminderError);
+  // Settling the reminders is a side effect of the entry, not part of it, so
+  // it is deliberately *not* awaited. Awaiting it made the user's confirmation
+  // hostage to the OS: notifee's scheduling stalled behind other native work
+  // and the chat sat on "Saving…" indefinitely for a row that was already
+  // safely written.
+  //
+  // The two steps are chained rather than fired together because the order
+  // matters. Resolving clears the reminder out of the tray; the reschedule
+  // sweeps the tray to catch deliveries that never reached JS. Run the other
+  // way round, that sweep would find the reminder this very entry answers and
+  // raise it again — the user would log a drink and be asked for one a moment
+  // later.
+  const settleReminders = async () => {
+    // An outstanding reminder is a question, and an entry answers it however
+    // the user got there. A correction is not an answer: it takes millilitres
+    // back off the day, so it must not settle a reminder asking for more.
+    if (amountMl > 0) await NotificationService.resolveActiveReminder();
+    await NotificationService.scheduleHydrationReminders();
+  };
+
+  settleReminders().catch(reminderError => {
+    console.error('[Hydration] Failed to settle reminders:', reminderError);
   });
 
   ChatBus.emitHydrationLogged(result);

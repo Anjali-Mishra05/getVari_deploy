@@ -106,9 +106,25 @@ export const updateProfile = async (patch: ProfilePatch): Promise<ProfileSaveRes
     const existing = (await fetchProfile(userId)) ?? {};
     const merged = withDerivedFields({ ...existing, ...patch });
 
+    /**
+     * The phone number is written with every save, not just at sign-up.
+     *
+     * It is what lets a returning user be matched back to their history when
+     * their device no longer remembers them — a reinstall, cleared app data,
+     * or simply a different phone. Rows created by this upsert used to carry
+     * only `id`, so a demo-mode user who lost their local identity map had a
+     * profile on the server that nothing could ever find again.
+     *
+     * Omitted rather than written as null when the session has no number, so a
+     * save can never blank a number an earlier one established.
+     */
+    const session = await AuthService.getStoredSession();
+    const phoneNumber = session?.phoneNumber;
+
     const { error } = await supabase.from(PROFILES_TABLE).upsert({
       id: userId,
       profile: merged,
+      ...(phoneNumber && phoneNumber !== 'unknown' ? { phone_number: phoneNumber } : {}),
       updated_at: new Date().toISOString(),
     });
 

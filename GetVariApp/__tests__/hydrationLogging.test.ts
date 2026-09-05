@@ -30,7 +30,13 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 
 jest.mock('../src/services/NotificationService', () => ({
   __esModule: true,
-  default: { scheduleHydrationReminders: jest.fn(async () => {}) },
+  default: {
+    scheduleHydrationReminders: jest.fn(async () => {}),
+    // A write settles the outstanding reminder as well as resetting the
+    // cadence; both have to be here or the side-effect chain in `performWrite`
+    // throws on the first call and never reaches the second.
+    resolveActiveReminder: jest.fn(async () => {}),
+  },
   HYDRATION_REMINDER_TYPE: 'hydration_reminder',
 }));
 
