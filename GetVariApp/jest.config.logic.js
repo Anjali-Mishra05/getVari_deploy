@@ -30,5 +30,7 @@ module.exports = {
     '<rootDir>/__tests__/scoreStability.test.ts',
     '<rootDir>/__tests__/configFallback.test.ts',
     '<rootDir>/__tests__/phoneNumber.test.ts',
+    '<rootDir>/__tests__/riskSpecPresets.test.ts',
+    '<rootDir>/__tests__/riskPublication.test.ts',
   ],
 };

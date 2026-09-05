@@ -5,6 +5,7 @@ import { Bell, BellOff, Plus, Battery, Cpu } from 'lucide-react-native';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
 import BrandLogo from '../components/BrandLogo';
+import SensorTestPanel from '../components/SensorTestPanel';
 import GlassCard from '../components/GlassCard';
 import { AuthService } from '../services/AuthService';
 import { AIInsight, HydrationLog, UserProfile } from '../types';
@@ -56,6 +57,7 @@ const HomeScreen = ({ navigation }: any) => {
   const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [unseenNotifications, setUnseenNotifications] = useState(0);
   const [telemetryExpanded, setTelemetryExpanded] = useState(false);
+  const [sensorPanelOpen, setSensorPanelOpen] = useState(false);
 
   /**
    * The reminder the user still owes an answer to, if there is one.
@@ -116,6 +118,42 @@ const HomeScreen = ({ navigation }: any) => {
 
   /** Entry ids already poured into the recovery model, to keep it idempotent. */
   const ingestedLogIds = useRef<Set<string>>(new Set());
+
+  /**
+   * Five taps on the logo opens the sensor test panel.
+   *
+   * The panel ships in release builds because the research interns verify
+   * scores on the same APK the study participants use, and maintaining a
+   * second build for them is how the two drift apart. It is behind a gesture
+   * rather than a visible control for the obvious reason: a participant who
+   * finds it can pin their own readings and invalidate their data.
+   *
+   * The run resets after three seconds of no tapping, so an ordinary
+   * double-tap on the header never accumulates into an opening.
+   */
+  const logoTaps = useRef(0);
+  const logoTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleLogoTap = useCallback(() => {
+    logoTaps.current += 1;
+    if (logoTapTimer.current) clearTimeout(logoTapTimer.current);
+
+    if (logoTaps.current >= 5) {
+      logoTaps.current = 0;
+      setSensorPanelOpen(true);
+      return;
+    }
+    logoTapTimer.current = setTimeout(() => {
+      logoTaps.current = 0;
+    }, 3000);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (logoTapTimer.current) clearTimeout(logoTapTimer.current);
+    },
+    []
+  );
 
   /**
    * The write path, reachable from the mount-once effect below.
@@ -614,13 +652,32 @@ const HomeScreen = ({ navigation }: any) => {
                 off the right edge, clipping the "+". It now shrinks with the
                 row, and the buttons keep their intrinsic width. */}
             <View className="flex-1">
-              <BrandLogo size={32} fillProgress={1} withText={true} textSize="sm" />
-              <Text
-                className="text-[8px] uppercase tracking-[0.18em] text-cyan-400 font-mono font-black mt-2"
-                numberOfLines={1}
-              >
-                AI-Powered Hydration Intelligence
-              </Text>
+              {/* The logo is the tap target for the sensor test panel — see
+                  `handleLogoTap`. It carries no accessibility role or label of
+                  its own, because it is not an advertised control and reading
+                  one out would defeat the point of hiding it. */}
+              <TouchableOpacity onPress={handleLogoTap} activeOpacity={1} accessible={false}>
+                <BrandLogo size={32} fillProgress={1} withText={true} textSize="sm" />
+              </TouchableOpacity>
+              {telemetry.sensorOverride ? (
+                <TouchableOpacity
+                  className="flex-row items-center gap-1.5 mt-2 self-start rounded-md bg-amber-500/15 border border-amber-500/40 px-2 py-[3px]"
+                  onPress={() => setSensorPanelOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Sensor readings are pinned. Open the test panel."
+                >
+                  <Text className="text-[8px] uppercase tracking-[0.18em] text-amber-400 font-mono font-black">
+                    Pinned readings
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <Text
+                  className="text-[8px] uppercase tracking-[0.18em] text-cyan-400 font-mono font-black mt-2"
+                  numberOfLines={1}
+                >
+                  AI-Powered Hydration Intelligence
+                </Text>
+              )}
             </View>
             <View className="flex-row gap-3 shrink-0">
               {/* Both header actions share a size, radius and border weight;
@@ -829,6 +886,21 @@ const HomeScreen = ({ navigation }: any) => {
           userProfile={userProfile}
           onClose={() => setProfileEditOpen(false)}
           onSaved={handleProfileSaved}
+        />
+
+        <SensorTestPanel
+          visible={sensorPanelOpen}
+          onClose={() => setSensorPanelOpen(false)}
+          profile={userProfile}
+          live={{
+            heartRate: telemetry.sensorData.heartRate,
+            activityLoad: telemetry.sensorData.activityLoad,
+            temperature: telemetry.sensorData.temperature,
+            humidity: telemetry.sensorData.humidity,
+            gapHours: telemetry.effectiveHoursSinceDrink,
+          }}
+          override={telemetry.sensorOverride}
+          onApply={telemetry.setSensorOverride}
         />
 
         {/* The chat writes through HydrationService itself and reports back

@@ -8,7 +8,7 @@
 // and only names starting with "mock" may be referenced from inside one.
 var mockStore = new Map<string, string>();
 var mockSupabaseSession: { user: { id: string } } | null = null;
-var mockProfileRow: { id: string } | null = null;
+var mockProfileRow: { id: string; updated_at?: string } | null = null;
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
@@ -53,12 +53,26 @@ jest.mock('../src/services/SupabaseClient', () => ({
       verifyOtp: async () => ({ data: { session: null }, error: { message: 'unsupported' } }),
       signOut: async () => ({ error: null }),
     },
+    // `select().eq()` is both awaitable (the phone lookup orders and limits,
+    // then reads an array) and chainable to `.maybeSingle()` (the uid lookup
+    // reads one row). The thenable covers the first without breaking the
+    // second.
     from: () => ({
       select: () => ({
-        eq: () => ({
-          maybeSingle: async () => ({ data: mockProfileRow, error: null }),
-        }),
+        eq: () => {
+          const rows = mockProfileRow ? [mockProfileRow] : [];
+          const query: any = {
+            maybeSingle: async () => ({ data: mockProfileRow, error: null }),
+            order: () => query,
+            limit: () => query,
+            then: (resolve: any, reject: any) =>
+              Promise.resolve({ data: rows, error: null }).then(resolve, reject),
+          };
+          return query;
+        },
       }),
+      update: () => ({ eq: async () => ({ error: null }) }),
+      insert: async () => ({ error: null }),
     }),
   },
 }));
@@ -124,6 +138,58 @@ describe('persistence across a restart', () => {
     const again = coldStart();
     const second = await again.verifyOtp(await again.sendOtp('+919876543210'), '884200');
     expect(second.userId).toBe(userId);
+  });
+
+  /**
+   * The reported defect: "when user logs out and tries to re-login with the
+   * same number, his previous data is not getting saved."
+   *
+   * Logging out clears the session but leaves the local phone→id map, so on
+   * the same device this always worked. What did not work was any case where
+   * that map is gone — a reinstall, cleared app data, or a different handset.
+   * The id was then minted locally with no reference to the server, and every
+   * row the user already owned was stranded under the old one.
+   */
+  it('recovers the server profile when the device has forgotten the number', async () => {
+    const first = coldStart();
+    const { userId } = await first.verifyOtp(await first.sendOtp('+919876543210'), '884200');
+
+    // A new install: no session, no local identity map. The row on the server
+    // is all that is left of this user.
+    mockStore.clear();
+    mockProfileRow = { id: userId, updated_at: '2026-09-05T10:00:00.000Z' };
+
+    const reinstalled = coldStart();
+    const session = await reinstalled.verifyOtp(
+      await reinstalled.sendOtp('+919876543210'),
+      '884200'
+    );
+
+    expect(session.userId).toBe(userId);
+  });
+
+  it('mints a fresh id when the number is genuinely new to the server', async () => {
+    mockProfileRow = null;
+
+    const AuthService = coldStart();
+    const session = await AuthService.verifyOtp(await AuthService.sendOtp('+919000000009'), '884200');
+
+    expect(session.userId).toMatch(UUID_RE);
+  });
+
+  it('prefers the server id over a stale local one', async () => {
+    const first = coldStart();
+    const { userId: local } = await first.verifyOtp(await first.sendOtp('+919876543210'), '884200');
+
+    // The same device signs in again, but the server now knows this number by
+    // a different row — the one carrying the history worth keeping.
+    mockProfileRow = { id: '11111111-2222-4333-8444-555555555555', updated_at: '2026-09-05T12:00:00.000Z' };
+
+    const again = coldStart();
+    const session = await again.verifyOtp(await again.sendOtp('+919876543210'), '884200');
+
+    expect(session.userId).toBe('11111111-2222-4333-8444-555555555555');
+    expect(session.userId).not.toBe(local);
   });
 
   it('routes a returning, onboarded user straight to Home', async () => {

@@ -14,6 +14,7 @@ import AppConfigStore from '../config/appConfigStore';
 import { climateBandFor } from '../utils/hydrationTarget';
 import { AuthService } from '../services/AuthService';
 import { HydrationRiskEngine } from '../utils/hydrationRiskEngine';
+import { shouldPublishRisk } from '../utils/riskPublication';
 
 /**
  * The physiological loop behind the home dashboard.
@@ -127,11 +128,11 @@ const MAX_GAP_HOURS = 8;
  *    are the things the user acts on, so they must never wait.
  *  - Otherwise a move is published once it is worth reading: at least
  *    `MIN_SCORE_DELTA` points, and no more often than `MIN_REPUBLISH_MS`.
+ *
+ * The rule itself is `shouldPublishRisk` in `utils/riskPublication`, which is
+ * where its thresholds live too — it is imported rather than restated so the
+ * tested rule and the shipped one cannot drift apart.
  */
-const MIN_REPUBLISH_MS = 60 * 1000;
-
-/** Point change worth repainting for. Below this it is noise, not news. */
-const MIN_SCORE_DELTA = 3;
 
 /**
  * How strongly each tick pulls a reading back to its baseline.
@@ -177,6 +178,33 @@ export interface HydrationTelemetry {
   ingestFluid: (amountMl: number) => void;
   /** Seam for a real BLE stream to overwrite simulated readings. */
   applySensorPatch: (patch: Partial<SensorData>) => void;
+  /** Readings currently pinned by the test panel, or null when the sim is free. */
+  sensorOverride: SensorOverride | null;
+  /** Pin readings. A field left undefined keeps drifting normally. */
+  setSensorOverride: (override: SensorOverride | null) => void;
+}
+
+/**
+ * Readings held still by the sensor test panel.
+ *
+ * Every field is optional and independent: pinning the temperature alone
+ * leaves heart rate and activity drifting, which is what makes "change one
+ * thing and watch the score" possible.
+ *
+ * This exists because the score the dashboard shows is a solve over *simulated*
+ * readings that are derived from the profile — the activity level sets the
+ * heart rate and movement index, the city's climate band sets temperature and
+ * humidity. There was no way to ask "what does this algorithm do at 30°C and
+ * 65% RH" without editing a profile and waiting for the stream to settle, so
+ * checking a score against the specification meant reading the source.
+ */
+export interface SensorOverride {
+  heartRate?: number;
+  activityLoad?: number;
+  temperature?: number;
+  humidity?: number;
+  /** Hours since the last drink, bypassing the log-derived gap. */
+  gapHours?: number;
 }
 
 /** Ambient heat stress, 0-100, from temperature and humidity together. */
@@ -245,6 +273,7 @@ export const useHydrationTelemetry = (
   const sleepSchedule = useMemo(() => normaliseSleepSchedule(profile), [profile]);
 
   const [sensorData, setSensorData] = useState<SensorData>(NO_READINGS);
+  const [sensorOverride, setSensorOverrideState] = useState<SensorOverride | null>(null);
   const [historicalAverages, setHistoricalAverages] = useState<{ avgHR: number | null; avgSteps: number | null; avgTemp: number | null; avgHumidity: number | null } | null>(null);
   const [isDamaged, setIsDamaged] = useState(false);
   const [stomachVolume, setStomachVolume] = useState(0);
@@ -275,6 +304,10 @@ export const useHydrationTelemetry = (
   stomachRef.current = stomachVolume;
   const sleepScheduleRef = useRef(sleepSchedule);
   sleepScheduleRef.current = sleepSchedule;
+  // Read by the tick, which is mounted once. Without this the drift would keep
+  // pulling a pinned channel back to its baseline two seconds after it was set.
+  const overrideRef = useRef(sensorOverride);
+  overrideRef.current = sensorOverride;
 
   // A new entry restarts the gap from its real timestamp. Keyed on the newest
   // timestamp so re-fetching the same list does not reset a gap mid-tick.
@@ -283,6 +316,9 @@ export const useHydrationTelemetry = (
     null
   );
   useEffect(() => {
+    // A pinned gap outranks the logs: the tester asked for this number, and a
+    // drink logged while the panel is open must not silently reset it.
+    if (overrideRef.current?.gapHours !== undefined) return;
     setEffectiveHoursSinceDrink(gapFromLogs(logs, sleepSchedule));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newestLogAt, sleepSchedule]);
@@ -312,10 +348,18 @@ export const useHydrationTelemetry = (
           return Math.min(hi, Math.max(lo, from + drift));
         };
 
-        const heartRate = Math.round(step(prev.heartRate, baseline.heartRate!, 1.5, 45, 170));
-        const activityLoad = Math.round(step(prev.activityLoad, baseline.activityLoad!, 2, 0, 100));
-        const temperature = Number(step(prev.temperature, baseline.temperature!, 0.15, 18, 45).toFixed(1));
-        const humidity = Math.round(step(prev.humidity, baseline.humidity!, 1, 10, 100));
+        // A pinned channel is returned exactly as the tester typed it: no
+        // drift, no noise, no rounding. That is the whole point of the panel —
+        // a reading that wanders by a degree can cross a load-band edge and
+        // move the score by nine points on its own.
+        const pinned = overrideRef.current;
+        const hold = (override: number | undefined, drifted: number) =>
+          override ?? drifted;
+
+        const heartRate = hold(pinned?.heartRate, Math.round(step(prev.heartRate, baseline.heartRate!, 1.5, 45, 170)));
+        const activityLoad = hold(pinned?.activityLoad, Math.round(step(prev.activityLoad, baseline.activityLoad!, 2, 0, 100)));
+        const temperature = hold(pinned?.temperature, Number(step(prev.temperature, baseline.temperature!, 0.15, 18, 45).toFixed(1)));
+        const humidity = hold(pinned?.humidity, Math.round(step(prev.humidity, baseline.humidity!, 1, 10, 100)));
         const sweatGSR = Number(step(prev.sweatGSR, baseline.sweatGSR!, 0.15, 0.1, 15).toFixed(2));
 
         return {
@@ -364,6 +408,13 @@ export const useHydrationTelemetry = (
       setIsSleeping(asleep);
 
       setEffectiveHoursSinceDrink(prev => {
+        // A pinned gap is held still for the same reason a pinned reading is:
+        // it is being used to reproduce a documented case, and a gap that
+        // creeps upward every two seconds walks the score off the expected
+        // value while the tester is still reading it.
+        const pinnedGap = overrideRef.current?.gapHours;
+        if (pinnedGap !== undefined) return pinnedGap;
+
         const credit = (absorbed / 250) * 1.5;
         const elapsed = asleep ? 0 : SIM_MINUTES_PER_TICK / 60;
         const next = prev + elapsed - credit;
@@ -445,31 +496,77 @@ export const useHydrationTelemetry = (
   // even a minute reads as the app having ignored it.
   const forcePublishRef = useRef(true);
 
+  /**
+   * A profile edit republishes the score immediately.
+   *
+   * Weight, medical conditions and city are all engine inputs: they set the
+   * channel weights and the load multipliers, and the city additionally moves
+   * the ambient baseline the readings drift toward. So saving the profile
+   * editor changes `liveRisk` at once — but the *published* score is held back
+   * unless the band changed or it moved at least `MIN_SCORE_DELTA` points, and
+   * an edit that shifts the score by a point or two satisfies neither. The
+   * user then watches the ring sit still on a screen they just changed, which
+   * reads as the edit not having taken.
+   *
+   * This is the same rule already applied to logging a drink, for the same
+   * reason: a change the user made themselves is never withheld.
+   */
+  const profileSignature = profile
+    ? `${profile.weightKg}|${profile.age}|${profile.activityLevel}|${(profile.medicalConditions ?? []).slice().sort().join(',')}|${profile.location ?? profile.selectedCity ?? ''}`
+    : '';
+  const lastProfileSignature = useRef(profileSignature);
+  if (lastProfileSignature.current !== profileSignature) {
+    lastProfileSignature.current = profileSignature;
+    forcePublishRef.current = true;
+  }
+
+  /**
+   * Move the readings to the edited profile's baseline instead of drifting there.
+   *
+   * Forcing a republish alone is not enough for a city or activity-level
+   * change. Those move the *baseline* — the anchor the stream is pulled toward
+   * — and `BASELINE_PULL` closes only a quarter of the remaining distance per
+   * tick, so a move from Bangalore's 25°C to Mumbai's 30°C takes some fifteen
+   * seconds to arrive and crosses a load band partway through. The score
+   * therefore answered a profile edit twice: once immediately with the old
+   * readings, then again once the ambient caught up.
+   *
+   * Snapping is the honest reading of what the user did: they did not travel,
+   * they corrected where the app thinks they live, so there is no journey to
+   * animate. Pinned channels are left alone — an override outranks this.
+   */
+  useEffect(() => {
+    if (!profile) return;
+    const baseline = baselineRef.current;
+    const pinned = overrideRef.current;
+
+    setSensorData(prev => {
+      // Nothing has streamed yet; the first tick will start from the baseline
+      // on its own, and writing here would falsely mark the stream as live.
+      if (prev.lastUpdated === NO_READINGS.lastUpdated) return prev;
+
+      return {
+        ...prev,
+        heartRate: pinned?.heartRate ?? baseline.heartRate,
+        activityLoad: pinned?.activityLoad ?? baseline.activityLoad,
+        temperature: pinned?.temperature ?? baseline.temperature,
+        humidity: pinned?.humidity ?? baseline.humidity,
+        lastUpdated: new Date().toISOString(),
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileSignature]);
+
   useEffect(() => {
     const now = Date.now();
-    const scored = (risk: HydrationRiskDetails) => risk.score !== null;
-    const sinceLast = now - riskUpdatedAt;
-
-    // A band change is a change in what the app is telling the user to do, so
-    // it is never withheld — in either direction. Escalation matters for
-    // safety; de-escalation matters because it is usually the user's own drink
-    // taking effect, and holding that back is exactly what made the score feel
-    // disconnected from the recovery engine.
-    const bandChanged = liveRisk.status !== publishedRisk.status;
-    const availabilityChanged = scored(liveRisk) !== scored(publishedRisk);
-
-    const movedEnough =
-      scored(liveRisk) &&
-      scored(publishedRisk) &&
-      Math.abs((liveRisk.score as number) - (publishedRisk.score as number)) >= MIN_SCORE_DELTA;
-
-    const shouldPublish =
-      forcePublishRef.current ||
-      bandChanged ||
-      availabilityChanged ||
-      (movedEnough && sinceLast >= MIN_REPUBLISH_MS);
-
-    if (!shouldPublish) return;
+    if (!shouldPublishRisk({
+      live: liveRisk,
+      published: publishedRisk,
+      sinceLastMs: now - riskUpdatedAt,
+      forced: forcePublishRef.current,
+    })) {
+      return;
+    }
 
     forcePublishRef.current = false;
     setPublishedRisk(liveRisk);
@@ -486,6 +583,39 @@ export const useHydrationTelemetry = (
   const applySensorPatch = useCallback((patch: Partial<SensorData>) => {
     setSensorData(prev => ({ ...prev, ...patch, lastUpdated: new Date().toISOString() }));
   }, []);
+
+  /**
+   * Pin or release the readings the engine is solved over.
+   *
+   * The values are written straight into the stream rather than left for the
+   * next tick to pick up, so the score answers within a frame of the tester
+   * moving a field — a two-second lag on a panel whose only job is cause and
+   * effect reads as the control having done nothing.
+   */
+  const setSensorOverride = useCallback((override: SensorOverride | null) => {
+    overrideRef.current = override;
+    setSensorOverrideState(override);
+
+    if (override) {
+      setSensorData(prev => ({
+        ...prev,
+        heartRate: override.heartRate ?? prev.heartRate,
+        activityLoad: override.activityLoad ?? prev.activityLoad,
+        temperature: override.temperature ?? prev.temperature,
+        humidity: override.humidity ?? prev.humidity,
+        lastUpdated: new Date().toISOString(),
+      }));
+      if (override.gapHours !== undefined) setEffectiveHoursSinceDrink(override.gapHours);
+    } else {
+      // Releasing hands the gap back to the logs; the readings drift home on
+      // their own from wherever they were pinned.
+      setEffectiveHoursSinceDrink(gapFromLogs(logs, sleepSchedule));
+    }
+
+    // The score must not sit behind `MIN_REPUBLISH_MS` here: the tester is
+    // watching for the change they just caused.
+    forcePublishRef.current = true;
+  }, [logs, sleepSchedule]);
 
   const rawAwakeHours = sleepSchedule ? awakeHoursPerDay(sleepSchedule) : 24;
   // A sleep window covering the whole day leaves no waking hours to divide by.
@@ -513,6 +643,8 @@ export const useHydrationTelemetry = (
     targetMlPerAwakeHour: Math.round(targetMl / awakeHours),
     ingestFluid,
     applySensorPatch,
+    sensorOverride,
+    setSensorOverride,
   };
 };
 

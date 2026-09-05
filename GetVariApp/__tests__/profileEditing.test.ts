@@ -23,7 +23,17 @@ jest.mock('../src/services/NotificationService', () => ({
 }));
 
 jest.mock('../src/services/AuthService', () => ({
-  AuthService: { getCurrentUserId: jest.fn(async () => mockUserId) },
+  AuthService: {
+    getCurrentUserId: jest.fn(async () => mockUserId),
+    // Saves stamp the row with the session's phone number so a returning user
+    // can be matched back to it; the editor reads it from here.
+    getStoredSession: jest.fn(async () => ({
+      userId: mockUserId,
+      phoneNumber: '+919876543210',
+      isDemo: true,
+      createdAt: new Date().toISOString(),
+    })),
+  },
 }));
 
 jest.mock('../src/services/SupabaseClient', () => {

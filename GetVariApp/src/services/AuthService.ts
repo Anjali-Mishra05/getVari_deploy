@@ -91,22 +91,80 @@ const isUsable = (value: any): value is StoredSession =>
   !!value && typeof value.userId === 'string' && value.userId.length > 0;
 
 /**
- * One device + one phone number always maps to the same demo UUID, so signing
- * out and back in keeps the history that was logged before.
+ * The profile a phone number already owns on the server, or null.
+ *
+ * Deliberately **not** `.maybeSingle()`. That errors when more than one row
+ * matches, and duplicates genuinely exist: before profiles carried a phone
+ * number at all, every demo sign-in on a fresh install minted its own row, so
+ * one number can already own several. Erroring there would turn a recoverable
+ * account into a failed login. Ordering by `updated_at` and taking the first
+ * row makes the newest history win, which is the one the user was last using.
+ */
+const profileIdForPhone = async (phoneNumber: string): Promise<string | null> => {
+  if (!phoneNumber || phoneNumber === 'unknown') return null;
+
+  const { data, error } = await supabase
+    .from(PROFILES_TABLE)
+    .select('id, updated_at')
+    .eq('phone_number', phoneNumber)
+    .order('updated_at', { ascending: false })
+    .limit(1);
+
+  if (error) {
+    console.warn('[Auth] Phone lookup failed:', error.message);
+    return null;
+  }
+  return data?.[0]?.id ?? null;
+};
+
+/**
+ * The stable UUID behind a demo sign-in.
+ *
+ * Resolution order matters, and each step exists for a reported failure:
+ *
+ *  1. **The server, by phone number.** Without this the id was device-local
+ *     only, so signing in with the same number on a new phone — or after a
+ *     reinstall, or after clearing app data — minted a fresh UUID and stranded
+ *     every row the user had. That is "my previous data is not getting saved".
+ *  2. **The local map.** Still consulted, and still written, because it is the
+ *     only answer available offline and on the very first sign-in of a number
+ *     that has never reached the server.
+ *  3. **A new UUID**, for a genuinely new user.
+ *
+ * The server answer is cached into the local map so the next launch resolves
+ * without a round trip, and so an offline launch resolves at all.
  */
 const demoIdFor = async (phoneNumber: string): Promise<string> => {
+  let map: Record<string, string> = {};
   try {
     const raw = await AsyncStorage.getItem(DEMO_IDS_KEY);
-    const map = raw ? JSON.parse(raw) : {};
-    if (typeof map?.[phoneNumber] === 'string') return map[phoneNumber];
-
-    const id = randomUuid();
-    await AsyncStorage.setItem(DEMO_IDS_KEY, JSON.stringify({ ...map, [phoneNumber]: id }));
-    return id;
+    map = raw ? JSON.parse(raw) : {};
   } catch (error) {
-    console.error('[Auth] Failed to persist demo identity:', error);
-    return randomUuid();
+    console.error('[Auth] Failed to read demo identities:', error);
   }
+
+  const remembered = typeof map?.[phoneNumber] === 'string' ? map[phoneNumber] : null;
+
+  // The server outranks the local map: this device may have signed in under a
+  // throwaway id before the number was ever reconciled, and the row the user
+  // actually cares about is the one holding their history.
+  let id: string | null = null;
+  try {
+    id = await profileIdForPhone(phoneNumber);
+  } catch (error) {
+    console.warn('[Auth] Phone lookup threw, falling back to local identity:', error);
+  }
+
+  id = id ?? remembered ?? randomUuid();
+
+  if (id !== remembered) {
+    try {
+      await AsyncStorage.setItem(DEMO_IDS_KEY, JSON.stringify({ ...map, [phoneNumber]: id }));
+    } catch (error) {
+      console.error('[Auth] Failed to persist demo identity:', error);
+    }
+  }
+  return id;
 };
 
 /**
@@ -171,14 +229,13 @@ const resolveProfileIdForFirebaseUser = async (
     .maybeSingle();
   if (byUid?.id) return byUid.id;
 
-  const { data: byPhone } = await supabase
-    .from(PROFILES_TABLE)
-    .select('id')
-    .eq('phone_number', phoneNumber)
-    .maybeSingle();
-  if (byPhone?.id) {
-    await supabase.from(PROFILES_TABLE).update({ firebase_uid: uid }).eq('id', byPhone.id);
-    return byPhone.id;
+  // Shares `profileIdForPhone` with the demo path so both resolve a number the
+  // same way. It also replaces a `.maybeSingle()` here that would throw the
+  // moment a number owned two rows — which demo sign-ins have been creating.
+  const byPhone = await profileIdForPhone(phoneNumber);
+  if (byPhone) {
+    await supabase.from(PROFILES_TABLE).update({ firebase_uid: uid }).eq('id', byPhone);
+    return byPhone;
   }
 
   // A brand-new user. The id is minted here rather than taken from the uid,
