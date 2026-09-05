@@ -1,8 +1,10 @@
 import notifee, {
   AlarmType,
+  AndroidCategory,
   AndroidImportance,
   AndroidNotificationSetting,
   AndroidStyle,
+  AndroidVisibility,
   AuthorizationStatus,
   Event,
   EventType,
@@ -21,9 +23,11 @@ import {
   setBackgroundMessageHandler,
 } from '@react-native-firebase/messaging';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 
+import ActiveReminder from './ActiveReminder';
 import NotificationHistory from './NotificationHistory';
+import { primaryQuickAmount } from '../utils/hydrationAmounts';
 import {
   DEFAULT_SLEEP_SCHEDULE,
   SleepSchedule,
@@ -43,11 +47,52 @@ import type { NotificationKind } from '../types';
  * notice. Bumping the id is the only way a change to these settings actually
  * reaches an existing install.
  */
-const REMINDER_CHANNEL_ID = 'hydration-reminders-v2';
+export const REMINDER_CHANNEL_ID = 'hydration-reminders-v3';
 /** Retired ids, deleted on startup so they don't linger in system settings. */
-const LEGACY_CHANNEL_IDS = ['hydration-reminders'];
+const LEGACY_CHANNEL_IDS = ['hydration-reminders', 'hydration-reminders-v2'];
 const REMINDER_ID_PREFIX = 'hydration-reminder-';
+/**
+ * Id of the one-shot nudge that brings a snoozed reminder back.
+ *
+ * Deliberately outside `REMINDER_ID_PREFIX`: the cadence rebuild cancels every
+ * id carrying that prefix, and it runs on every foreground. A snooze sharing
+ * the prefix would therefore be wiped the moment the user opened the app —
+ * which is the one thing that must not happen to a reminder they asked to be
+ * reminded about later. It is cancelled explicitly, when the reminder is
+ * actually answered.
+ */
+const SNOOZE_ID = 'hydration-snooze-nudge';
 const PENDING_PROMPT_KEY = 'getvari_pending_hydration_prompt';
+
+/**
+ * The app's own reminder sound, as `res/raw/getvari_reminder.wav`.
+ *
+ * Android names raw resources without their extension. The reminder used the
+ * system default, which on a phone full of chat apps is indistinguishable from
+ * any of them — a sound of our own is the difference between "something
+ * pinged" and "that's the water one".
+ *
+ * Swapping the file is enough to rebrand it, but note the channel rule above:
+ * a sound change only reaches an existing install when the channel id is
+ * bumped too.
+ */
+const REMINDER_SOUND = 'getvari_reminder';
+
+/**
+ * Press-action ids carried by the reminder.
+ *
+ * `default` is deliberately not reused for any of them: the background handler
+ * has to be able to tell "the user tapped the body" (open the app) from "the
+ * user pressed Snooze" (do not open the app at all), and the id is the only
+ * thing that distinguishes them.
+ */
+export const REMINDER_PRESS_ACTION = 'open-hydration-chat';
+export const REMINDER_LOG_ACTION = 'hydration-log-primary';
+export const REMINDER_SNOOZE_ACTION = 'hydration-snooze';
+export const REMINDER_FULL_SCREEN_ACTION = 'hydration-full-screen';
+
+/** How long the notification's inline "Snooze" button pushes a reminder back. */
+export const NOTIFICATION_SNOOZE_MIN = 15;
 /**
  * The sleep window is cached on the device rather than read from the profile
  * row, because scheduling runs from places that have no Supabase session in
@@ -211,6 +256,76 @@ const androidOptions = (
       }
     : {}),
 });
+
+/**
+ * The reminder notification, in the one shape every path that raises it uses.
+ *
+ * Three things here are what turn the old passive nudge into something the
+ * user is actually asked to answer:
+ *
+ * **`fullScreenAction`** — Android launches the activity over whatever is on
+ * screen (and, with `showWhenLocked` on `MainActivity`, over the lock screen)
+ * instead of dropping a banner that scrolls away. The app then shows the
+ * reminder screen, because `ActiveReminder` is holding an unanswered reminder.
+ * Where the OS refuses — the channel demoted, or the Android 14+
+ * `USE_FULL_SCREEN_INTENT` grant missing — it silently falls back to a
+ * heads-up banner, and the two inline actions below are still there.
+ *
+ * **`actions`** — "Log <primary amount>" and "Snooze" resolve the reminder
+ * from the shade itself, without opening the app. That is what makes the
+ * common case one press rather than "tap, wait for the app, choose, confirm".
+ *
+ * **`autoCancel: false`** — pressing an action must not make the notification
+ * vanish before its handler has run; the handlers cancel it themselves once
+ * they have done the work.
+ */
+const reminderNotification = ({ id, eventId }: { id: string; eventId: string }): Notification => {
+  const primary = primaryQuickAmount();
+
+  return {
+    id,
+    title: REMINDER_TITLE,
+    body: REMINDER_BODY,
+    data: {
+      type: HYDRATION_REMINDER_TYPE,
+      eventId,
+      // Carried on the notification so a background action press knows what
+      // "Log" meant without having to read the config it may not have loaded.
+      primaryMl: String(primary.ml),
+    },
+    android: {
+      ...androidOptions(REMINDER_CHANNEL_ID, REMINDER_BODY, {
+        importance: AndroidImportance.HIGH,
+        pressAction: { id: REMINDER_PRESS_ACTION, launchActivity: 'default' },
+        summary: 'Hydration reminder',
+      }),
+      // ALARM is what tells the OS this is time-critical: it is the category
+      // that survives Do Not Disturb's "alarms only" mode and that ranks the
+      // notification above the social chatter it was getting lost in.
+      category: AndroidCategory.ALARM,
+      visibility: AndroidVisibility.PUBLIC,
+      autoCancel: false,
+      // A timestamp on the notification answers "how long has this been
+      // sitting here?", which matters once a reminder can outlive its moment.
+      showTimestamp: true,
+      fullScreenAction: {
+        id: REMINDER_FULL_SCREEN_ACTION,
+        launchActivity: 'default',
+      },
+      actions: [
+        {
+          title: `Log ${primary.label}`,
+          pressAction: { id: REMINDER_LOG_ACTION, launchActivity: 'default' },
+        },
+        {
+          title: `Snooze ${NOTIFICATION_SNOOZE_MIN}m`,
+          // No `launchActivity`: snoozing must not drag the app to the front.
+          pressAction: { id: REMINDER_SNOOZE_ACTION },
+        },
+      ],
+    },
+  };
+};
 
 class NotificationService {
   /** Serialises reminder (re)scheduling so overlapping calls can't interleave. */
@@ -463,12 +578,22 @@ class NotificationService {
     return await notifee.createChannel({
       id: REMINDER_CHANNEL_ID,
       name: 'Hydration Reminders',
+      // HIGH is the floor for a heads-up banner, and it is also the floor for
+      // a full-screen intent: Android drops the full-screen behaviour of a
+      // notification on a channel the user has demoted, and shows the banner
+      // instead. That degradation is intentional and is left alone.
       importance: AndroidImportance.HIGH,
       // A reminder the user cannot hear is not a reminder. Without these the
       // channel is created silent, which is how every nudge so far arrived.
-      sound: 'default',
+      sound: REMINDER_SOUND,
       vibration: true,
-      vibrationPattern: [300, 500],
+      // Two pulses with a gap, rather than one long buzz, so the reminder is
+      // recognisable through a pocket without looking at the screen.
+      vibrationPattern: [200, 400, 200, 600],
+      // The reminder is an alarm-shaped thing; showing it in full on the lock
+      // screen is what lets the user act on it without unlocking first.
+      visibility: AndroidVisibility.PUBLIC,
+      bypassDnd: false,
     });
   }
 
@@ -577,32 +702,25 @@ class NotificationService {
         const trigger: TimestampTrigger = {
           type: TriggerType.TIMESTAMP,
           timestamp,
-          // At a 2-hour cadence Android's ~5-minute batching grid is noise, so
-          // the ordinary exact-and-allow-while-idle alarm is enough — it still
-          // fires in Doze, and it does not put the system "next alarm" icon in
-          // the status bar the way `SET_ALARM_CLOCK` does. (That heavier alarm
-          // type was here because the interval used to be 2 minutes, which
-          // nothing weaker could hold.)
-          alarmManager: { type: AlarmType.SET_EXACT_AND_ALLOW_WHILE_IDLE },
+          // `SET_ALARM_CLOCK` is the only alarm type Android exempts from Doze
+          // and app-standby outright. The weaker
+          // `SET_EXACT_AND_ALLOW_WHILE_IDLE` that was here fires in Doze too,
+          // but the OS still rate-limits it to roughly one per app every nine
+          // minutes and OEM battery managers push it further — which is the
+          // "reminder turns up half an hour late" the user reported. The cost
+          // is the system's next-alarm icon in the status bar; for a reminder
+          // that now opens a full screen and expects an answer, being on time
+          // is worth more than a clean status bar.
+          alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
         };
 
         await notifee.createTriggerNotification(
-          {
+          reminderNotification({
             id: `${REMINDER_ID_PREFIX}${slot}`,
-            title: REMINDER_TITLE,
-            body: REMINDER_BODY,
             // The scheduled timestamp makes the id unique per reminder while
             // staying identical across every delivery of the same press.
-            data: {
-              type: HYDRATION_REMINDER_TYPE,
-              eventId: `${REMINDER_ID_PREFIX}${slot}@${timestamp}`,
-            },
-            android: androidOptions(REMINDER_CHANNEL_ID, REMINDER_BODY, {
-              importance: AndroidImportance.HIGH,
-              pressAction: { id: 'open-hydration-chat', launchActivity: 'default' },
-              summary: 'Hydration reminder',
-            }),
-          },
+            eventId: `${REMINDER_ID_PREFIX}${slot}@${timestamp}`,
+          }),
           trigger
         );
       }
@@ -639,6 +757,340 @@ class NotificationService {
       }
     } catch (error) {
       console.error('[Reminders] Failed to cancel:', error);
+    }
+  }
+
+  /**
+   * Fire a reminder in `seconds`, for testing the full-screen behaviour.
+   *
+   * The real cadence is two hours, which makes every manual check of the
+   * lock-screen takeover, the sound, and the shade's action buttons a two-hour
+   * wait. Shortening the interval to test it is exactly the change that once
+   * shipped a two-minute reminder loop to real users, so this is a separate
+   * one-shot instead: it queues a single genuine reminder — same builder, same
+   * channel, same alarm type — and touches neither the cadence nor the queue.
+   *
+   * Guarded by `__DEV__` at the only call site (the bell menu), so it cannot
+   * reach a release build. The delay exists so the phone can be locked before
+   * it fires, which is the case worth watching.
+   */
+  async fireTestReminder(seconds: number = 10): Promise<number> {
+    const timestamp = Date.now() + seconds * 1000;
+
+    await this.createNotificationChannel();
+    await notifee.createTriggerNotification(
+      reminderNotification({
+        id: `${REMINDER_ID_PREFIX}test`,
+        eventId: `${REMINDER_ID_PREFIX}test@${timestamp}`,
+      }),
+      {
+        type: TriggerType.TIMESTAMP,
+        timestamp,
+        alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
+      } satisfies TimestampTrigger
+    );
+
+    console.log(`[Reminders] Test reminder queued for ${new Date(timestamp).toLocaleTimeString()}.`);
+    return timestamp;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * The reminder lifecycle, shared by the foreground and background handlers
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Apply one notifee event to the reminder's state.
+   *
+   * The same four outcomes have to be handled whether the app is in front of
+   * the user, backgrounded, or not running — Android delivers the identical
+   * event to `onForegroundEvent` and `onBackgroundEvent` depending only on
+   * where the app happens to be. Keeping the decision in one function is what
+   * stops the two paths from drifting, which is how "snooze works from the
+   * shade but not from the app" bugs are born.
+   *
+   * Returns what the caller should do next, because that part *is* different:
+   * only a mounted app can open the reminder screen.
+   */
+  async handleReminderEvent(
+    type: EventType,
+    detail: Event['detail']
+  ): Promise<'open-prompt' | 'log-primary' | 'none'> {
+    const notification = detail.notification;
+    if (notification?.data?.type !== HYDRATION_REMINDER_TYPE) return 'none';
+
+    const eventId = readReminderEventId(notification);
+
+    if (type === EventType.DELIVERED) {
+      await this.noteReminderDelivered(notification);
+      return 'none';
+    }
+
+    if (type === EventType.DISMISSED) {
+      // Swiping the shade clear is housekeeping, not an answer. The reminder
+      // is kept and pushed back half an hour, which is the direct fix for
+      // "I remove the notification and then I forget".
+      await ActiveReminder.raise(eventId);
+      const wakeAt = await ActiveReminder.dismissWithoutAnswer();
+      if (wakeAt !== null) {
+        await this.queueSnoozeNudge(wakeAt).catch(error =>
+          console.error('[Reminders] Failed to re-queue after dismissal:', error)
+        );
+      }
+      return 'none';
+    }
+
+    if (type === EventType.ACTION_PRESS) {
+      const actionId = detail.pressAction?.id;
+
+      if (actionId === REMINDER_SNOOZE_ACTION) {
+        await ActiveReminder.raise(eventId);
+        await this.snoozeReminder(NOTIFICATION_SNOOZE_MIN);
+        return 'none';
+      }
+
+      if (actionId === REMINDER_LOG_ACTION) {
+        // The write itself is the caller's job: it needs the authenticated
+        // Supabase session and the shared idempotency rules, neither of which
+        // belong in the notification layer.
+        await ActiveReminder.raise(eventId);
+        return 'log-primary';
+      }
+    }
+
+    if (type === EventType.PRESS || type === EventType.ACTION_PRESS) {
+      await ActiveReminder.raise(eventId);
+      return 'open-prompt';
+    }
+
+    return 'none';
+  }
+
+  /**
+   * The amount the notification's "Log" button offered, taken from the
+   * notification itself rather than from the config.
+   *
+   * A background handler may be running before the admin config has been
+   * fetched, and it must log the amount whose label the user actually read.
+   */
+  readPrimaryAmountMl(notification?: Notification | null): number {
+    const stamped = Number(notification?.data?.primaryMl);
+    if (Number.isFinite(stamped) && stamped > 0) return stamped;
+    return primaryQuickAmount().ml;
+  }
+
+  /**
+   * Watch reminder deliveries, dismissals and action presses while the app is
+   * foregrounded. Returns an unsubscribe function.
+   *
+   * `onAction` receives the same verdict the background handler acts on, so a
+   * "Log" pressed with the app open behaves exactly as one pressed with it
+   * closed.
+   */
+  startReminderLifecycle(
+    onAction: (
+      verdict: 'open-prompt' | 'log-primary',
+      context: { eventId: string; amountMl: number }
+    ) => void
+  ): () => void {
+    return notifee.onForegroundEvent(({ type, detail }) => {
+      this.handleReminderEvent(type, detail)
+        .then(verdict => {
+          if (verdict === 'none') return;
+          onAction(verdict, {
+            eventId: readReminderEventId(detail.notification),
+            // Read off the notification the user actually pressed, so the
+            // amount written is the one whose label was on the button.
+            amountMl: this.readPrimaryAmountMl(detail.notification),
+          });
+        })
+        .catch(error => console.error('[Reminders] Foreground event failed:', error));
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Snooze, reschedule, and the outstanding-reminder state
+   *
+   * A reminder used to be over the moment it was delivered: swipe it away and
+   * nothing remembered it had ever fired. Everything below exists so that a
+   * reminder stays a question until the user answers it — snoozing moves it,
+   * dismissing it postpones it, and only logging (or an explicit skip) ends it.
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Record that a reminder has just been delivered, so the app knows there is
+   * an unanswered one even if the notification never gets tapped.
+   *
+   * Called from every delivery path — foreground event, background event, and
+   * the tray sweep on open — because none of them is guaranteed to run. They
+   * all pass the same event id, and `ActiveReminder.raise` collapses repeats.
+   */
+  async noteReminderDelivered(notification?: Notification | null): Promise<void> {
+    if (notification?.data?.type !== HYDRATION_REMINDER_TYPE) return;
+    await ActiveReminder.raise(readReminderEventId(notification));
+  }
+
+  /**
+   * Push the outstanding reminder back by `minutes` and queue the nudge that
+   * brings it back.
+   *
+   * The re-nudge is a single one-shot notification rather than a rebuild of
+   * the whole cadence: the 2-hourly queue is still standing and still correct,
+   * and a snooze is an extra beat inside it, not a replacement for it.
+   */
+  async snoozeReminder(minutes: number): Promise<number | null> {
+    const wakeAt = await ActiveReminder.snooze(minutes);
+    if (wakeAt === null) return null;
+
+    try {
+      // Clear the notification being snoozed, so the shade does not show a
+      // reminder the user has already dealt with.
+      await this.clearDisplayedReminders();
+      await this.queueSnoozeNudge(wakeAt);
+      console.log(`[Reminders] Snoozed ${minutes}m, returning at ${new Date(wakeAt).toISOString()}.`);
+    } catch (error) {
+      console.error('[Reminders] Failed to queue snooze:', error);
+    }
+    return wakeAt;
+  }
+
+  /**
+   * Move the outstanding reminder to a specific wall-clock time.
+   *
+   * Distinct from a snooze in intent rather than in mechanism: "remind me at
+   * 4pm" is a decision about the day, "snooze 15 minutes" is a decision about
+   * right now. A time already past, or one inside the sleep window, is refused
+   * — silently accepting either would leave the user believing a reminder is
+   * coming that never will.
+   */
+  async rescheduleReminderAt(timestamp: number): Promise<boolean> {
+    const now = Date.now();
+    if (!Number.isFinite(timestamp) || timestamp <= now) return false;
+    if (await this.isSleeping(timestamp)) return false;
+
+    const minutes = (timestamp - now) / 60000;
+    return (await this.snoozeReminder(minutes)) !== null;
+  }
+
+  /** Queue the one-shot notification that re-raises a snoozed reminder. */
+  private async queueSnoozeNudge(timestamp: number): Promise<void> {
+    await this.createNotificationChannel();
+    await this.cancelSnoozeNudge();
+
+    await notifee.createTriggerNotification(
+      reminderNotification({
+        id: SNOOZE_ID,
+        // A fresh event id: this is a new delivery the user has not seen, and
+        // reusing the snoozed one would have the dedupe swallow it.
+        eventId: `${SNOOZE_ID}@${timestamp}`,
+      }),
+      {
+        type: TriggerType.TIMESTAMP,
+        timestamp,
+        alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
+      } satisfies TimestampTrigger
+    );
+  }
+
+  /** Drop a queued snooze nudge — used when the reminder is answered instead. */
+  async cancelSnoozeNudge(): Promise<void> {
+    try {
+      const queued = await notifee.getTriggerNotificationIds();
+      if (queued.includes(SNOOZE_ID)) {
+        await notifee.cancelTriggerNotifications([SNOOZE_ID]);
+      }
+    } catch (error) {
+      console.error('[Reminders] Failed to cancel snooze nudge:', error);
+    }
+  }
+
+  /**
+   * The user answered: clear the outstanding reminder, the queued snooze and
+   * anything still in the shade.
+   *
+   * Called after a successful log and after an explicit skip. The 2-hourly
+   * cadence is *not* touched here — a hydration write resets it through
+   * `HydrationService`, and a skip should leave it exactly as it was.
+   */
+  async resolveActiveReminder(): Promise<void> {
+    await ActiveReminder.resolve();
+    await this.cancelSnoozeNudge();
+    await this.clearDisplayedReminders();
+  }
+
+  /** Take reminder notifications out of the shade, leaving the queue alone. */
+  private async clearDisplayedReminders(): Promise<void> {
+    try {
+      const displayed = await notifee.getDisplayedNotifications();
+      const ids = displayed
+        .map(entry => entry.id)
+        .filter((id): id is string => !!id && (id.startsWith(REMINDER_ID_PREFIX) || id === SNOOZE_ID));
+      if (ids.length) await notifee.cancelDisplayedNotifications(ids);
+    } catch (error) {
+      console.error('[Reminders] Failed to clear displayed reminders:', error);
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Full-screen reminders
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Whether a reminder would actually take over the screen, or quietly fall
+   * back to a banner.
+   *
+   * Two independent things can suppress it, and both belong to the user: the
+   * Android 14+ full-screen-intent grant, and the channel's importance (a
+   * channel the user has turned down below HIGH loses the full-screen
+   * behaviour). Both are reported here so the app can explain the actual
+   * reason rather than guessing.
+   */
+  async fullScreenReminderStatus(): Promise<{
+    granted: boolean;
+    channelAllows: boolean;
+    available: boolean;
+  }> {
+    if (Platform.OS !== 'android') {
+      // iOS has no equivalent; the in-app prompt is the whole feature there.
+      return { granted: false, channelAllows: false, available: false };
+    }
+
+    let granted = true;
+    try {
+      const native = NativeModules.FullScreenReminderModule;
+      if (native?.canUseFullScreenIntent) {
+        granted = await native.canUseFullScreenIntent();
+      }
+    } catch (error) {
+      console.warn('[Reminders] Could not read full-screen intent state:', error);
+    }
+
+    let channelAllows = true;
+    try {
+      const channel = await notifee.getChannel(REMINDER_CHANNEL_ID);
+      // A channel that does not exist yet has not been demoted by anyone.
+      if (channel) {
+        channelAllows = (channel.importance ?? AndroidImportance.HIGH) >= AndroidImportance.HIGH;
+      }
+    } catch (error) {
+      console.warn('[Reminders] Could not read reminder channel:', error);
+    }
+
+    return { granted, channelAllows, available: granted && channelAllows };
+  }
+
+  /** Sends the user to the setting that allows full-screen reminders. */
+  async openFullScreenReminderSettings(): Promise<void> {
+    try {
+      const native = NativeModules.FullScreenReminderModule;
+      if (native?.openFullScreenIntentSettings) {
+        const opened = await native.openFullScreenIntentSettings();
+        if (opened) return;
+      }
+      // No module, or the OEM has no such screen: the app's notification
+      // settings are the nearest place the user can act.
+      await notifee.openNotificationSettings(REMINDER_CHANNEL_ID);
+    } catch (error) {
+      console.error('[Reminders] Failed to open full-screen settings:', error);
     }
   }
 
@@ -815,10 +1267,17 @@ class NotificationService {
       const displayed = await notifee.getDisplayedNotifications();
       for (const entry of displayed) {
         const shownAt = entry.date ? Date.parse(entry.date) : NaN;
-        await NotificationHistory.recordDelivery(
-          entry.notification,
-          Number.isFinite(shownAt) ? shownAt : Date.now()
-        );
+        const deliveredAt = Number.isFinite(shownAt) ? shownAt : Date.now();
+        await NotificationHistory.recordDelivery(entry.notification, deliveredAt);
+
+        // A reminder still sitting in the tray is a reminder nobody has
+        // answered. The delivery event that would have recorded it may never
+        // have reached JS — a headless task Android skipped under memory
+        // pressure, or a phone that was simply off — so the tray itself is the
+        // last reliable place to notice it.
+        if (entry.notification?.data?.type === HYDRATION_REMINDER_TYPE) {
+          await ActiveReminder.raise(readReminderEventId(entry.notification), deliveredAt);
+        }
       }
     } catch (error) {
       console.error('[Notifications] Failed to sync delivered notifications:', error);

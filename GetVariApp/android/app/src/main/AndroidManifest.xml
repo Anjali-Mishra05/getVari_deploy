@@ -17,6 +17,23 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- A hydration reminder is raised as a full-screen intent: it opens the
+         app's reminder screen over whatever is on the display (and over the
+         lock screen) instead of sitting silently in the shade waiting to be
+         swiped away.
+
+         On Android 14+ this permission is only granted at install time to apps
+         whose declared purpose is calling or alarms; everything else has to
+         send the user to ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT to grant it.
+         `NotificationService.canUseFullScreenReminders()` reads the live state,
+         and the reminder degrades to a high-importance heads-up notification
+         with inline actions wherever the grant is missing — so the feature is
+         never all-or-nothing. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+    <!-- Keeps the reminder screen legible when it wakes a locked phone. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <application
       android:name=".MainApplication"
       android:label="@string/app_name"
@@ -26,12 +43,18 @@
       android:theme="@style/AppTheme"
       android:usesCleartextTraffic="true"
       android:supportsRtl="true">
+      <!-- `showWhenLocked` / `turnScreenOn`: the full-screen reminder has to be
+           readable and actionable on a locked, dark phone, which is the whole
+           point of raising it that way. These are the manifest half of the
+           flags MainActivity also sets at runtime for API 27+. -->
       <activity
         android:name=".MainActivity"
         android:label="@string/app_name"
         android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
         android:launchMode="singleTask"
         android:windowSoftInputMode="adjustResize"
+        android:showWhenLocked="true"
+        android:turnScreenOn="true"
         android:exported="true">
         <intent-filter>
             <action android:name="android.intent.action.MAIN" />

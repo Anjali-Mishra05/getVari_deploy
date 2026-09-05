@@ -47,6 +47,28 @@ export const quickLogAmounts = (): QuickAmount[] =>
   }));
 
 /**
+ * The amount to offer pre-selected.
+ *
+ * A reminder exists to get one number written down, so every surface that logs
+ * water starts with an amount already chosen rather than with nothing — the
+ * user confirms instead of choosing *and* confirming. The admin config's
+ * `primary` flag decides which one; if a published list marks none (or marks
+ * several), the first amount wins, so there is always exactly one answer.
+ */
+export const primaryQuickAmount = (): QuickAmount => {
+  const amounts = quickLogAmounts();
+  return (
+    amounts.find(amount => amount.primary) ??
+    amounts[0] ??
+    // The config store guarantees a non-empty list, but this is read on the
+    // reminder screen — the one surface that appears over a locked phone with
+    // no way for the user to retreat from a crash — so it does not rely on
+    // that guarantee holding.
+    { ml: 500, label: '500 ml', caption: captionFor(500), primary: true }
+  );
+};
+
+/**
  * The shipped amounts, for the handful of call sites that need a value rather
  * than a call. Prefer `quickLogAmounts()`, which follows the admin config.
  */

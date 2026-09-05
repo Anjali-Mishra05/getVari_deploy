@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { AlarmClock, BellOff, Check, Droplets, MessageCircle, Trash2, Bell } from 'lucide-react-native';
+import { AlarmClock, BellOff, Check, Droplets, MessageCircle, Monitor, Trash2, Bell } from 'lucide-react-native';
 
 import Sheet, { ICON_HIT_SLOP } from './ui/Sheet';
 
@@ -183,6 +183,18 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => Date.now());
   const [alarmsBatched, setAlarmsBatched] = useState(false);
+  /**
+   * True when a reminder would quietly arrive as a banner instead of taking
+   * over the screen.
+   *
+   * From Android 14 the full-screen grant is auto-given only to calling and
+   * alarm-clock apps; a hydration reminder is neither, so on a modern phone
+   * this starts revoked and the feature silently degrades. The user is the
+   * only one who can turn it on, and this sheet is where they come looking
+   * when reminders are not behaving — the same reasoning as the alarm banner
+   * below it.
+   */
+  const [fullScreenBlocked, setFullScreenBlocked] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -212,6 +224,9 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
       // reminders is the right place to tell them it is off.
       const exact = await NotificationService.hasExactAlarmPermission();
       if (!cancelled) setAlarmsBatched(!exact);
+
+      const fullScreen = await NotificationService.fullScreenReminderStatus();
+      if (!cancelled) setFullScreenBlocked(!fullScreen.available);
     };
 
     open();
@@ -305,6 +320,80 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
         ) : null
       }
     >
+          {fullScreenBlocked && (
+            <TouchableOpacity
+              onPress={() => NotificationService.openFullScreenReminderSettings()}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Allow reminders to open full screen"
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                marginHorizontal: 20,
+                marginTop: 14,
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                borderRadius: 16,
+                backgroundColor: 'rgba(0,242,254,0.06)',
+                borderWidth: 1,
+                borderColor: 'rgba(0,242,254,0.22)',
+              }}
+            >
+              <Monitor color={ACCENT} size={18} />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={{ color: ACCENT, fontSize: 12, fontWeight: '900' }}>
+                  Reminders open in the background
+                </Text>
+                <Text style={{ color: '#94a3b8', fontSize: 11, lineHeight: 15, marginTop: 2 }}>
+                  Tap to let a reminder open full screen, so it is not missed.
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/*
+            Development only, and compiled out of a release build. The real
+            cadence is two hours, which would make every manual check of the
+            lock-screen takeover a two-hour wait.
+          */}
+          {__DEV__ && (
+            <TouchableOpacity
+              onPress={async () => {
+                const at = await NotificationService.fireTestReminder(10);
+                Alert.alert(
+                  'Test reminder queued',
+                  `It will fire at ${formatClock(at)}. Lock the phone now to see it take over the screen.`
+                );
+              }}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Fire a test reminder in ten seconds"
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                marginHorizontal: 20,
+                marginTop: 14,
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                borderRadius: 16,
+                backgroundColor: 'rgba(148,163,184,0.06)',
+                borderWidth: 1,
+                borderStyle: 'dashed',
+                borderColor: 'rgba(148,163,184,0.3)',
+              }}
+            >
+              <AlarmClock color="#94a3b8" size={18} />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={{ color: '#cbd5e1', fontSize: 12, fontWeight: '900' }}>
+                  Fire a test reminder (10s)
+                </Text>
+                <Text style={{ color: '#64748b', fontSize: 11, lineHeight: 15, marginTop: 2 }}>
+                  Debug builds only. Lock the phone to watch it come up.
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
           {alarmsBatched && (
             <TouchableOpacity
               onPress={() => NotificationService.openExactAlarmSettings()}

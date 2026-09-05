@@ -18,9 +18,15 @@ const mockQueued: Array<{ notification: any; trigger: any }> = [];
 const mockOsQueue = new Set<string>();
 let mockAuthStatus = 1; // AuthorizationStatus.AUTHORIZED
 const mockCancelledIds: string[] = [];
+/** Channels the fake OS holds, so the immutability rule can be asserted. */
+const mockChannels = new Map<string, any>();
+const mockDeletedChannels: string[] = [];
 
 jest.mock('react-native', () => ({
   Platform: { OS: 'android', Version: 33 },
+  // The full-screen-intent bridge. Absent by default, which is exactly the
+  // shape the service has to cope with on iOS and on a build without it.
+  NativeModules: {},
 }));
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
@@ -42,8 +48,16 @@ jest.mock('@notifee/react-native', () => ({
   __esModule: true,
   default: {
     requestPermission: () => Promise.resolve({ authorizationStatus: mockAuthStatus }),
-    createChannel: () => Promise.resolve('hydration-reminders-v2'),
-    deleteChannel: () => Promise.resolve(),
+    createChannel: (channel: any) => {
+      mockChannels.set(channel.id, channel);
+      return Promise.resolve(channel.id);
+    },
+    deleteChannel: (id: string) => {
+      mockDeletedChannels.push(id);
+      mockChannels.delete(id);
+      return Promise.resolve();
+    },
+    getChannel: (id: string) => Promise.resolve(mockChannels.get(id) ?? null),
     getTriggerNotificationIds: () => Promise.resolve([...mockOsQueue]),
     cancelTriggerNotifications: (ids: string[]) => {
       mockCancelledIds.push(...ids);
@@ -68,11 +82,13 @@ jest.mock('@notifee/react-native', () => ({
       Promise.resolve({ authorizationStatus: mockAuthStatus, android: { alarm: 1 } }),
   },
   AlarmType: { SET_ALARM_CLOCK: 1, SET_EXACT_AND_ALLOW_WHILE_IDLE: 0 },
+  AndroidCategory: { ALARM: 'alarm', REMINDER: 'reminder' },
   AndroidImportance: { DEFAULT: 3, HIGH: 4 },
   AndroidStyle: { BIGTEXT: 1 },
   AndroidNotificationSetting: { ENABLED: 1 },
+  AndroidVisibility: { PRIVATE: 0, PUBLIC: 1, SECRET: -1 },
   AuthorizationStatus: { DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
-  EventType: { PRESS: 1, DELIVERED: 3 },
+  EventType: { DISMISSED: 0, PRESS: 1, ACTION_PRESS: 2, DELIVERED: 3 },
   TriggerType: { TIMESTAMP: 0 },
 }));
 
@@ -97,6 +113,7 @@ import { DEFAULT_SLEEP_SCHEDULE, isAsleepAt } from '../src/utils/sleepWindow';
 import NotificationService, {
   DAILY_HORIZON_DAYS,
   DAILY_MESSAGE_TYPE,
+  REMINDER_CHANNEL_ID,
   REMINDER_INTERVAL_MS,
   REMINDER_COVERAGE_MS,
   HYDRATION_REMINDER_TYPE,
@@ -160,7 +177,7 @@ describe('N1: recurring hydration reminder', () => {
       expect(notification.body).toBe(
         'Time to hydrate! Please drink some water to stay hydrated.'
       );
-      expect(notification.android.channelId).toBe('hydration-reminders-v2');
+      expect(notification.android.channelId).toBe(REMINDER_CHANNEL_ID);
       eventIds.add(notification.data.eventId);
     }
     expect(eventIds.size).toBe(mockQueued.length);
@@ -238,7 +255,7 @@ describe('N17/N18: fixed-time daily messages', () => {
       expect([7, 22]).toContain(at.getHours());
       expect(at.getTime()).toBeGreaterThan(now);
       expect(notification.data.type).toBe(DAILY_MESSAGE_TYPE);
-      expect(notification.android.channelId).toBe('hydration-reminders-v2');
+      expect(notification.android.channelId).toBe(REMINDER_CHANNEL_ID);
     }
 
     // A week of both messages, minus the morning that has already gone by.

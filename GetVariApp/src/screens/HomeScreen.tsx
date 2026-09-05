@@ -10,9 +10,11 @@ import { AuthService } from '../services/AuthService';
 import { AIInsight, HydrationLog, UserProfile } from '../types';
 import AquaSageChat from '../chatbot/AquaSageChat';
 import NotificationService from '../services/NotificationService';
+import ActiveReminder, { ActiveReminderRecord } from '../services/ActiveReminder';
 import NotificationHistory from '../services/NotificationHistory';
 import NotificationCenter from '../components/NotificationCenter';
 import QuickLogSheet from '../components/QuickLogSheet';
+import ReminderFullScreen from '../components/ReminderFullScreen';
 import ProfileSheet from '../components/ProfileSheet';
 import ProfileEditSheet from '../components/ProfileEditSheet';
 import ChatBus from '../services/ChatBus';
@@ -54,6 +56,16 @@ const HomeScreen = ({ navigation }: any) => {
   const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [unseenNotifications, setUnseenNotifications] = useState(0);
   const [telemetryExpanded, setTelemetryExpanded] = useState(false);
+
+  /**
+   * The reminder the user still owes an answer to, if there is one.
+   *
+   * Held as state rather than read on demand because it is what decides
+   * whether the full-screen prompt is up, and it changes from outside React —
+   * a notification delivered while the app is open, a "Log" pressed in the
+   * shade, a snooze expiring. `ActiveReminder` publishes those changes.
+   */
+  const [activeReminder, setActiveReminder] = useState<ActiveReminderRecord | null>(null);
 
   // The quick-log station's three-step flow: propose an amount, confirm it
   // against the predicted recovery, then show the receipt. Nothing is written
@@ -105,6 +117,28 @@ const HomeScreen = ({ navigation }: any) => {
   /** Entry ids already poured into the recovery model, to keep it idempotent. */
   const ingestedLogIds = useRef<Set<string>>(new Set());
 
+  /**
+   * The write path, reachable from the mount-once effect below.
+   *
+   * Same reason as `ingestFluidRef`: that effect runs once and must not close
+   * over the first render's `logDrink`, but a notification action pressed at
+   * any point in the session has to go through the current one.
+   */
+  const logDrinkRef = useRef<(amountMl: number, source?: HydrationLog['source']) => Promise<boolean>>(
+    async () => false
+  );
+
+  /**
+   * True while the reminder screen is showing its "Logged" tick.
+   *
+   * A successful write settles the reminder straight away, which publishes a
+   * change that would otherwise take the screen down mid-confirmation — the
+   * user would press Log and watch the whole thing vanish without ever seeing
+   * that it worked. While this is set, the store's emptiness is ignored and
+   * the screen closes on its own timer instead.
+   */
+  const reminderConfirmingRef = useRef(false);
+
   useEffect(() => {
     fetchUserData();
     setupNotifications();
@@ -126,6 +160,47 @@ const HomeScreen = ({ navigation }: any) => {
     const unsubscribePress = NotificationService.onForegroundReminderPress(eventId => {
       ChatBus.openHydrationPrompt(eventId);
     });
+
+    // Deliveries, dismissals and the shade's own action buttons, for a
+    // reminder that arrives while the app is already open. The verdict is the
+    // one the background handler acts on, so the behaviour does not change
+    // with where the user happens to be.
+    const unsubscribeLifecycle = NotificationService.startReminderLifecycle(
+      (verdict, { amountMl }) => {
+        if (verdict === 'log-primary') {
+          // The write clears the reminder from inside `HydrationService`, so
+          // the prompt comes down on its own.
+          void logDrinkRef.current(amountMl);
+        }
+        // 'open-prompt' needs nothing here: raising the reminder already
+        // published a change, and the subscription below puts the screen up.
+      }
+    );
+
+    // The outstanding reminder drives the full-screen prompt. Read once for
+    // the current state, then kept in step with every change to it.
+    const syncActiveReminder = async () => {
+      try {
+        const next = await ActiveReminder.due();
+        setActiveReminder(current =>
+          next === null && reminderConfirmingRef.current ? current : next
+        );
+      } catch (error) {
+        console.error('[Reminders] Failed to read the active reminder:', error);
+      }
+    };
+    syncActiveReminder();
+    const unsubscribeReminder = ActiveReminder.subscribe(() => {
+      void syncActiveReminder();
+    });
+
+    // A snooze that expires while the app is open has no OS event to announce
+    // it — the queued nudge fires as a notification, but the user is already
+    // looking at the app. This is what makes the prompt reappear on time in
+    // that case; a minute's granularity matches the snooze options on offer.
+    const snoozeTick = setInterval(() => {
+      void syncActiveReminder();
+    }, 60 * 1000);
 
     // Everything shown while the app is foregrounded goes into the bell menu's
     // delivery log; background deliveries are recorded from index.js.
@@ -192,6 +267,8 @@ const HomeScreen = ({ navigation }: any) => {
       if (!returned) return;
 
       replayPendingPrompts();
+      // A reminder delivered, snoozed or answered while the app was away.
+      syncActiveReminder();
       refreshTodayLogs();
       refreshUnseen();
       ConfigService.refresh().catch(() => undefined);
@@ -203,7 +280,10 @@ const HomeScreen = ({ navigation }: any) => {
 
     return () => {
       unsubscribePress();
+      unsubscribeLifecycle();
       unsubscribeHistory();
+      unsubscribeReminder();
+      clearInterval(snoozeTick);
       historySub.remove();
       loggedSub.remove();
       appStateSub.remove();
@@ -339,6 +419,58 @@ const HomeScreen = ({ navigation }: any) => {
     },
     []
   );
+
+  logDrinkRef.current = logDrink;
+
+  /* ------------------------------------------------------------------ *
+   * The full-screen reminder
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Log from the reminder screen.
+   *
+   * The reminder is cleared by `HydrationService` itself on a successful
+   * write — every logging path in the app goes through it, so that is the one
+   * place the outstanding question can be settled without each caller having
+   * to remember to.
+   */
+  const logFromReminder = useCallback(
+    async (amountMl: number) => {
+      const ok = await logDrink(amountMl, 'manual');
+      // Hold the screen up for the tick. A failed write leaves the reminder
+      // standing, which is right — the user still owes it an answer.
+      if (ok) reminderConfirmingRef.current = true;
+      return ok;
+    },
+    [logDrink]
+  );
+
+  /** Push the reminder back; the screen comes down with it. */
+  const snoozeReminder = useCallback(async (minutes: number) => {
+    await NotificationService.snoozeReminder(minutes);
+    setActiveReminder(null);
+  }, []);
+
+  /**
+   * "Not now" — an answer, unlike a swipe, so the reminder is settled and the
+   * 2-hourly cadence is left to raise the next one in its own time.
+   */
+  const skipReminder = useCallback(async () => {
+    await NotificationService.resolveActiveReminder();
+    setActiveReminder(null);
+  }, []);
+
+  /**
+   * Take the screen down after a logged amount has been confirmed on screen.
+   *
+   * The reminder itself is already resolved by then, so this only has to drop
+   * the local copy — waiting for the store's change to propagate would leave
+   * the tick up for an extra beat.
+   */
+  const closeReminder = useCallback(() => {
+    reminderConfirmingRef.current = false;
+    setActiveReminder(null);
+  }, []);
 
   /** Confirmation accepted: write it, then swap the modal for the receipt. */
   const confirmPendingLog = async () => {
@@ -633,6 +765,22 @@ const HomeScreen = ({ navigation }: any) => {
           onLogWater={() => setQuickLogOpen(true)}
           onOpenProfile={() => setProfileOpen(true)}
           profileInitial={profileInitial}
+        />
+
+        {/*
+          Mounted last of the overlays and rendered above everything, because
+          an unanswered reminder outranks whatever else is on screen — that is
+          the whole difference between this and the notification it replaces.
+        */}
+        <ReminderFullScreen
+          visible={activeReminder !== null}
+          firedAt={activeReminder?.firedAt ?? null}
+          onLog={logFromReminder}
+          onSnooze={snoozeReminder}
+          onSkip={skipReminder}
+          onClose={closeReminder}
+          totalMl={totalWaterConsumed}
+          targetMl={targetMl}
         />
 
         <NotificationCenter

@@ -4,7 +4,7 @@ import { Check, Droplets } from 'lucide-react-native';
 
 import Button from './ui/Button';
 import Sheet from './ui/Sheet';
-import { quickLogAmounts } from '../utils/hydrationAmounts';
+import { primaryQuickAmount, quickLogAmounts } from '../utils/hydrationAmounts';
 import { formatMl } from '../utils/hydrationFormat';
 
 interface QuickLogSheetProps {
@@ -37,16 +37,23 @@ const QuickLogSheet: React.FC<QuickLogSheetProps> = ({
   totalMl,
   targetMl,
 }) => {
-  /** The amount the user has picked but not yet committed. */
-  const [selectedMl, setSelectedMl] = useState<number | null>(null);
+  /**
+   * The amount the user has picked but not yet committed.
+   *
+   * Starts on the amount most people log rather than on nothing. Opening the
+   * sheet to an empty selection meant two taps for the common case — choose
+   * 500 ml, then confirm — when the first of them was a foregone conclusion.
+   */
+  const [selectedMl, setSelectedMl] = useState<number | null>(() => primaryQuickAmount().ml);
   const [savingMl, setSavingMl] = useState<number | null>(null);
   const [loggedMl, setLoggedMl] = useState<number | null>(null);
   const [failed, setFailed] = useState(false);
 
-  // Every open starts clean, so a previous failure or tick is never inherited.
+  // Every open starts clean, so a previous failure or tick is never inherited
+  // — and back on the pre-selected amount, not on whatever was chosen last.
   useEffect(() => {
     if (!visible) return;
-    setSelectedMl(null);
+    setSelectedMl(primaryQuickAmount().ml);
     setSavingMl(null);
     setLoggedMl(null);
     setFailed(false);
@@ -71,9 +78,11 @@ const QuickLogSheet: React.FC<QuickLogSheetProps> = ({
   const select = (amountMl: number) => {
     if (savingMl !== null || loggedMl !== null) return;
     setFailed(false);
-    // Tapping the selected amount again clears it, so the sheet can be left
-    // with nothing chosen.
-    setSelectedMl(current => (current === amountMl ? null : amountMl));
+    // Tapping the selected amount again used to clear it. With an amount
+    // pre-selected that only leads to a disabled "Pick an amount" button the
+    // user has to tap their way back out of, so the sheet now always holds a
+    // valid choice and re-tapping the current one is a no-op.
+    setSelectedMl(amountMl);
   };
 
   const commit = async () => {
@@ -117,9 +126,11 @@ const QuickLogSheet: React.FC<QuickLogSheetProps> = ({
               const isSaving = savingMl === amount.ml;
               const isLogged = loggedMl === amount.ml;
               const isSelected = selectedMl === amount.ml;
-              // Selection is the strong state; `primary` only hints at the
-              // amount most people pick before one has been chosen.
-              const highlight = isSelected || isLogged || (selectedMl === null && amount.primary);
+              // Selection is now the only highlight state. The `primary` hint
+              // it used to share this with was there to point at the amount
+              // most people pick; that amount arrives already selected, so the
+              // hint would just be a second, weaker marker competing with it.
+              const highlight = isSelected || isLogged;
 
               return (
                 <TouchableOpacity
@@ -200,7 +211,7 @@ const QuickLogSheet: React.FC<QuickLogSheetProps> = ({
                     </Text>
                   </View>
 
-                  {amount.primary && selectedMl === null && !busy && (
+                  {amount.primary && !isSelected && !busy && (
                     <View
                       style={{
                         paddingHorizontal: 9,
