@@ -171,15 +171,31 @@ export interface NotificationRecord {
   /** Epoch ms of the first tap, or `null` while it has never been opened. */
   pressedAt: number | null;
   /**
-   * Epoch ms at which a *newer* notification of the same kind was opened,
+   * Epoch ms at which a *newer* notification of the same kind was answered,
    * which answers this one too.
    *
-   * Reminders repeat until the user logs something, so opening the latest
-   * nudge settles every earlier nudge asking the same question. Those become
-   * inert rather than being marked opened — the user never touched them, and
-   * the log should not claim otherwise.
+   * Reminders repeat until the user logs something, so logging against the
+   * latest nudge settles every earlier nudge asking the same question. Those
+   * become inert rather than being marked opened — the user never touched
+   * them, and the log should not claim otherwise.
    */
   supersededAt: number | null;
+  /**
+   * Epoch ms at which an intake was actually written for this reminder, or
+   * `null` if none ever was.
+   *
+   * Separate from `pressedAt` because opening a reminder and answering it are
+   * different events, and the log used to conflate them: a tap marked the row
+   * green and settled every earlier reminder, so walking away without drinking
+   * anything looked exactly like logging a glass. The user's report was "it
+   * still shows I logged water ... but in real I haven't marked water intake".
+   *
+   * Only a real write sets this, which is also what now drives superseding —
+   * an unanswered question must keep asking.
+   */
+  answeredAt: number | null;
+  /** Millilitres written when this reminder was answered, if it was. */
+  answeredMl: number | null;
 }
 
 export interface SmartAlert {

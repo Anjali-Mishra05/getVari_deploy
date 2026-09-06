@@ -174,14 +174,22 @@ describe('recording presses', () => {
   });
 });
 
-describe('opening one reminder settles the earlier ones', () => {
-  /** Three reminders delivered two minutes apart, none opened yet. */
-  const deliverThree = async () => {
-    await NotificationHistory.recordDelivery(reminder(1, 1_000) as any, 1_000);
-    await NotificationHistory.recordDelivery(reminder(2, 2_000) as any, 2_000);
-    await NotificationHistory.recordDelivery(reminder(3, 3_000) as any, 3_000);
-  };
+const deliverThree = async () => {
+  await NotificationHistory.recordDelivery(reminder(1, 1_000) as any, 1_000);
+  await NotificationHistory.recordDelivery(reminder(2, 2_000) as any, 2_000);
+  await NotificationHistory.recordDelivery(reminder(3, 3_000) as any, 3_000);
+};
 
+/**
+ * The reported defect: "when I open a notification and do not log any water
+ * then it still shows I logged water and marks all notifications as seen, but
+ * in real I haven't marked water intake."
+ *
+ * Opening a reminder used to settle every earlier one and paint the row as
+ * done. Opening is not answering: only an intake write settles anything, and
+ * an unanswered question has to keep asking.
+ */
+describe('opening a reminder does not answer it', () => {
   const byId = (entries: any[], slot: number, ts: number) =>
     entries.find(e => e.id === `hydration-reminder-${slot}@${ts}`)!;
 
@@ -196,9 +204,50 @@ describe('opening one reminder settles the earlier ones', () => {
     expect(byId(entries, 2, 2_000).pressedAt).toBeNull();
   });
 
-  it('leaves the earlier ones with no action to offer', async () => {
+  it('settles nothing, because no water was logged', async () => {
     await deliverThree();
     await NotificationHistory.recordPress(reminder(3, 3_000) as any, 9_000);
+
+    const entries = await NotificationHistory.list();
+    expect(byId(entries, 1, 1_000).supersededAt).toBeNull();
+    expect(byId(entries, 2, 2_000).supersededAt).toBeNull();
+  });
+
+  it('leaves the opened reminder still actionable, so the glass can be logged', async () => {
+    await deliverThree();
+    await NotificationHistory.recordPress(reminder(3, 3_000) as any, 9_000);
+
+    const entries = await NotificationHistory.list();
+    // Every row is still offering an action: nothing has been answered.
+    expect(entries.filter(isActionable)).toHaveLength(3);
+  });
+
+  it('records no amount for a reminder that was only looked at', async () => {
+    await deliverThree();
+    await NotificationHistory.recordPress(reminder(3, 3_000) as any, 9_000);
+
+    const opened = byId(await NotificationHistory.list(), 3, 3_000);
+    expect(opened.answeredAt).toBeNull();
+    expect(opened.answeredMl).toBeNull();
+  });
+});
+
+describe('answering a reminder settles it and the earlier ones', () => {
+  const byId = (entries: any[], slot: number, ts: number) =>
+    entries.find(e => e.id === `hydration-reminder-${slot}@${ts}`)!;
+
+  it('records the amount actually written', async () => {
+    await deliverThree();
+    await NotificationHistory.recordAnswered('hydration-reminder-3@3000', 500, 9_000);
+
+    const answered = byId(await NotificationHistory.list(), 3, 3_000);
+    expect(answered.answeredAt).toBe(9_000);
+    expect(answered.answeredMl).toBe(500);
+  });
+
+  it('settles every earlier reminder asking the same thing', async () => {
+    await deliverThree();
+    await NotificationHistory.recordAnswered('hydration-reminder-3@3000', 500, 9_000);
 
     const entries = await NotificationHistory.list();
     expect(byId(entries, 1, 1_000).supersededAt).toBe(9_000);
@@ -208,12 +257,34 @@ describe('opening one reminder settles the earlier ones', () => {
 
   it('leaves newer reminders still actionable', async () => {
     await deliverThree();
-    // The user opens the middle one; the newest is still unanswered.
-    await NotificationHistory.recordPress(reminder(2, 2_000) as any, 9_000);
+    await NotificationHistory.recordAnswered('hydration-reminder-2@2000', 250, 9_000);
 
     const entries = await NotificationHistory.list();
     expect(byId(entries, 1, 1_000).supersededAt).toBe(9_000);
     expect(isActionable(byId(entries, 3, 3_000))).toBe(true);
+  });
+
+  it('counts as having been seen, even when logged from the shade', async () => {
+    await deliverThree();
+    // The "Log 500 ml" button writes without ever opening the app.
+    await NotificationHistory.recordAnswered('hydration-reminder-3@3000', 500, 9_000);
+
+    expect(byId(await NotificationHistory.list(), 3, 3_000).pressedAt).toBe(9_000);
+  });
+
+  it('keeps the first answer; a repeat write does not move it', async () => {
+    await deliverThree();
+    await NotificationHistory.recordAnswered('hydration-reminder-3@3000', 500, 9_000);
+    await NotificationHistory.recordAnswered('hydration-reminder-3@3000', 250, 9_500);
+
+    const answered = byId(await NotificationHistory.list(), 3, 3_000);
+    expect(answered.answeredAt).toBe(9_000);
+    expect(answered.answeredMl).toBe(500);
+  });
+
+  it('never invents a row for a reminder this device never saw', async () => {
+    await NotificationHistory.recordAnswered('hydration-reminder-9@9000', 500, 9_000);
+    expect(await NotificationHistory.list()).toEqual([]);
   });
 
   it('does not settle notifications of a different kind', async () => {
@@ -224,43 +295,38 @@ describe('opening one reminder settles the earlier ones', () => {
     };
     await NotificationHistory.recordDelivery(push as any, 500);
     await NotificationHistory.recordDelivery(reminder(2, 2_000) as any, 2_000);
-    await NotificationHistory.recordPress(reminder(2, 2_000) as any, 9_000);
+    await NotificationHistory.recordAnswered('hydration-reminder-2@2000', 250, 9_000);
 
     const entries = await NotificationHistory.list();
-    // A hydration tap says nothing about an unrelated push.
+    // Logging water says nothing about an unrelated push.
     expect(isActionable(entries.find(e => e.id === 'push:500')!)).toBe(true);
   });
 
   it('keeps an already-opened earlier reminder marked as opened', async () => {
     await deliverThree();
     await NotificationHistory.recordPress(reminder(1, 1_000) as any, 5_000);
-    await NotificationHistory.recordPress(reminder(3, 3_000) as any, 9_000);
+    await NotificationHistory.recordAnswered('hydration-reminder-3@3000', 500, 9_000);
 
-    const entries = await NotificationHistory.list();
-    const first = byId(entries, 1, 1_000);
+    const first = byId(await NotificationHistory.list(), 1, 1_000);
     expect(first.pressedAt).toBe(5_000);
-    expect(first.supersededAt).toBeNull();
+    expect(first.supersededAt).toBe(9_000);
   });
 
-  it('settles earlier reminders even when the tapped one was never delivered', async () => {
-    await deliverThree();
-    // Cold start from a reminder whose delivery event never reached JS.
-    await NotificationHistory.recordPress(reminder(9, 9_000) as any, 9_500);
-
-    const entries = await NotificationHistory.list();
-    expect(entries.filter(isActionable)).toEqual([]);
-  });
-
-  it('reports actionable state for each row', () => {
-    const base = { id: 'a', title: '', body: '', kind: 'hydration_reminder' as const, deliveredAt: 1 };
-    expect(isActionable({ ...base, pressedAt: null, supersededAt: null })).toBe(true);
-    expect(isActionable({ ...base, pressedAt: 2, supersededAt: null })).toBe(false);
-    expect(isActionable({ ...base, pressedAt: null, supersededAt: 2 })).toBe(false);
+  it('reports actionable state from whether it was answered, not opened', () => {
+    const base = {
+      id: 'a', title: '', body: '', kind: 'hydration_reminder' as const,
+      deliveredAt: 1, answeredMl: null,
+    };
+    expect(isActionable({ ...base, pressedAt: null, supersededAt: null, answeredAt: null })).toBe(true);
+    // Opened but not answered: still actionable. This is the defect.
+    expect(isActionable({ ...base, pressedAt: 2, supersededAt: null, answeredAt: null })).toBe(true);
+    expect(isActionable({ ...base, pressedAt: 2, supersededAt: null, answeredAt: 3 })).toBe(false);
+    expect(isActionable({ ...base, pressedAt: null, supersededAt: 2, answeredAt: null })).toBe(false);
   });
 });
 
 describe('in-app taps from the bell menu', () => {
-  it('opens the row and settles the earlier ones', async () => {
+  it('opens the row without settling anything', async () => {
     await NotificationHistory.recordDelivery(reminder(1, 1_000) as any, 1_000);
     await NotificationHistory.recordDelivery(reminder(2, 2_000) as any, 2_000);
 
@@ -268,7 +334,9 @@ describe('in-app taps from the bell menu', () => {
 
     const entries = await NotificationHistory.list();
     expect(entries.find(e => e.id === 'hydration-reminder-2@2000')!.pressedAt).toBe(7_000);
-    expect(entries.find(e => e.id === 'hydration-reminder-1@1000')!.supersededAt).toBe(7_000);
+    // Tapping a row in the bell menu opens the logging screen; it does not
+    // log anything, so the earlier reminder is still outstanding.
+    expect(entries.find(e => e.id === 'hydration-reminder-1@1000')!.supersededAt).toBeNull();
   });
 
   it('never invents a row for an id that is not in the log', async () => {

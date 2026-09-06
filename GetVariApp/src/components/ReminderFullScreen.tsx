@@ -8,7 +8,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Check, Clock, Droplets } from 'lucide-react-native';
+import { Check, Clock, Droplets, MessageCircle } from 'lucide-react-native';
 
 import Button from './ui/Button';
 import { SNOOZE_OPTIONS_MIN } from '../services/ActiveReminder';
@@ -41,6 +41,15 @@ export interface ReminderFullScreenProps {
   onSnooze: (minutes: number) => Promise<void>;
   /** The user says they are not drinking now; the reminder is answered. */
   onSkip: () => Promise<void>;
+  /**
+   * Hand the reminder over to the chat.
+   *
+   * A reminder used to open the chatbot outright, which put a conversation in
+   * front of someone whose whole intent was to log a glass of water. The fast
+   * path is the buttons above; this is the way out for anyone who would rather
+   * describe what they drank, or ask something first.
+   */
+  onAskVari: () => void;
   /**
    * Take the screen down. Called once the confirmation tick has been on
    * screen long enough to be read — the write itself has already happened by
@@ -95,6 +104,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
   onLog,
   onSnooze,
   onSkip,
+  onAskVari,
   onClose,
   totalMl,
   targetMl,
@@ -471,6 +481,23 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
                   icon={<Clock color="#cbd5e1" size={16} />}
                   style={{ marginTop: 12 }}
                   testID="reminder-snooze"
+                />
+              )}
+
+              {!snoozeOpen && (
+                <Button
+                  label="Ask Vari instead"
+                  onPress={() => {
+                    onClose();
+                    onAskVari();
+                  }}
+                  variant="ghost"
+                  size="md"
+                  fullWidth
+                  disabled={busy}
+                  icon={<MessageCircle color="#94a3b8" size={15} />}
+                  style={{ marginTop: 8 }}
+                  testID="reminder-ask-vari"
                 />
               )}
             </>

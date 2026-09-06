@@ -15,6 +15,7 @@ import NotificationHistory, { isActionable } from '../services/NotificationHisto
 import NotificationService from '../services/NotificationService';
 import ChatBus from '../services/ChatBus';
 import { formatDeliveredAt, formatClock } from '../utils/notificationFormat';
+import { formatMl } from '../utils/hydrationFormat';
 import type { NotificationRecord } from '../types';
 
 interface NotificationCenterProps {
@@ -37,7 +38,25 @@ const NotificationRow: React.FC<{
 }> = ({ record, now, onOpen }) => {
   const isReminder = record.kind === 'hydration_reminder';
   const opened = record.pressedAt !== null;
+  const answered = record.answeredAt !== null;
   const actionable = isActionable(record);
+
+  /**
+   * Green, and a tick, mean an intake was written — nothing else.
+   *
+   * Opening used to paint the row green and read "OPENED", which is what the
+   * user saw as "it shows I logged water". Opening without drinking is now
+   * amber and says so, and the row stays tappable so the glass can still be
+   * logged from here.
+   */
+  const tone = answered ? 'answered' : actionable ? 'open' : 'settled';
+  const TONE = {
+    answered: { fg: '#10b981', bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.25)' },
+    open: opened
+      ? { fg: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.28)' }
+      : { fg: ACCENT, bg: 'rgba(0,242,254,0.1)', border: 'rgba(0,242,254,0.28)' },
+    settled: { fg: '#64748b', bg: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.08)' },
+  }[tone];
 
   // Only an unanswered notification is pressable. Once it is opened — or
   // settled by a newer one — the row is a record, not a control.
@@ -129,39 +148,33 @@ const NotificationRow: React.FC<{
               paddingHorizontal: 8,
               paddingVertical: 3,
               borderRadius: 8,
-              backgroundColor: opened
-                ? 'rgba(16,185,129,0.1)'
-                : actionable
-                ? 'rgba(0,242,254,0.1)'
-                : 'rgba(255,255,255,0.04)',
+              backgroundColor: TONE.bg,
               borderWidth: 1,
-              borderColor: opened
-                ? 'rgba(16,185,129,0.25)'
-                : actionable
-                ? 'rgba(0,242,254,0.28)'
-                : 'rgba(255,255,255,0.08)',
+              borderColor: TONE.border,
             }}
           >
-            {opened ? (
-              <Check color="#10b981" size={10} strokeWidth={3.5} />
+            {answered ? (
+              <Check color={TONE.fg} size={10} strokeWidth={3.5} />
             ) : actionable ? (
-              <MessageCircle color={ACCENT} size={10} strokeWidth={3} />
+              <MessageCircle color={TONE.fg} size={10} strokeWidth={3} />
             ) : (
-              <BellOff color="#64748b" size={10} strokeWidth={2.5} />
+              <BellOff color={TONE.fg} size={10} strokeWidth={2.5} />
             )}
             <Text
               style={{
-                color: opened ? '#10b981' : actionable ? ACCENT : '#64748b',
+                color: TONE.fg,
                 fontSize: 9,
                 fontWeight: '900',
                 letterSpacing: 0.8,
                 marginLeft: 5,
               }}
             >
-              {opened
-                ? `OPENED ${formatClock(record.pressedAt!)}`
+              {answered
+                ? `LOGGED ${formatMl(record.answeredMl ?? 0)} ${formatClock(record.answeredAt!)}`
+                : opened && actionable
+                ? `OPENED ${formatClock(record.pressedAt!)} · NOT LOGGED`
                 : actionable
-                ? 'TAP TO OPEN'
+                ? 'TAP TO LOG'
                 : 'SETTLED'}
             </Text>
           </View>
@@ -295,7 +308,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
 
   const deliveredSummary =
     records.length > 0
-      ? `${records.length} DELIVERED · ${records.filter(r => r.pressedAt !== null).length} OPENED`
+      ? `${records.length} DELIVERED · ${records.filter(r => r.answeredAt !== null).length} LOGGED`
       : 'DELIVERY LOG';
 
   return (

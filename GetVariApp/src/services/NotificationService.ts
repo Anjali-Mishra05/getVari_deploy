@@ -1011,7 +1011,25 @@ class NotificationService {
    * cadence is *not* touched here — a hydration write resets it through
    * `HydrationService`, and a skip should leave it exactly as it was.
    */
-  async resolveActiveReminder(): Promise<void> {
+  async resolveActiveReminder(amountMl?: number): Promise<void> {
+    // Read the outstanding reminder before clearing it: its event id is what
+    // ties the write to the row in the bell menu, and `resolve` drops it.
+    //
+    // This is the only path that marks a notification answered. Opening one
+    // deliberately does not, because it used to: a tap turned the row green
+    // and settled every earlier reminder, so a user who opened a nudge and
+    // drank nothing saw a log claiming otherwise.
+    if (amountMl !== undefined && amountMl > 0) {
+      try {
+        const outstanding = await ActiveReminder.current();
+        if (outstanding) {
+          await NotificationHistory.recordAnswered(outstanding.eventId, amountMl);
+        }
+      } catch (error) {
+        console.error('[Reminders] Failed to record the answer:', error);
+      }
+    }
+
     await ActiveReminder.resolve();
     await this.cancelSnoozeNudge();
     await this.clearDisplayedReminders();

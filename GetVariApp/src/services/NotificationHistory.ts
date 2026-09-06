@@ -46,6 +46,10 @@ const isRecord = (value: any): boolean =>
 const normalise = (value: any): NotificationRecord => ({
   ...value,
   supersededAt: typeof value.supersededAt === 'number' ? value.supersededAt : null,
+  // Rows written before answering was tracked cannot say whether they were
+  // answered, and must not claim they were: null reads as "never logged".
+  answeredAt: typeof value.answeredAt === 'number' ? value.answeredAt : null,
+  answeredMl: typeof value.answeredMl === 'number' ? value.answeredMl : null,
 });
 
 const readAll = async (): Promise<NotificationRecord[]> => {
@@ -116,16 +120,23 @@ const toRecord = (
   deliveredAt,
   pressedAt: null,
   supersededAt: null,
+  answeredAt: null,
+  answeredMl: null,
 });
 
 /**
- * Opening one nudge answers every earlier nudge asking the same thing, so
+ * *Answering* one nudge answers every earlier nudge asking the same thing, so
  * those stop offering an action.
  *
- * Scoped to the same `kind`: tapping a hydration reminder says nothing about
+ * This used to run on a bare press, which was the bug: opening a reminder and
+ * logging nothing settled every earlier reminder, so the bell menu showed a
+ * column of handled nudges for water the user had never drunk. An unanswered
+ * question has to keep asking, so only a real intake write settles anything.
+ *
+ * Scoped to the same `kind`: answering a hydration reminder says nothing about
  * an unrelated push notification sitting above it in the list. Entries
  * delivered at the same instant are left alone — only strictly older ones are
- * answered by this press.
+ * answered by this write.
  */
 const supersedeOlder = (
   entries: NotificationRecord[],
@@ -136,15 +147,28 @@ const supersedeOlder = (
     entry.id !== pivot.id &&
     entry.kind === pivot.kind &&
     entry.deliveredAt < pivot.deliveredAt &&
-    entry.pressedAt === null &&
+    // An earlier reminder the user opened but never answered is settled too:
+    // the drink answers its question as much as any other. `supersededAt` is
+    // independent of `pressedAt`, so the row still shows it was opened. The
+    // guard here used to be `pressedAt === null`, which — now that opening no
+    // longer settles anything — would have left those rows offering an action
+    // forever, inviting the same glass to be logged twice.
+    entry.answeredAt === null &&
     entry.supersededAt === null
       ? { ...entry, supersededAt: at }
       : entry
   );
 
-/** True while the notification still has an action the user can take. */
+/**
+ * True while the notification still has an action the user can take.
+ *
+ * Keyed on whether it was *answered*, not whether it was opened. Opening a
+ * reminder and logging nothing leaves the question outstanding, so the row
+ * stays tappable — previously the tap consumed it, and the one thing the user
+ * had left to reach the logging screen went inert the moment they looked at it.
+ */
 export const isActionable = (record: NotificationRecord): boolean =>
-  record.pressedAt === null && record.supersededAt === null;
+  record.answeredAt === null && record.supersededAt === null;
 
 export const NotificationHistory = {
   /**
@@ -182,24 +206,20 @@ export const NotificationHistory = {
         const id = readNotificationEventId(notification);
         const existing = entries.find(entry => entry.id === id);
 
+        // Opening settles nothing. A press means the user looked at the
+        // question, not that they answered it — see `supersedeOlder`.
         if (existing) {
           // First tap wins: re-delivery of the same press through another
           // path must not move the recorded time.
           if (existing.pressedAt !== null) return;
           const opened = { ...existing, pressedAt };
-          await writeAll(
-            supersedeOlder(
-              entries.map(entry => (entry.id === id ? opened : entry)),
-              opened,
-              pressedAt
-            )
-          );
+          await writeAll(entries.map(entry => (entry.id === id ? opened : entry)));
           return;
         }
 
         const delivered = deliveredAtFromEventId(id) ?? pressedAt;
         const opened = { ...toRecord(notification, delivered), pressedAt };
-        await writeAll(supersedeOlder([opened, ...entries], opened, pressedAt));
+        await writeAll([opened, ...entries]);
       } catch (error) {
         console.error('[Notifications] Failed to record press:', error);
       }
@@ -218,16 +238,58 @@ export const NotificationHistory = {
         const existing = entries.find(entry => entry.id === id);
         if (!existing || existing.pressedAt !== null) return;
 
+        // As with `recordPress`: opening is not answering.
         const opened = { ...existing, pressedAt };
+        await writeAll(entries.map(entry => (entry.id === id ? opened : entry)));
+      } catch (error) {
+        console.error('[Notifications] Failed to record in-app press:', error);
+      }
+    });
+  },
+
+  /**
+   * Record that an intake was written in answer to a notification.
+   *
+   * This is the only thing that settles a reminder, and the only thing that
+   * lets the bell menu say water was logged. It is called from the one place
+   * every write goes through, so a log started from the shade, the reminder
+   * screen or the chat all reach it identically.
+   *
+   * Answering also settles every earlier reminder asking the same question —
+   * they were about this drink too, and leaving them offering an action would
+   * invite the user to log the same glass twice.
+   */
+  async recordAnswered(
+    id: string,
+    amountMl: number,
+    answeredAt: number = Date.now()
+  ): Promise<void> {
+    return serialise(async () => {
+      try {
+        const entries = await readAll();
+        const existing = entries.find(entry => entry.id === id);
+        // No row means the reminder was never delivered on this device (a
+        // manual log, say). There is nothing to answer, and inventing a row
+        // would put a notification in the log that never appeared.
+        if (!existing || existing.answeredAt !== null) return;
+
+        const answered = {
+          ...existing,
+          answeredAt,
+          answeredMl: amountMl,
+          // An answer implies the user saw the question, even when the write
+          // came from a shade button that never opened the app.
+          pressedAt: existing.pressedAt ?? answeredAt,
+        };
         await writeAll(
           supersedeOlder(
-            entries.map(entry => (entry.id === id ? opened : entry)),
-            opened,
-            pressedAt
+            entries.map(entry => (entry.id === id ? answered : entry)),
+            answered,
+            answeredAt
           )
         );
       } catch (error) {
-        console.error('[Notifications] Failed to record in-app press:', error);
+        console.error('[Notifications] Failed to record an answer:', error);
       }
     });
   },

@@ -6,6 +6,7 @@ import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-s
 
 import BrandLogo from '../components/BrandLogo';
 import SensorTestPanel from '../components/SensorTestPanel';
+import FullScreenReminderBanner from '../components/FullScreenReminderBanner';
 import GlassCard from '../components/GlassCard';
 import { AuthService } from '../services/AuthService';
 import { AIInsight, HydrationLog, UserProfile } from '../types';
@@ -195,9 +196,14 @@ const HomeScreen = ({ navigation }: any) => {
     // Reminder presses are forwarded with the id of the press that produced
     // them. Deduping and the "ask once" rule live in the chat's prompt
     // session, so this screen can forward every delivery unconditionally.
-    const unsubscribePress = NotificationService.onForegroundReminderPress(eventId => {
-      ChatBus.openHydrationPrompt(eventId);
-    });
+    // A reminder tap opens the logging screen, not the chat. The press has
+    // already raised the outstanding reminder, and `syncActiveReminder` below
+    // puts `ReminderFullScreen` up in response — so there is nothing to do
+    // here but keep the subscription for its side effect of recording the
+    // press. Opening the chat as well used to drop the conversation on top of
+    // the logging screen, which is why a reminder appeared to open the
+    // chatbot; Vari is now a button on the reminder itself.
+    const unsubscribePress = NotificationService.onForegroundReminderPress(() => {});
 
     // Deliveries, dismissals and the shade's own action buttons, for a
     // reminder that arrives while the app is already open. The verdict is the
@@ -257,8 +263,10 @@ const HomeScreen = ({ navigation }: any) => {
     // Reminders tapped from a background/quit state were recorded for replay.
     const replayPendingPrompts = async () => {
       try {
-        const pending = await NotificationService.consumePendingHydrationPrompts();
-        pending.forEach(eventId => ChatBus.openHydrationPrompt(eventId));
+        // Draining the queue is still required so a press cannot be replayed
+        // on a later launch, but the reminder it refers to was already raised
+        // by the background handler — `ReminderFullScreen` comes up from that.
+        await NotificationService.consumePendingHydrationPrompts();
       } catch (error) {
         console.error('[Reminders] Failed to replay pending prompts:', error);
       }
@@ -713,6 +721,10 @@ const HomeScreen = ({ navigation }: any) => {
             </View>
           </View>
 
+          {/* Only visible while the grant is actually missing, so it costs
+              nothing once reminders work as intended. */}
+          <FullScreenReminderBanner />
+
           {loadingUserData ? (
             <DashboardSkeleton />
           ) : (
@@ -836,6 +848,14 @@ const HomeScreen = ({ navigation }: any) => {
           onSnooze={snoozeReminder}
           onSkip={skipReminder}
           onClose={closeReminder}
+          onAskVari={() => {
+            // The reminder stays outstanding: handing it to the chat is not an
+            // answer, and it must still be there if the conversation goes
+            // nowhere. `force` because this is a deliberate tap, not the OS
+            // redelivering a press the dedupe is there to swallow.
+            const eventId = activeReminder?.eventId;
+            if (eventId) ChatBus.openHydrationPrompt(eventId, { force: true });
+          }}
           totalMl={totalWaterConsumed}
           targetMl={targetMl}
         />

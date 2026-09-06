@@ -280,7 +280,9 @@ const performWrite = async (
     // An outstanding reminder is a question, and an entry answers it however
     // the user got there. A correction is not an answer: it takes millilitres
     // back off the day, so it must not settle a reminder asking for more.
-    if (amountMl > 0) await NotificationService.resolveActiveReminder();
+    // The amount goes through so the bell menu can say what was actually
+    // logged against the reminder, rather than only that it was opened.
+    if (amountMl > 0) await NotificationService.resolveActiveReminder(amountMl);
     await NotificationService.scheduleHydrationReminders();
   };
 
