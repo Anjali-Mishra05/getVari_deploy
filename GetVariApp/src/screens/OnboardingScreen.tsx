@@ -46,7 +46,7 @@ import NotificationService from '../services/NotificationService';
 import LocationService from '../services/LocationService';
 import ConfigService from '../services/ConfigService';
 import useAppConfig from '../hooks/useAppConfig';
-import { computeTargetDailyMl } from '../utils/hydrationTarget';
+import { computeTargetDailyMl, validatePhysicianLimitMl } from '../utils/hydrationTarget';
 import { WorkEnvironment } from '../types';
 import {
   DEFAULT_SLEEP_SCHEDULE,
@@ -144,12 +144,17 @@ const OnboardingScreen = ({ navigation }: any) => {
   const emailError = !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim())
     ? 'Enter a valid email address.'
     : null;
-  /** Fluid-restricted conditions are unsafe to pace without a doctor's number. */
-  const physicianLimitError =
-    ConfigService.requiresPhysicianLimit(medicalConditions) &&
-    !(Number.parseInt(physicianLimit, 10) > 0)
-      ? 'A physician daily limit is required for the conditions you selected.'
-      : null;
+  /**
+   * Fluid-restricted conditions are unsafe to pace without a doctor's number.
+   *
+   * The rule itself lives in `validatePhysicianLimitMl` so the profile editor
+   * enforces exactly the same one — it used to call the field "Mandatory" and
+   * save without it, which is how a profile could end up restricted with no
+   * limit on file.
+   */
+  const physicianLimitError = ConfigService.requiresPhysicianLimit(medicalConditions)
+    ? validatePhysicianLimitMl(physicianLimit)
+    : null;
 
   /** Blocks `Next` on the step that owns the offending field. */
   const blockingError =
@@ -259,6 +264,10 @@ const OnboardingScreen = ({ navigation }: any) => {
             activityLevel,
             medicalConditions,
             selectedCity,
+            // For a fluid-restricted diagnosis this *is* the goal — the
+            // formula above it does not run. Step 6 will not let the user
+            // past without it.
+            physicianLimitMl: physicianLimit ? parseInt(physicianLimit, 10) : undefined,
           });
 
           const profileData = {
@@ -762,7 +771,7 @@ const OnboardingScreen = ({ navigation }: any) => {
                 {step === 6 && (
                   <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
                     <Text className="text-2xl font-black text-white mb-1">Environment & Limits</Text>
-                    <Text className="text-[12px] text-neutral-400 mb-8 leading-relaxed">Where do you spend most of your day? This calibrates your PBWR baseline.</Text>
+                    <Text className="text-[12px] text-neutral-400 mb-8 leading-relaxed">Where do you spend most of your day? This calibrates your water target baseline.</Text>
 
                     <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Work Environment</Text>
                     <View className="flex-row flex-wrap gap-2 mb-8">

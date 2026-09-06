@@ -512,8 +512,38 @@ describe('EC-12: phone formatted — the profile is restored from the backend', 
     const restored = await ProfileService.fetchProfile('test-user-123');
     expect(restored).not.toBeNull();
     expect(restored!.fullName).toBe('Restored User');
-    expect(restored!.targetDailyMl).toBe(3000);
     expect(restored!.sleepSchedule).toEqual({ sleepStart: '23:00', wakeUp: '07:00' });
+
+    // The stored 3000 is *not* what comes back. The goal is derived, and the
+    // row's copy of it is only ever as fresh as the last save — so it is
+    // recomputed on read from the answers that are stored. 62 kg × 35 = 2170,
+    // rounded to the configured 50 ml step.
+    expect(restored!.targetDailyMl).toBe(2150);
+  });
+
+  test('a stale stored goal never outranks a physician limit', async () => {
+    mockStore.clear();
+    // The dangerous shape: a row written before the physician gate existed, so
+    // it carries a fluid-restricted diagnosis, a doctor's limit, and a goal
+    // computed by the old formula that ignored the limit entirely.
+    mockDb.profile = {
+      ...profile,
+      medicalConditions: ['ckd'],
+      physicianLimitMl: 1000,
+      targetDailyMl: 3250,
+    };
+
+    const restored = await ProfileService.fetchProfile('test-user-123');
+    // The doctor's number wins, not the cached one.
+    expect(restored!.targetDailyMl).toBe(1000);
+  });
+
+  test('a restricted row with no limit on file comes back with no goal', async () => {
+    mockStore.clear();
+    mockDb.profile = { ...profile, medicalConditions: ['ckd'], targetDailyMl: 3250 };
+
+    const restored = await ProfileService.fetchProfile('test-user-123');
+    expect(restored!.targetDailyMl).toBeNull();
   });
 
   test('a user with no stored row resolves to null rather than a fabricated profile', async () => {

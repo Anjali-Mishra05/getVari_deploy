@@ -104,12 +104,18 @@ describe('computeTargetDailyMl', () => {
     expect(computeTargetDailyMl({ weightKg: 60, activityLevel: 'sedentary' })).toBe(2100);
   });
 
-  it('applies each condition, including the one that lowers the ceiling', () => {
+  it('applies the adjustment of a condition that needs no doctor', () => {
     expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] })).toBe(2550);
-    expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['ckd'] })).toBe(1850);
+  });
+
+  it('refuses to compute a goal for a fluid-restricted condition', () => {
+    // CKD, hypertension and heart disease are all `requiresPhysicianLimit`.
+    // These used to return 1850 / 2700 — a formula-derived goal for someone
+    // on a fluid restriction, which is the defect this suite now guards.
+    expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['ckd'] })).toBeNull();
     expect(
       computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes', 'hypertension'] })
-    ).toBe(2700);
+    ).toBeNull();
   });
 
   it('ignores a condition it has no rule for', () => {
@@ -125,7 +131,8 @@ describe('computeTargetDailyMl', () => {
   });
 
   it('clamps to a safe range whatever the inputs say', () => {
-    expect(computeTargetDailyMl({ weightKg: 40, medicalConditions: ['ckd'] })).toBe(1500);
+    // A tiny frame with no restricted diagnosis still gets the floor.
+    expect(computeTargetDailyMl({ weightKg: 30 })).toBe(1500);
     expect(
       computeTargetDailyMl({
         weightKg: 140,

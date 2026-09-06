@@ -196,7 +196,18 @@ class PBWRService {
           : defaultCeiling;
 
     // 5. Stage 5 - Safety Floor
-    const finalDailyWaterTarget = Math.round(Math.max(1500, Math.min(adjustedTotal, upperLimit)));
+    //
+    // The 1500 ml floor protects a healthy user from a target so low it is
+    // itself a risk. It must never *raise* a physician's restriction: a
+    // nephrologist who says 1200 ml/day has said 1200, and a floor that
+    // quietly returned 1500 would have the app pacing a CKD patient 300 ml
+    // past their limit every single day — the exact harm the physician gate
+    // exists to prevent. Where a doctor's number is on file it is the whole
+    // answer, so the floor is lowered to meet it rather than overriding it.
+    const safetyFloor = Math.min(1500, upperLimit);
+    const finalDailyWaterTarget = Math.round(
+      Math.max(safetyFloor, Math.min(adjustedTotal, upperLimit))
+    );
 
     return {
       pbwrBaseline: Math.round(pbwrBaseline),

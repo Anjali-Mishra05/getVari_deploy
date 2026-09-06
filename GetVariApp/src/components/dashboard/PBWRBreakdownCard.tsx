@@ -29,7 +29,7 @@ const PBWRBreakdownCard: React.FC<Props> = ({ breakdown, hasPhysicianLimit, isPh
       <View style={styles.header}>
         <View style={styles.titleRow}>
           <Droplet size={20} color="#38bdf8" />
-          <Text style={styles.title}>Personalized Water Target (PBWR)</Text>
+          <Text style={styles.title}>Personalized Water Target</Text>
         </View>
         <Info size={18} color="#94a3b8" />
       </View>
@@ -44,7 +44,7 @@ const PBWRBreakdownCard: React.FC<Props> = ({ breakdown, hasPhysicianLimit, isPh
       )}
 
       <View style={styles.pipeline}>
-        <PipelineItem label="PBWR Baseline" value={`${litres(breakdown.pbwrBaseline)}L`} />
+        <PipelineItem label="Baseline" value={`${litres(breakdown.pbwrBaseline)}L`} />
         <PipelineItem label="Activity" value={`+${litres(breakdown.activityAdj)}L`} isAdj />
         <PipelineItem label="Temperature" value={`+${litres(breakdown.tempAdj)}L`} isAdj />
         <PipelineItem label="Humidity" value={`+${litres(breakdown.humidityAdj)}L`} isAdj />

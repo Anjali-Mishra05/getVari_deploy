@@ -8,6 +8,7 @@ import type {
 import { WATER_LOG_LIMITS } from '../config/edgeCaseConfig';
 import TelemetryHistoryService from './TelemetryHistoryService';
 import { supabase } from './SupabaseClient';
+import { profileNeedsPhysicianLimit } from '../utils/hydrationTarget';
 import { AuthService } from './AuthService';
 import NotificationService from './NotificationService';
 import ChatBus from './ChatBus';
@@ -102,7 +103,17 @@ const rememberProcessed = async (rowId: string): Promise<void> => {
   }
 };
 
-const fetchTargetMl = async (userId: string): Promise<number> => {
+/**
+ * The stored daily goal, or `null` when the app must not state one.
+ *
+ * `DEFAULT_TARGET_ML` stands in for a profile that has not loaded or has no
+ * goal yet — but it must not stand in for a *fluid-restricted* profile whose
+ * physician limit is missing. That case had the worst outcome of all: the
+ * goal came back as the 2500 ml default, which is higher than anything the
+ * formula would have produced for a CKD patient, and the chat then reported
+ * progress against it.
+ */
+const fetchTargetMl = async (userId: string): Promise<number | null> => {
   try {
     const { data, error } = await supabase
       .from(PROFILES_TABLE)
@@ -111,7 +122,13 @@ const fetchTargetMl = async (userId: string): Promise<number> => {
       .maybeSingle();
 
     if (error) return DEFAULT_TARGET_ML;
-    const target = Number(data?.profile?.targetDailyMl);
+
+    const profile = data?.profile;
+    // Read from the diagnosis rather than from the absent number, so a row
+    // written before the goal became nullable is judged the same way.
+    if (profileNeedsPhysicianLimit(profile)) return null;
+
+    const target = Number(profile?.targetDailyMl);
     return Number.isFinite(target) && target > 0 ? target : DEFAULT_TARGET_ML;
   } catch {
     return DEFAULT_TARGET_ML;

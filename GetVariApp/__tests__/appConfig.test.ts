@@ -72,7 +72,9 @@ describe('condition lookups', () => {
 
 describe('a published config reaches every consumer', () => {
   it('moves the daily goal when a condition adjustment is edited', () => {
-    const before = computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] });
+    // Diabetes is not fluid-restricted, so the goal is a number rather than
+    // the `null` a physician-gated condition without a limit would give.
+    const before = computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] })!;
 
     AppConfigStore.adopt({
       ...DEFAULT_APP_CONFIG,
@@ -81,7 +83,7 @@ describe('a published config reaches every consumer', () => {
       ),
     });
 
-    const after = computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] });
+    const after = computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] })!;
     expect(after - before).toBe(550); // 1000 replaces the shipped 450
   });
 

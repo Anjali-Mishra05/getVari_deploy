@@ -3,6 +3,7 @@ import { ActivityIndicator, Alert, ScrollView, Text, View } from 'react-native';
 import { Activity, LogOut, Moon, Pencil, Phone, Target } from 'lucide-react-native';
 
 import Button from './ui/Button';
+import { profileNeedsPhysicianLimit } from '../utils/hydrationTarget';
 import Sheet from './ui/Sheet';
 
 import { AuthService, StoredSession } from '../services/AuthService';
@@ -17,7 +18,14 @@ interface ProfileSheetProps {
   onClose: () => void;
   /** The onboarding profile blob, when it has been loaded. */
   userProfile: any;
-  /** The daily goal from the profile, or null while it is still loading. */
+  /**
+   * The daily goal, or null when there is none to show.
+   *
+   * Null now means two different things — the profile has not loaded yet, and
+   * a fluid-restricted diagnosis whose physician limit is missing — so the row
+   * reads `userProfile` to tell them apart rather than saying "Loading…"
+   * forever at a user whose goal is never going to arrive.
+   */
   targetMl: number | null;
   /** Called once the session is gone, so the app can leave the signed-in area. */
   onLoggedOut: () => void;
@@ -253,7 +261,13 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
               <Row
                 icon={<Target color={ACCENT} size={17} />}
                 label="Daily goal"
-                value={targetMl === null ? 'Loading…' : `${targetMl} ml`}
+                value={
+                  targetMl !== null
+                    ? `${targetMl} ml`
+                    : profileNeedsPhysicianLimit(userProfile)
+                    ? 'Add your doctor’s limit'
+                    : 'Loading…'
+                }
               />
               {/* The activity level is shown by its configured title, not by
                   its stored id, and says "Not set" rather than defaulting to

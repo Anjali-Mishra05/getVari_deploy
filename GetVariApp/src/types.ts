@@ -21,7 +21,12 @@ export interface UserProfile {
   workEnvironment: WorkEnvironment;
   physicianLimitMl?: number;
   waterHabit: HabitRating;
-  targetDailyMl: number;
+  /**
+   * The daily goal in ml, or `null` when the app must not state one — a
+   * fluid-restricted diagnosis whose physician limit is not on file. See
+   * `computeTargetDailyMl`.
+   */
+  targetDailyMl: number | null;
   medicalConditions?: string[];
   /** Per-notification-type cooldown timestamps (epoch ms). */
   lastAlertsSent?: Record<string, number>;
@@ -128,7 +133,8 @@ export type HydrationLogStatus =
 export interface HydrationTotals {
   /** Millilitres logged since midnight, straight from Supabase. */
   totalMl: number;
-  targetMl: number;
+  /** The goal, or `null` when there is none to state. See `UserProfile`. */
+  targetMl: number | null;
 }
 
 export interface HydrationLogResult extends HydrationTotals {

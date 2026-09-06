@@ -210,12 +210,26 @@ class NotificationEngine {
     // --- Routine Notifications (Muted during sleep) ---
     if (!asleep) {
       const totalMl = todayLogs.reduce((acc, log) => acc + log.amountMl, 0);
-      const targetMl = profile.targetDailyMl;
+      /**
+       * The goal, when there is one to measure against.
+       *
+       * `null` means a fluid-restricted profile with no physician limit on
+       * file, and every notification below this point is a statement about
+       * progress towards a goal — "you have had half of it", "you have
+       * reached it". None of them can be said honestly without one, and the
+       * bare `profile.targetDailyMl` this replaced coerced null to 0, which
+       * made `totalMl >= targetMl` true from the first sip: the user was
+       * congratulated on reaching a goal the app had refused to set.
+       */
+      const goalMl =
+        typeof profile.targetDailyMl === 'number' && profile.targetDailyMl > 0
+          ? profile.targetDailyMl
+          : null;
       const date = new Date();
       const hour = date.getHours();
 
       // Goal achieved (Once per day)
-      if (totalMl >= targetMl && !this.wasSentToday(lastAlerts, 'goal_achieved')) {
+      if (goalMl !== null && totalMl >= goalMl && !this.wasSentToday(lastAlerts, 'goal_achieved')) {
         triggers.push('goal_achieved');
       }
 
@@ -255,16 +269,18 @@ class NotificationEngine {
       // half a day behind on water. The window closes where the next check
       // takes over, and `wasSentToday` still holds it to one delivery.
       if (
+        goalMl !== null &&
         hour >= 12 && hour < 16 &&
-        totalMl < targetMl * 0.5 &&
+        totalMl < goalMl * 0.5 &&
         !this.wasSentToday(lastAlerts, 'low_intake_12pm')
       ) {
          triggers.push('low_intake_12pm');
       }
 
       if (
+        goalMl !== null &&
         hour >= 16 && hour < 20 &&
-        totalMl < targetMl * 0.7 &&
+        totalMl < goalMl * 0.7 &&
         !this.wasSentToday(lastAlerts, 'below_target_4pm')
       ) {
          triggers.push('below_target_4pm');
@@ -320,7 +336,7 @@ class NotificationEngine {
         }
 
         // 21. AI Low Intake (Deviation from pattern)
-        else if (totalMl < targetMl * 0.3 && hour > 14 && this.canSend(now, lastAlerts, 'ai_insight')) {
+        else if (goalMl !== null && totalMl < goalMl * 0.3 && hour > 14 && this.canSend(now, lastAlerts, 'ai_insight')) {
           triggers.push('ai_insight');
         }
 
@@ -335,7 +351,7 @@ class NotificationEngine {
         }
 
         // 24. AI Progress (Improvement trend)
-        else if (totalMl >= targetMl * 0.9 && solvedRisk.score !== null && solvedRisk.score < 20 && this.canSend(now, lastAlerts, 'ai_progress')) {
+        else if (goalMl !== null && totalMl >= goalMl * 0.9 && solvedRisk.score !== null && solvedRisk.score < 20 && this.canSend(now, lastAlerts, 'ai_progress')) {
           triggers.push('ai_progress');
         }
       }

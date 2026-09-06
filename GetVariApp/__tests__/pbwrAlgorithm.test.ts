@@ -117,3 +117,77 @@ describe('PBWR Algorithm Verification', () => {
   });
 
 });
+
+/**
+ * The safety floor and a physician's restriction.
+ *
+ * Stage 5 is `max(floor, min(adjustedTotal, upperLimit))`. With the floor
+ * fixed at 1500 it silently *raised* any restriction below it: a nephrologist
+ * prescribing 1200 ml/day got a 1500 ml target, so the app paced a CKD
+ * patient 300 ml past their limit every day. The floor now yields to a
+ * doctor's number instead of overriding it.
+ */
+describe('PBWR respects a physician limit below the safety floor', () => {
+  const restrictedProfile = (physicianLimitMl?: number): UserProfile =>
+    ({
+      age: 55,
+      gender: 'Male',
+      weightKg: 70,
+      activityLevel: 'sedentary',
+      fitnessGoal: 'optimize_health',
+      waterHabit: 'moderate',
+      targetDailyMl: physicianLimitMl ?? null,
+      workEnvironment: 'ac_office',
+      medicalConditions: ['ckd'],
+      physicianLimitMl,
+    } as UserProfile);
+
+  beforeEach(() => {
+    (TelemetryHistoryService.getHistory as jest.Mock).mockResolvedValue(new Array(7).fill({}));
+    (TelemetryHistoryService.getAverages as jest.Mock).mockResolvedValue({
+      avgSteps: 3000,
+      avgTemp: 24,
+      avgHumidity: 50,
+    });
+  });
+
+  test('a 1200 ml restriction is not floored up to 1500', async () => {
+    const breakdown = await PBWRService.calculatePBWR(restrictedProfile(1200), 0);
+
+    expect(breakdown.isPhysicianGated).toBe(true);
+    expect(breakdown.physicianLimitEntered).toBe(true);
+    expect(breakdown.upperLimit).toBe(1200);
+    expect(breakdown.finalTarget).toBe(1200);
+  });
+
+  test('a restriction above the floor is honoured as the ceiling', async () => {
+    const breakdown = await PBWRService.calculatePBWR(restrictedProfile(1800), 0);
+    expect(breakdown.finalTarget).toBe(1800);
+  });
+
+  test('the 1500 floor still applies when no restriction is in play', async () => {
+    const healthy: UserProfile = {
+      age: 30,
+      gender: 'Female',
+      weightKg: 45,
+      activityLevel: 'sedentary',
+      fitnessGoal: 'optimize_health',
+      waterHabit: 'moderate',
+      targetDailyMl: 2000,
+      workEnvironment: 'ac_office',
+      medicalConditions: [],
+    } as UserProfile;
+
+    const breakdown = await PBWRService.calculatePBWR(healthy, 0);
+    expect(breakdown.finalTarget).toBeGreaterThanOrEqual(1500);
+  });
+
+  test('a gated profile with no limit falls back to a cap, never above it', async () => {
+    const breakdown = await PBWRService.calculatePBWR(restrictedProfile(undefined), 0);
+
+    expect(breakdown.isPhysicianGated).toBe(true);
+    expect(breakdown.physicianLimitEntered).toBe(false);
+    // The safety cap stands in, and the target never exceeds it.
+    expect(breakdown.finalTarget).toBeLessThanOrEqual(breakdown.upperLimit);
+  });
+});

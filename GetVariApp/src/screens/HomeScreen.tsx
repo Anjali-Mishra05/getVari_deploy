@@ -13,6 +13,7 @@ import { AIInsight, HydrationLog, UserProfile } from '../types';
 import AquaSageChat from '../chatbot/AquaSageChat';
 import NotificationService from '../services/NotificationService';
 import ActiveReminder, { ActiveReminderRecord } from '../services/ActiveReminder';
+import { profileNeedsPhysicianLimit } from '../utils/hydrationTarget';
 import NotificationHistory from '../services/NotificationHistory';
 import NotificationCenter from '../components/NotificationCenter';
 import QuickLogSheet from '../components/QuickLogSheet';
@@ -98,10 +99,31 @@ const HomeScreen = ({ navigation }: any) => {
   // four-item bar it used to be.
   const [activeTab, setActiveTab] = useState<DashboardTab>('dashboard');
 
-  /** The daily goal, or null while it is still being read. Never a stand-in. */
-  const targetMl = Number.isFinite(userProfile?.targetDailyMl as number)
-    ? (userProfile!.targetDailyMl as number)
-    : null;
+  /**
+   * The daily goal, or null when there is not one to show. Never a stand-in.
+   *
+   * This is the personalized water target — the same number the breakdown card
+   * itemises — rather than the simpler figure stored on the profile. The two
+   * were different calculations answering the same question, and the dashboard
+   * showed one while the card below it explained the other, so the tile and
+   * the breakdown disagreed on the goal by several hundred millilitres.
+   *
+   * The physician gate still overrides it. A fluid-restricted diagnosis with
+   * no doctor's limit on file has no goal at all, and the personalized target
+   * always produces *some* number — falling back to it here would quietly
+   * reinstate the guess the gate exists to refuse.
+   */
+  const targetMl = (() => {
+    if (profileNeedsPhysicianLimit(userProfile)) return null;
+    if (pbwrBreakdown && Number.isFinite(pbwrBreakdown.finalTarget)) {
+      return pbwrBreakdown.finalTarget;
+    }
+    // Until the first solve lands, the profile's stored goal stands in — it is
+    // the same answer to within the environmental adjustments.
+    return Number.isFinite(userProfile?.targetDailyMl as number)
+      ? (userProfile!.targetDailyMl as number)
+      : null;
+  })();
   const totalWaterConsumed = waterLogs.reduce((acc, curr) => acc + (Number(curr.amountMl) || 0), 0);
 
   // Subscribed rather than read once: the config arrives over the network, so
@@ -736,6 +758,18 @@ const HomeScreen = ({ navigation }: any) => {
               lastIntakeMl={newestLog?.amountMl ?? null}
               absorbing={telemetry.stomachVolume > 0}
               updatedAt={telemetry.riskUpdatedAt}
+              // The five readings the engine is solved over, and the seam that
+              // pins them. Handing these in is what makes the load breakdown
+              // editable; the card falls back to read-only without them.
+              inputs={{
+                heartRate: telemetry.sensorData.heartRate,
+                activityLoad: telemetry.sensorData.activityLoad,
+                temperature: telemetry.sensorData.temperature,
+                humidity: telemetry.sensorData.humidity,
+                gapHours: telemetry.effectiveHoursSinceDrink,
+              }}
+              override={telemetry.sensorOverride}
+              onOverrideChange={telemetry.setSensorOverride}
             />
           )}
 

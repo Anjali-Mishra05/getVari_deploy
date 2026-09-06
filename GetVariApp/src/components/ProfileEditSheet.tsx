@@ -18,7 +18,7 @@ import CityPickerModal from './CityPickerModal';
 import ProfileService from '../services/ProfileService';
 import ConfigService from '../services/ConfigService';
 import useAppConfig from '../hooks/useAppConfig';
-import { computeTargetDailyMl } from '../utils/hydrationTarget';
+import { computeTargetDailyMl, validatePhysicianLimitMl } from '../utils/hydrationTarget';
 import LocationService from '../services/LocationService';
 import {
   DEFAULT_SLEEP_SCHEDULE,
@@ -172,9 +172,25 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
     activityLevel,
     medicalConditions,
     selectedCity,
+    physicianLimitMl: physicianLimit ? parseInt(physicianLimit, 10) : undefined,
   });
   const currentTargetMl = Number(userProfile?.targetDailyMl) || 0;
-  const targetDelta = projectedTargetMl - currentTargetMl;
+  // `null` is "there is no goal to show" — a fluid-restricted profile with no
+  // doctor's number yet. A delta against it would be arithmetic on a value
+  // that does not exist, so the projection row is hidden instead.
+  const targetDelta = projectedTargetMl === null ? null : projectedTargetMl - currentTargetMl;
+
+  /**
+   * The same rule onboarding enforces.
+   *
+   * This sheet used to label the field "Mandatory" and then save whatever was
+   * in it, blank included — so adding a fluid-restricted diagnosis here left
+   * the profile restricted with no limit on file, which is the one state the
+   * app is not allowed to guess its way out of.
+   */
+  const physicianLimitError = ConfigService.requiresPhysicianLimit(medicalConditions)
+    ? validatePhysicianLimitMl(physicianLimit)
+    : null;
 
   const sleepSchedule = { sleepStart, wakeUp };
   const sleepHours = sleepDurationMinutes(sleepSchedule) / 60;
@@ -184,6 +200,11 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
     const trimmedEmail = email.trim();
     if (trimmedEmail && !looksLikeEmail(trimmedEmail)) {
       setErrorMsg('That email address does not look right.');
+      return;
+    }
+
+    if (physicianLimitError) {
+      setErrorMsg(physicianLimitError);
       return;
     }
 
@@ -445,10 +466,10 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
               </View>
               <View className="flex-row items-baseline gap-2">
                 <Text className="text-[#00f2fe] text-[22px] font-black font-mono">
-                  {projectedTargetMl}
+                  {projectedTargetMl === null ? '—' : projectedTargetMl}
                 </Text>
                 <Text className="text-neutral-500 text-[11px] font-mono">ml / day</Text>
-                {!!currentTargetMl && targetDelta !== 0 && (
+                {!!currentTargetMl && targetDelta !== null && targetDelta !== 0 && (
                   <Text
                     className="text-[11px] font-mono font-black ml-auto"
                     style={{ color: targetDelta > 0 ? '#34d399' : '#f59e0b' }}
@@ -458,8 +479,16 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
                   </Text>
                 )}
               </View>
+              {/* Three different explanations, because the number above comes
+                  from three different places: a doctor's restriction, the
+                  formula, or nothing at all. Saying "derived from your weight
+                  and climate" over a physician-set limit would be false. */}
               <Text className="text-neutral-500 text-[10px] mt-2 leading-relaxed">
-                Derived from your weight, activity strain, medical states and local climate.
+                {projectedTargetMl === null
+                  ? 'Your diagnosis needs your doctor’s daily limit before the app can pace your intake.'
+                  : ConfigService.requiresPhysicianLimit(medicalConditions)
+                  ? 'Set by your physician’s daily limit, which replaces the calculated goal.'
+                  : 'Derived from your weight, activity strain, medical states and local climate.'}
               </Text>
             </View>
 

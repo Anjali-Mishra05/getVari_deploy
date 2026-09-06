@@ -6,6 +6,13 @@ import Sheet from './ui/Sheet';
 import { HydrationRiskEngine } from '../utils/hydrationRiskEngine';
 import { SensorOverride } from '../hooks/useHydrationTelemetry';
 import { RISK_SPEC_PRESETS, RiskSpecPreset } from '../utils/riskSpecPresets';
+import {
+  RISK_CHANNELS,
+  RiskChannelSpec,
+  channelText,
+  overrideFromDraft,
+  trimToDecimals,
+} from '../utils/riskChannels';
 import { UserProfile } from '../types';
 
 /**
@@ -33,26 +40,14 @@ import { UserProfile } from '../types';
  * panel says plainly when the current one differs.
  */
 
-/** One editable channel. */
-interface ChannelSpec {
-  key: keyof SensorOverride;
-  label: string;
-  unit: string;
-  min: number;
-  max: number;
-  step: number;
-  /** Band edges from RISK_CONFIG.LOAD_MAPPING, drawn as a hint under the field. */
-  bands: string;
-  decimals: number;
-}
-
-const CHANNELS: ChannelSpec[] = [
-  { key: 'heartRate', label: 'Heart rate', unit: 'bpm', min: 30, max: 220, step: 5, bands: '<80 · 80-100 · 100-120 · 120+', decimals: 0 },
-  { key: 'activityLoad', label: 'Activity index', unit: '0-100', min: 0, max: 100, step: 5, bands: '<20 · 20-50 · 50-80 · 80+', decimals: 0 },
-  { key: 'temperature', label: 'Temperature', unit: '°C', min: 5, max: 50, step: 1, bands: '<22 · 22-28 · 28-32 · 32+', decimals: 1 },
-  { key: 'humidity', label: 'Humidity', unit: '%', min: 0, max: 100, step: 5, bands: '<40 · 40-60 · 60-75 · 75+', decimals: 0 },
-  { key: 'gapHours', label: 'Since last drink', unit: 'h', min: 0, max: 8, step: 0.5, bands: '<0.5 · 0.5-1 · 1-2 · 2+', decimals: 2 },
-];
+/**
+ * The channels, their units and their bounds now live beside the engine they
+ * describe (`utils/riskChannels`), because the dashboard's load breakdown
+ * edits the same five readings and the two must not disagree about what is
+ * accepted.
+ */
+type ChannelSpec = RiskChannelSpec;
+const CHANNELS = RISK_CHANNELS;
 
 const STATUS_COLOR: Record<string, string> = {
   Hydrated: '#10b981',
@@ -98,18 +93,8 @@ const SensorTestPanel: React.FC<SensorTestPanelProps> = ({
     if (visible) setDraft(seed(override, live));
   }
 
-  /** The draft as an override, dropping anything blank or unparseable. */
-  const parsed = useMemo<SensorOverride>(() => {
-    const out: SensorOverride = {};
-    for (const c of CHANNELS) {
-      const raw = draft[c.key];
-      if (raw === undefined || raw.trim() === '') continue;
-      const value = Number(raw);
-      if (!Number.isFinite(value)) continue;
-      out[c.key] = Math.min(c.max, Math.max(c.min, value));
-    }
-    return out;
-  }, [draft]);
+  /** The draft as an override, dropping anything blank or out of range. */
+  const parsed = useMemo<SensorOverride>(() => overrideFromDraft(draft), [draft]);
 
   /**
    * The solve over the draft, against the real profile.
@@ -146,7 +131,7 @@ const SensorTestPanel: React.FC<SensorTestPanelProps> = ({
     const current = Number(draft[c.key] ?? 0);
     const base = Number.isFinite(current) ? current : 0;
     const next = Math.min(c.max, Math.max(c.min, base + direction * c.step));
-    setDraft(d => ({ ...d, [c.key]: trim(next, c.decimals) }));
+    setDraft(d => ({ ...d, [c.key]: trimToDecimals(next, c.decimals) }));
   };
 
   const loadPreset = (preset: RiskSpecPreset) => {
@@ -361,18 +346,11 @@ const seed = (
   override: SensorOverride | null,
   live: SensorTestPanelProps['live']
 ): Record<string, string> => ({
-  heartRate: text(override?.heartRate ?? live.heartRate, 0),
-  activityLoad: text(override?.activityLoad ?? live.activityLoad, 0),
-  temperature: text(override?.temperature ?? live.temperature, 1),
-  humidity: text(override?.humidity ?? live.humidity, 0),
-  gapHours: text(override?.gapHours ?? live.gapHours, 2),
+  heartRate: channelText(override?.heartRate ?? live.heartRate, 0),
+  activityLoad: channelText(override?.activityLoad ?? live.activityLoad, 0),
+  temperature: channelText(override?.temperature ?? live.temperature, 1),
+  humidity: channelText(override?.humidity ?? live.humidity, 0),
+  gapHours: channelText(override?.gapHours ?? live.gapHours, 2),
 });
-
-const text = (value: number | null | undefined, decimals: number): string =>
-  value === null || value === undefined ? '' : trim(value, decimals);
-
-/** `2.50` reads as noise on a field someone is about to retype; `2.5` does not. */
-const trim = (value: number, decimals: number): string =>
-  String(Number(value.toFixed(decimals)));
 
 export default SensorTestPanel;

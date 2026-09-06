@@ -605,7 +605,7 @@ export default function App() {
 
   // Total logged water today
   const totalWaterConsumed = waterLogs.reduce((acc, curr) => acc + curr.amountMl, 0);
-  const targetPercent = Math.min(100, Math.round((totalWaterConsumed / profile.targetDailyMl) * 100));
+  const targetPercent = Math.min(100, Math.round((totalWaterConsumed / (profile.targetDailyMl ?? 0)) * 100));
   const sortedLogs = [...waterLogs].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   const lastLog = sortedLogs[0];
 
@@ -1532,14 +1532,14 @@ export default function App() {
                       <div className="glass rounded-xl p-2.5 border-white/5 text-left flex flex-col justify-between min-h-[68px]">
                         <span className="block text-[8px] uppercase tracking-wider text-gray-400 font-mono leading-none">Remaining</span>
                         <span className={`text-xs font-bold block leading-tight mt-1.5 font-mono ${
-                          profile.targetDailyMl - totalWaterConsumed <= 0 
+                          (profile.targetDailyMl ?? 0) - totalWaterConsumed <= 0 
                             ? 'text-emerald-500 font-bold' 
                             : theme === 'light' ? 'text-[#020813]' : 'text-white'
                         }`}>
-                          {Math.max(0, profile.targetDailyMl - totalWaterConsumed)} ml
+                          {Math.max(0, (profile.targetDailyMl ?? 0) - totalWaterConsumed)} ml
                         </span>
                         <span className="text-[8px] text-gray-500 block leading-none mt-1 truncate">
-                          {profile.targetDailyMl - totalWaterConsumed <= 0 ? 'Goal Met! 🎉' : 'Deficit Left'}
+                          {(profile.targetDailyMl ?? 0) - totalWaterConsumed <= 0 ? 'Goal Met! 🎉' : 'Deficit Left'}
                         </span>
                       </div>
 
@@ -1983,8 +1983,8 @@ export default function App() {
                         </div>
                         <div className="flex items-center gap-2 text-neutral-400 font-mono">
                           <span>Water Needed To Reach Daily Target:</span>
-                          <span className={`font-bold ${profile.targetDailyMl - totalWaterConsumed <= 0 ? 'text-emerald-400' : 'text-cyan-400'}`}>
-                            {Math.max(0, profile.targetDailyMl - totalWaterConsumed)} ml
+                          <span className={`font-bold ${(profile.targetDailyMl ?? 0) - totalWaterConsumed <= 0 ? 'text-emerald-400' : 'text-cyan-400'}`}>
+                            {Math.max(0, (profile.targetDailyMl ?? 0) - totalWaterConsumed)} ml
                           </span>
                         </div>
                       </div>
@@ -2532,7 +2532,7 @@ export default function App() {
                         min="1200"
                         max="5000"
                         step="100"
-                        value={profile.targetDailyMl}
+                        value={profile.targetDailyMl ?? 0}
                         onChange={(e) => setProfile(prev => ({ ...prev, targetDailyMl: parseInt(e.target.value) }))}
                         className="w-full h-1 bg-neutral-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 my-3"
                       />

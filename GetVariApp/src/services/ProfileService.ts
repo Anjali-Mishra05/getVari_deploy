@@ -61,7 +61,27 @@ export const fetchProfile = async (userId?: string | null): Promise<UserProfile 
     console.error('[Profile] Failed to fetch:', error.message);
     return null;
   }
-  return (data?.profile as UserProfile) ?? null;
+
+  const stored = (data?.profile as UserProfile) ?? null;
+  if (!stored) return null;
+
+  /**
+   * The goal is recomputed on read, not trusted as stored.
+   *
+   * `withDerivedFields` runs on *write*, so `targetDailyMl` is frozen at
+   * whatever the rules said the last time this row was saved — which can be
+   * months and several releases ago. That is fine for a goal that only drifts;
+   * it is not fine for a fluid restriction. A profile carrying a physician
+   * limit of 1000 ml, written before the limit was honoured, kept serving the
+   * formula's 3250 ml to every screen in the app: the exact over-drinking the
+   * physician gate exists to prevent, preserved by the cache.
+   *
+   * Only this one field is re-derived. `accountCreatedAt` deliberately is not:
+   * `withDerivedFields` stamps it with `now` when absent, and doing that on
+   * every read would move the PBWR calibration window's start date each time
+   * the profile loaded, so the calibration period would never end.
+   */
+  return { ...stored, targetDailyMl: targetFromProfile(stored) };
 };
 
 /**

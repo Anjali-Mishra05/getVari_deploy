@@ -19,9 +19,17 @@ export const formatMl = (ml: number): string => {
 /** Fixed two-decimal litres, used for the "x / y" goal pair. */
 export const formatLitres = (ml: number): string => `${(Math.round(ml) / 1000).toFixed(2)} L`;
 
-/** "1.75 L / 3.00 L" — the daily progress pair shown after every log. */
-export const formatDailyTotal = (totalMl: number, targetMl: number): string =>
-  `${formatLitres(totalMl)} / ${formatLitres(targetMl)}`;
+/**
+ * "1.75 L / 3.00 L" — the daily progress pair shown after every log.
+ *
+ * With no goal to measure against (a fluid-restricted profile whose physician
+ * limit is not on file) the running total is still worth stating; the
+ * denominator is simply left off rather than filled with a stand-in.
+ */
+export const formatDailyTotal = (totalMl: number, targetMl: number | null): string =>
+  targetMl === null
+    ? formatLitres(totalMl)
+    : `${formatLitres(totalMl)} / ${formatLitres(targetMl)}`;
 
 /**
  * The confirmation the user sees after an entry is saved — one short line:
@@ -34,7 +42,14 @@ export const buildLogConfirmation = (result: HydrationLogResult): string => {
     result.status === 'duplicate'
       ? `**Already logged — ${formatMl(result.amountMl)}.**`
       : `**✅ ${formatMl(result.amountMl)} logged!**`;
-  const goal = result.totalMl >= result.targetMl ? ' 🎉 **Goal reached!**' : '';
+  // No goal, no "goal reached" — and the prompt for the missing limit takes
+  // its place, so the user is told why the app is not pacing them.
+  const goal =
+    result.targetMl === null
+      ? ' Add your doctor’s daily limit in your profile so intake can be paced.'
+      : result.totalMl >= result.targetMl
+      ? ' 🎉 **Goal reached!**'
+      : '';
 
   return `${headline} Your total today is **${totals}**.${goal}`;
 };
