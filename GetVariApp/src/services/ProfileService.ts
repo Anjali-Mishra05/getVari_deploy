@@ -17,9 +17,9 @@ import type { UserProfile } from '../types';
  *    paired device id, the coordinates and anything a future step adds have
  *    to survive a save that never mentioned them.
  *  - **Derived values are recomputed, not carried.** The daily goal follows
- *    from weight, activity, conditions and climate, so correcting a weight
- *    has to move the goal — a stale target would quietly outlive the answer
- *    it came from.
+ *    from weight, age, gender, work environment and diagnoses — the PBWR
+ *    pipeline's inputs — so correcting any of them has to move the goal. A
+ *    stale target would quietly outlive the answer it came from.
  *  - **The sleep window is pushed to the OS.** Reminders are scheduled
  *    outside React and cannot read this row.
  */
@@ -38,6 +38,10 @@ export interface ProfilePatch {
   longitude?: number | null;
   medicalConditions?: string[];
   activityLevel?: string;
+  /** Stage 3's self-declared band, and Stage 1 scales by age and gender. */
+  workEnvironment?: string;
+  /** Stage 5's ceiling for a fluid-restricted diagnosis. */
+  physicianLimitMl?: number | null;
   sleepSchedule?: { sleepStart: string; wakeUp: string };
 }
 

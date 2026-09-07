@@ -33,6 +33,30 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
 
   const verdict = await NotificationService.handleReminderEvent(type, detail);
 
+  if (type === EventType.DELIVERED) {
+    // Bring the reminder screen up over whatever the user is doing.
+    //
+    // The notification already carries a `fullScreenAction`, but Android only
+    // honours that while the screen is off or locked — with the phone unlocked
+    // and in the user's hand the platform downgrades it to a heads-up banner
+    // on purpose. So the one case the reminder exists for, someone awake and
+    // using their phone who has not had water in hours, was the one case that
+    // never got the full-screen prompt.
+    //
+    // `presentReminderFullScreen` is the other half: it starts the activity
+    // itself, and only in that case — it stays out of the way when the OS is
+    // already raising the screen, and when the app is in front, where the
+    // prompt comes up from the outstanding reminder anyway. It also filters
+    // out non-reminder notifications, so this stays a single unconditional
+    // call rather than a condition repeated at the call site.
+    //
+    // Ordered after `handleReminderEvent` on purpose: that is what records the
+    // delivery as an outstanding reminder, and the outstanding reminder is
+    // what `ReminderFullScreen` reads. Launching first would race the screen
+    // against the state it renders from.
+    await NotificationService.presentReminderFullScreen(detail.notification);
+  }
+
   if (verdict === 'log-primary') {
     // Written straight from the background handler — the RN JS context is
     // fully alive here, so the Supabase client and its stored session are

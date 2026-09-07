@@ -79,20 +79,41 @@ describe('a published config reaches every consumer', () => {
     AppConfigStore.adopt({
       ...DEFAULT_APP_CONFIG,
       medicalConditions: DEFAULT_APP_CONFIG.medicalConditions.map(condition =>
-        condition.id === 'diabetes' ? { ...condition, targetAdjustmentMl: 1000 } : condition
+        condition.id === 'diabetes' ? { ...condition, pbwrAdjustmentMl: 1000 } : condition
       ),
     });
 
     const after = computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] })!;
-    expect(after - before).toBe(550); // 1000 replaces the shipped 450
+    expect(after - before).toBe(600); // 1000 replaces the shipped 400
   });
 
-  it('moves the goal when the millilitres-per-kilogram rate is edited', () => {
+  it('moves the goal when a work environment’s band is edited', () => {
+    const before = computeTargetDailyMl({ weightKg: 60, workEnvironment: 'ac_office' })!;
+
     AppConfigStore.adopt({
       ...DEFAULT_APP_CONFIG,
-      targetFormula: { ...DEFAULT_APP_CONFIG.targetFormula, mlPerKg: 40 },
+      workEnvironments: DEFAULT_APP_CONFIG.workEnvironments.map(env =>
+        env.id === 'ac_office' ? { ...env, pbwrAdjustmentMl: 600 } : env
+      ),
     });
-    expect(computeTargetDailyMl({ weightKg: 60 })).toBe(2400);
+
+    expect(computeTargetDailyMl({ weightKg: 60, workEnvironment: 'ac_office' })! - before).toBe(350);
+  });
+
+  it('moves the goal when a condition’s ceiling is lowered', () => {
+    // The §6 upper limit is a config knob too: diabetes ships at 5000, and a
+    // heavy frame is capped by it.
+    const inputs = { weightKg: 110, gender: 'Male', age: 30, medicalConditions: ['diabetes'] };
+    expect(computeTargetDailyMl(inputs)).toBe(5000);
+
+    AppConfigStore.adopt({
+      ...DEFAULT_APP_CONFIG,
+      medicalConditions: DEFAULT_APP_CONFIG.medicalConditions.map(condition =>
+        condition.id === 'diabetes' ? { ...condition, pbwrUpperLimitMl: 3500 } : condition
+      ),
+    });
+
+    expect(computeTargetDailyMl(inputs)).toBe(3500);
   });
 
   it('re-weights the risk engine when a condition tweak is edited', () => {

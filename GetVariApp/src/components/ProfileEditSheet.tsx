@@ -169,9 +169,11 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
   // moves it should not be a surprise the user only sees on the dashboard.
   const projectedTargetMl = computeTargetDailyMl({
     weightKg: weight,
+    gender,
+    age,
+    workEnvironment,
     activityLevel,
     medicalConditions,
-    selectedCity,
     physicianLimitMl: physicianLimit ? parseInt(physicianLimit, 10) : undefined,
   });
   const currentTargetMl = Number(userProfile?.targetDailyMl) || 0;

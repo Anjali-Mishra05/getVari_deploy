@@ -31,6 +31,20 @@
          never all-or-nothing. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
+    <!-- "Display over other apps".
+
+         A full-screen intent is only launched by Android while the screen is
+         off or locked; with the phone unlocked and in the user's hand the
+         platform downgrades it to a heads-up banner on purpose. To raise the
+         reminder screen in *that* case the app has to start the activity
+         itself, and since Android 10 a backgrounded app may only do that with
+         an exemption. SYSTEM_ALERT_WINDOW is the one that fits a reminder, and
+         like the grant above it is never given at install: the user allows it
+         in Settings, and `FullScreenReminderModule.presentReminder` reports
+         `not-permitted` rather than attempting a launch Android would drop
+         without a word. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!-- Keeps the reminder screen legible when it wakes a locked phone. -->
     <uses-permission android:name="android.permission.VIBRATE" />
 

@@ -1,15 +1,18 @@
 package com.getvariapp
 
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.common.LifecycleState
 
 /**
  * Whether this app may raise a hydration reminder as a full-screen intent, and
@@ -37,6 +40,21 @@ import com.facebook.react.bridge.ReactMethod
  * phone call, so it is firmly in the second group — which is why the app has
  * to treat the full-screen reminder as an opt-in that may never be granted,
  * rather than as the behaviour it can count on.
+ *
+ * ## And why the full-screen intent is only half the feature
+ *
+ * A full-screen intent is not a general "open my app" mechanism. Android
+ * launches the activity only while the screen is **off or locked**; the moment
+ * the user is actually holding an unlocked phone, the platform deliberately
+ * downgrades it to a heads-up banner. That is documented behaviour on
+ * `Notification.Builder.setFullScreenIntent`, not a bug and not something a
+ * flag can switch off.
+ *
+ * So the case the reminder most needs to cover — the user is awake, using
+ * their phone, and has not had water in three hours — is precisely the case
+ * the full-screen intent does *not* handle. [presentReminder] is that half: it
+ * starts the activity itself when the device is unlocked and in use, and stays
+ * out of the way when the OS is already doing it.
  */
 class FullScreenReminderModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -113,7 +131,129 @@ class FullScreenReminderModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    /* -------------------------------------------------------------- *
+     * Raising the reminder while the phone is unlocked and in use
+     * -------------------------------------------------------------- */
+
+    /**
+     * Whether this app may start an activity from the background.
+     *
+     * Since Android 10 a backgrounded app cannot simply call `startActivity` —
+     * the launch is dropped, and (short of a logcat line) silently. The
+     * exemption that fits a reminder is `SYSTEM_ALERT_WINDOW`, "Display over
+     * other apps", which the user grants in Settings; it is the same shape of
+     * opt-in as the full-screen-intent grant above, and it is what the alarm
+     * and timer apps this reminder is modelled on rely on.
+     *
+     * Below API 29 there is no such restriction, so there is nothing to ask
+     * for and this reports true.
+     */
+    @ReactMethod
+    fun canLaunchOverOtherApps(promise: Promise) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            promise.resolve(true)
+            return
+        }
+        promise.resolve(Settings.canDrawOverlays(reactApplicationContext))
+    }
+
+    /** Opens the "Display over other apps" screen for this app. */
+    @ReactMethod
+    fun openOverlaySettings(promise: Promise) {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:${reactApplicationContext.packageName}")
+        )
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        try {
+            val activity = reactApplicationContext.currentActivity
+            if (activity != null) activity.startActivity(intent) else reactApplicationContext.startActivity(intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Could not open overlay settings: ${e.message}")
+            promise.resolve(false)
+        }
+    }
+
+    /**
+     * Bring the app's reminder screen up over whatever the user is doing.
+     *
+     * Resolves with the reason it did or did not act, so the JS side can say
+     * something true about why a reminder stayed a banner instead of guessing:
+     *
+     *  - `launched` — the activity was started.
+     *  - `os-full-screen-intent` — the screen is off or locked, so the
+     *    notification's own full-screen intent is the path that fires. Doing it
+     *    again here would be a duplicate launch, and on `singleTask` that means
+     *    a redundant `onNewIntent` on an activity already coming up.
+     *  - `already-foreground` — the app is on screen; `ReminderFullScreen` is
+     *    driven by the outstanding reminder and comes up without any of this.
+     *  - `not-permitted` — no "Display over other apps" grant, so Android would
+     *    drop the launch. Reported rather than attempted, because a silently
+     *    swallowed `startActivity` is indistinguishable from a working one.
+     *  - `failed` — the launch threw.
+     */
+    @ReactMethod
+    fun presentReminder(promise: Promise) {
+        val context = reactApplicationContext
+
+        val power = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val keyguard = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+
+        // A missing service is read as "screen on, unlocked": that is the state
+        // this method exists for, and the checks below still stop anything
+        // unwanted from happening.
+        val interactive = power?.isInteractive ?: true
+        val locked = keyguard?.isKeyguardLocked ?: false
+
+        if (!interactive || locked) {
+            promise.resolve(RESULT_OS_HANDLES_IT)
+            return
+        }
+
+        if (context.lifecycleState == LifecycleState.RESUMED) {
+            promise.resolve(RESULT_ALREADY_FOREGROUND)
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !Settings.canDrawOverlays(context)) {
+            promise.resolve(RESULT_NOT_PERMITTED)
+            return
+        }
+
+        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        if (intent == null) {
+            promise.resolve(RESULT_FAILED)
+            return
+        }
+
+        // `MainActivity` is `singleTask`, so this brings the existing task
+        // forward and arrives at `onNewIntent` rather than building a second
+        // copy of the app. No `CLEAR_TOP`: a reminder must not throw away the
+        // screen the user was on inside the app.
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        intent.putExtra(EXTRA_FROM_REMINDER, true)
+
+        try {
+            context.startActivity(intent)
+            promise.resolve(RESULT_LAUNCHED)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Could not raise the reminder screen: ${e.message}")
+            promise.resolve(RESULT_FAILED)
+        }
+    }
+
     companion object {
         private const val TAG = "FullScreenReminder"
+
+        /** Marks the launch as a reminder's, for anything that inspects the intent. */
+        const val EXTRA_FROM_REMINDER = "getvari.fromReminder"
+
+        const val RESULT_LAUNCHED = "launched"
+        const val RESULT_OS_HANDLES_IT = "os-full-screen-intent"
+        const val RESULT_ALREADY_FOREGROUND = "already-foreground"
+        const val RESULT_NOT_PERMITTED = "not-permitted"
+        const val RESULT_FAILED = "failed"
     }
 }

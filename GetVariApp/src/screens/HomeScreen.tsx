@@ -103,10 +103,11 @@ const HomeScreen = ({ navigation }: any) => {
    * The daily goal, or null when there is not one to show. Never a stand-in.
    *
    * This is the personalized water target — the same number the breakdown card
-   * itemises — rather than the simpler figure stored on the profile. The two
-   * were different calculations answering the same question, and the dashboard
-   * showed one while the card below it explained the other, so the tile and
-   * the breakdown disagreed on the goal by several hundred millilitres.
+   * itemises. It and the profile's stored goal now come from one pipeline
+   * (`utils/pbwr.ts`); this one is the version refined by seven days of
+   * observed steps, temperature and humidity, which the stored copy has no
+   * way to read. They used to be two different formulas, so the tile and the
+   * card below it disagreed by several hundred millilitres.
    *
    * The physician gate still overrides it. A fluid-restricted diagnosis with
    * no doctor's limit on file has no goal at all, and the personalized target
@@ -118,8 +119,8 @@ const HomeScreen = ({ navigation }: any) => {
     if (pbwrBreakdown && Number.isFinite(pbwrBreakdown.finalTarget)) {
       return pbwrBreakdown.finalTarget;
     }
-    // Until the first solve lands, the profile's stored goal stands in — it is
-    // the same answer to within the environmental adjustments.
+    // Until the first solve lands, the profile's stored goal stands in — the
+    // same pipeline, run without the telemetry-driven bands.
     return Number.isFinite(userProfile?.targetDailyMl as number)
       ? (userProfile!.targetDailyMl as number)
       : null;

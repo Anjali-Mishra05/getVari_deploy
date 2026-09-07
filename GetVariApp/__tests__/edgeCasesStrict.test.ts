@@ -516,9 +516,10 @@ describe('EC-12: phone formatted — the profile is restored from the backend', 
 
     // The stored 3000 is *not* what comes back. The goal is derived, and the
     // row's copy of it is only ever as fresh as the last save — so it is
-    // recomputed on read from the answers that are stored. 62 kg × 35 = 2170,
-    // rounded to the configured 50 ml step.
-    expect(restored!.targetDailyMl).toBe(2150);
+    // recomputed on read from the answers that are stored: 62 kg × 49.1 ×
+    // 1.00, the PBWR baseline for a 30-year-old woman, with an indoor work
+    // environment adding nothing.
+    expect(restored!.targetDailyMl).toBe(3044);
   });
 
   test('a stale stored goal never outranks a physician limit', async () => {

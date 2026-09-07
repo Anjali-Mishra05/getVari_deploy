@@ -7,27 +7,59 @@
  * same rules that produced it in the first place, so both callers compute it
  * here.
  *
- * Every number it uses — millilitres per kilogram, the activity bonuses, the
- * per-condition adjustments, the climate bands and the safe range — now comes
- * from the admin config rather than from constants in this file. Changing how
- * a diagnosis moves the goal is a change in the admin panel, not a release.
+ * ## One formula, and it is the spec's
+ *
+ * What that shared calculation *was* is the more important half. This file
+ * used to carry a formula of its own — `weight × 35`, plus an activity bonus,
+ * a per-condition adjustment and a city climate allowance, rounded to 50 and
+ * clamped to 1.5–4.5 L — while `PBWR_v2_developer_onepager.docx` described a
+ * different five-stage pipeline that only the dashboard ran. The stored
+ * `targetDailyMl` came from here, so reminders, the chatbot's progress, the
+ * admin console and the web app all paced users by the formula that was not
+ * the spec, and the dashboard tile disagreed with them by hundreds of
+ * millilitres.
+ *
+ * There is now one pipeline, in `utils/pbwr.ts`, and this module is the
+ * synchronous entry point to it: the same five stages with no telemetry to
+ * feed the observed bands, which is precisely the §3 calibration-window
+ * behaviour. The dashboard calls `PBWRService` instead and gets the same
+ * number refined by seven days of sensor history.
+ *
+ * The admin config still drives it, but through the spec's knobs —
+ * `pbwrAdjustmentMl`, `pbwrUpperLimitMl`, `requiresPhysicianLimit` — rather
+ * than the retired `targetFormula`/`targetBonusMl`/`targetAdjustmentMl` ones.
  */
 
 import AppConfigStore from '../config/appConfigStore';
 import type { UserProfile } from '../types';
 import type { ClimateBandConfig } from '../config/appConfigSchema';
+import { computePBWRBreakdown } from './pbwr';
 
 export interface TargetInputs {
   weightKg: number;
+  /** Stage 1 scales the baseline by both, so neither is optional in practice. */
+  gender?: string;
+  age?: number;
+  /** Stage 3's self-declared work-environment band. */
+  workEnvironment?: string;
+  /** Not an activity band — §3 reads that from steps — but a §6 ceiling category. */
   activityLevel?: string;
   medicalConditions?: string[];
-  /** The resolved city, used only for its climate band. */
+  /**
+   * The resolved city.
+   *
+   * Kept on the inputs because callers pass whole form state, but it no
+   * longer moves the goal: §4 takes temperature and humidity from what the
+   * device actually observed, not from which city the user picked. The band
+   * still drives the risk engine — see `climateBandFor`.
+   */
   selectedCity?: string;
   /**
    * The daily ceiling the user's doctor set, in ml.
    *
-   * For a fluid-restricted condition this is not one more term in the sum —
-   * it replaces the formula outright. See `computeTargetDailyMl`.
+   * §5 step 2: it becomes the user's **Upper Limit**, and the health
+   * adjustment drops to zero. It is a cap on the formula, not a replacement
+   * for it. See `computeTargetDailyMl`.
    */
   physicianLimitMl?: number | null;
 }
@@ -96,25 +128,39 @@ export const climateBandFor = (selectedCity?: string): ClimateBandConfig => {
   return bands.find(band => band.cities.length === 0) ?? bands[bands.length - 1];
 };
 
-/** Extra hydration allocation implied by the city's climate baseline. */
+/**
+ * Extra hydration allocation implied by the city's climate baseline.
+ *
+ * No longer part of the daily goal — §4 bands temperature and humidity from
+ * what the device observed, not from a city lookup. Kept because the admin
+ * panel still publishes the figure and the value is meaningful on its own.
+ */
 export const climateModifierFor = (selectedCity?: string): number =>
   climateBandFor(selectedCity)?.targetAdjustmentMl ?? 0;
 
 /**
  * The goal in ml, or `null` when the app must not state one.
  *
- * ## A doctor's number is not a term in the formula
+ * This is the spec's pipeline run without telemetry — Stage 1's baseline plus
+ * the two self-declared Stage 3 bands, capped by Stage 4's ceiling and
+ * floored by Stage 5. It is what §3 prescribes for days 1–7, and it is the
+ * right answer for every caller that has a profile but no sensor history:
+ * onboarding, the profile editor's projection, and the copy `ProfileService`
+ * stores for reminders and the chatbot to read.
  *
- * For a fluid-restricted condition the physician's daily limit **replaces**
- * the calculation entirely — it is not added to it, blended with it, rounded
- * to the nearest 50, or raised to `minTargetMl`. Every one of those was
- * happening: a CKD profile with a nephrologist's 1200 ml/day on file was
- * shown `weight × 35 − 250`, so a 70 kg patient got a 2200 ml goal against a
- * 1200 ml restriction, and even feeding the limit through the old clamp would
- * have floored it back up to 1500.
+ * ## A doctor's number is a ceiling, not the goal
  *
- * Over-drinking on a fluid restriction is the harm this exists to prevent, so
- * the doctor's number wins outright and unmodified.
+ * §5 step 2: an entered physician limit "becomes the user's Upper Limit
+ * directly", and the health adjustment drops to +0. The formula still runs
+ * underneath it, which matters in both directions:
+ *
+ *  - It can only ever *lower* the target. `MIN(adjustedTotal, limit)` never
+ *    exceeds the limit, and the 1,500 ml floor yields to it rather than
+ *    overriding it — a nephrologist who says 900 means 900.
+ *  - It stops the limit being read as a *prescription*. Returning the number
+ *    verbatim, as this did, paced a 45 kg patient on a 3,000 ml restriction
+ *    to the full 3,000 — the maximum they are permitted, presented as the
+ *    amount they should drink. Their baseline is under 2 L.
  *
  * ## And when there is no number, there is no goal
  *
@@ -126,33 +172,29 @@ export const climateModifierFor = (selectedCity?: string): number =>
  */
 export const computeTargetDailyMl = ({
   weightKg,
+  gender,
+  age,
+  workEnvironment,
   activityLevel,
   medicalConditions = [],
-  selectedCity,
   physicianLimitMl,
 }: TargetInputs): number | null => {
-  const gate = physicianLimitStateFor(medicalConditions, physicianLimitMl);
-  if (gate === 'missing') return null;
-  if (gate === 'set') return Math.round(Number(physicianLimitMl));
+  if (physicianLimitStateFor(medicalConditions, physicianLimitMl) === 'missing') return null;
 
-  const { mlPerKg, minTargetMl, maxTargetMl, roundToMl } = AppConfigStore.current().targetFormula;
-
-  let targetMl = weightKg * mlPerKg;
-
-  const activity = AppConfigStore.current().activityLevels.find(level => level.id === activityLevel);
-  targetMl += activity?.targetBonusMl ?? 0;
-
-  // Unknown ids contribute nothing rather than throwing: a condition retired
-  // from the admin panel is still sitting on profiles that selected it.
-  for (const condition of AppConfigStore.conditionsFor(medicalConditions)) {
-    targetMl += condition.targetAdjustmentMl;
-  }
-
-  targetMl += climateModifierFor(selectedCity);
-
-  const step = roundToMl > 0 ? roundToMl : 1;
-  targetMl = Math.round(targetMl / step) * step;
-  return Math.min(maxTargetMl, Math.max(minTargetMl, targetMl));
+  return computePBWRBreakdown(
+    {
+      weightKg,
+      gender,
+      age,
+      workEnvironment,
+      activityLevel,
+      medicalConditions,
+      physicianLimitMl,
+    },
+    // No observed averages: the three telemetry-driven bands contribute
+    // nothing. `PBWRService` is the caller that has seven days of history.
+    null
+  ).finalTarget;
 };
 
 /** The same calculation over a stored profile blob. */
@@ -161,9 +203,11 @@ export const targetFromProfile = (
 ): number | null =>
   computeTargetDailyMl({
     weightKg: Number(profile.weightKg) || 0,
+    gender: profile.gender,
+    age: Number(profile.age) || undefined,
+    workEnvironment: profile.workEnvironment,
     activityLevel: profile.activityLevel,
     medicalConditions: profile.medicalConditions,
-    selectedCity: profile.selectedCity ?? profile.location,
     physicianLimitMl: profile.physicianLimitMl,
   });
 

@@ -10,9 +10,20 @@
  * calculation that produces the goal on the dashboard.
  *
  * Every case below is a way that number could be quietly raised again:
- * blended with the formula, rounded up to the nearest 50, floored to
- * `minTargetMl`, floored to PBWR's 1500, or replaced by a default when it is
- * missing. Each is asserted separately so a regression names itself.
+ * blended with the formula, rounded up to the nearest 50, floored to a
+ * configured minimum, floored to the spec's 1500, or replaced by a default
+ * when it is missing. Each is asserted separately so a regression names
+ * itself.
+ *
+ * ## The limit is a ceiling, not a prescription
+ *
+ * §5 step 2 of the spec: an entered limit "becomes the user's Upper Limit
+ * directly", and the health adjustment drops to +0. So the pipeline still
+ * runs underneath it and the goal is `MIN(what the body needs, what the
+ * doctor allows)`. In practice the baseline usually exceeds the restriction,
+ * so the goal *is* the limit — but for a small frame on a generous
+ * restriction it is lower, and returning the limit verbatim there presented
+ * the maximum a patient is permitted as the amount they should drink.
  *
  *   npx jest --config jest.config.logic.js __tests__/physicianLimit.test.ts
  */
@@ -35,9 +46,9 @@ beforeEach(() => {
 
 // ---------------------------------------------------------------------------
 
-describe('A doctor’s number replaces the formula', () => {
-  it('is the goal verbatim, not a term added to the calculation', () => {
-    // 70 kg would give 2450 before adjustments; the restriction is 1200.
+describe('A doctor’s number caps the formula', () => {
+  it('is the goal, not a term added to the calculation', () => {
+    // 70 kg gives a 3983 ml baseline; the restriction is 1200.
     expect(
       computeTargetDailyMl({
         weightKg: 70,
@@ -47,9 +58,57 @@ describe('A doctor’s number replaces the formula', () => {
     ).toBe(1200);
   });
 
-  it('is not raised by the safe-range floor', () => {
-    // `minTargetMl` is 1500. A doctor saying 900 means 900 — flooring it to
-    // 1500 would pace the patient 600 ml past their limit every day.
+  it('is never exceeded, whatever the rest of the profile says', () => {
+    // The one invariant that matters clinically: nothing in the pipeline —
+    // weight, work environment, a co-morbid diagnosis — may push the goal
+    // above the number the clinician set.
+    for (const weightKg of [40, 70, 140]) {
+      for (const workEnvironment of ['indoor', 'heavy_outdoor']) {
+        const target = computeTargetDailyMl({
+          weightKg,
+          gender: 'Male',
+          age: 30,
+          workEnvironment,
+          medicalConditions: ['ckd', 'diabetes'],
+          physicianLimitMl: 1500,
+        })!;
+        expect(target).toBeLessThanOrEqual(1500);
+      }
+    }
+  });
+
+  it('zeroes the health adjustment rather than adding to a capped intake', () => {
+    // §5 step 2. A CKD patient who also has diabetes does not get diabetes'
+    // +400 ml stacked onto a restricted intake.
+    const withComorbidity = computeTargetDailyMl({
+      weightKg: 35,
+      gender: 'Female',
+      age: 30,
+      medicalConditions: ['ckd', 'diabetes'],
+      physicianLimitMl: 3000,
+    });
+    // 35 × 49.1 = 1718.5 → 1719, with no diabetes adjustment on top.
+    expect(withComorbidity).toBe(1719);
+  });
+
+  it('paces a small frame to what the body needs, not to the ceiling', () => {
+    // A 45 kg patient allowed 3000 ml/day is not told to drink 3000 ml: the
+    // limit is what they may not exceed, not what they should aim for.
+    const target = computeTargetDailyMl({
+      weightKg: 45,
+      gender: 'Female',
+      age: 30,
+      medicalConditions: ['ckd'],
+      physicianLimitMl: 3000,
+    })!;
+    expect(target).toBe(2210); // 45 × 49.1 × 1.00
+    expect(target).toBeLessThan(3000);
+  });
+
+  it('is not raised by the safety floor', () => {
+    // §7's floor is 1500. A doctor saying 900 means 900 — flooring it to 1500
+    // would pace the patient 600 ml past their limit every day, so §7 yields
+    // to §5 rather than overriding it.
     expect(
       computeTargetDailyMl({
         weightKg: 70,
@@ -59,7 +118,7 @@ describe('A doctor’s number replaces the formula', () => {
     ).toBe(900);
   });
 
-  it('is not rounded to the formula’s 50 ml step', () => {
+  it('is not rounded to a bottle-friendly step', () => {
     // 1225 must not become 1250: rounding a restriction upwards is the same
     // error as the floor, just smaller.
     expect(
@@ -71,9 +130,10 @@ describe('A doctor’s number replaces the formula', () => {
     ).toBe(1225);
   });
 
-  it('ignores weight, activity and climate entirely', () => {
-    // Every one of these would raise a formula-derived goal. None of them may
-    // move a number a clinician set.
+  it('is not lifted by weight, activity or climate', () => {
+    // Every one of these raises the uncapped figure. None of them may carry
+    // the goal past the number a clinician set — at 45 kg the baseline is
+    // 2210 and at 140 kg it is 7966, and both land on the 1400 ceiling.
     const base = {
       medicalConditions: ['ckd'],
       physicianLimitMl: 1400,
@@ -99,9 +159,10 @@ describe('A doctor’s number replaces the formula', () => {
 
   it('follows the admin config rather than a hardcoded list of ids', () => {
     // Diabetes ships as not-restricted. Flipping the flag has to be enough.
+    // 60 × 56.9 (no gender stored → the male rate) + 400 for diabetes.
     expect(
       computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] })
-    ).toBe(2550);
+    ).toBe(3814);
 
     AppConfigStore.adopt({
       ...DEFAULT_APP_CONFIG,
@@ -131,8 +192,9 @@ describe('With no number on file, there is no goal', () => {
   });
 
   it('still computes a goal for an unrestricted profile', () => {
-    expect(computeTargetDailyMl({ weightKg: 60 })).toBe(2100);
-    expect(computeTargetDailyMl({ weightKg: 60, physicianLimitMl: 1200 })).toBe(2100);
+    expect(computeTargetDailyMl({ weightKg: 60 })).toBe(3414);
+    // A limit typed against no restricted diagnosis is not a ceiling at all.
+    expect(computeTargetDailyMl({ weightKg: 60, physicianLimitMl: 1200 })).toBe(3414);
   });
 });
 

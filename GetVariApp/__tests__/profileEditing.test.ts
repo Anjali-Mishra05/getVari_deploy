@@ -59,7 +59,7 @@ jest.mock('../src/services/SupabaseClient', () => {
   };
 });
 
-import { computeTargetDailyMl, climateModifierFor } from '../src/utils/hydrationTarget';
+import { computeTargetDailyMl } from '../src/utils/hydrationTarget';
 import { updateProfile } from '../src/services/ProfileService';
 
 /** The blob a finished onboarding leaves behind. */
@@ -93,25 +93,52 @@ beforeEach(() => {
 const savedProfile = () => mockUpserted[mockUpserted.length - 1].profile;
 
 describe('computeTargetDailyMl', () => {
-  it('starts from body weight', () => {
-    // 60kg * 35 = 2100, already a multiple of 50.
-    expect(computeTargetDailyMl({ weightKg: 60 })).toBe(2100);
+  it('starts from the PBWR baseline: weight × gender rate × age factor', () => {
+    // §2. 60 kg female, 19–39 → 60 × 49.1 × 1.00 = 2946.
+    expect(computeTargetDailyMl({ weightKg: 60, gender: 'Female', age: 30 })).toBe(2946);
+    // 60 kg male → 60 × 56.9 × 1.00 = 3414.
+    expect(computeTargetDailyMl({ weightKg: 60, gender: 'Male', age: 30 })).toBe(3414);
   });
 
-  it('adds for sustained strain', () => {
-    expect(computeTargetDailyMl({ weightKg: 60, activityLevel: 'active' })).toBe(2700);
-    expect(computeTargetDailyMl({ weightKg: 60, activityLevel: 'elite' })).toBe(3300);
-    expect(computeTargetDailyMl({ weightKg: 60, activityLevel: 'sedentary' })).toBe(2100);
+  it('scales the baseline down with age', () => {
+    // §2 age bands: 1.00 / 0.95 / 0.90.
+    expect(computeTargetDailyMl({ weightKg: 60, gender: 'Female', age: 45 })).toBe(2799); // ×0.95
+    expect(computeTargetDailyMl({ weightKg: 60, gender: 'Female', age: 65 })).toBe(2651); // ×0.90
+  });
+
+  it('reads the gender rate whatever case the row stored it in', () => {
+    // Onboarding has written both "Female" and "female"; an exact match gave
+    // the lowercase rows the male rate and a baseline 16% too high.
+    expect(computeTargetDailyMl({ weightKg: 60, gender: 'female', age: 30 })).toBe(2946);
+  });
+
+  it('adds the work-environment band', () => {
+    // §4. AC office +250, heavy outdoor +1300.
+    const base = { weightKg: 60, gender: 'Female' as const, age: 30 };
+    expect(computeTargetDailyMl({ ...base, workEnvironment: 'indoor' })).toBe(2946);
+    expect(computeTargetDailyMl({ ...base, workEnvironment: 'ac_office' })).toBe(3196);
+    expect(computeTargetDailyMl({ ...base, workEnvironment: 'heavy_outdoor' })).toBe(4246);
   });
 
   it('applies the adjustment of a condition that needs no doctor', () => {
-    expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] })).toBe(2550);
+    // §4 health table: diabetes +400.
+    expect(
+      computeTargetDailyMl({ weightKg: 60, gender: 'Female', age: 30, medicalConditions: ['diabetes'] })
+    ).toBe(3346);
+  });
+
+  it('leaves the observed bands at zero with no telemetry to read', () => {
+    // §3: activity, temperature and humidity come from seven days of
+    // observation, never from a declared category or the chosen city. This
+    // entry point has no history, so all three contribute nothing — the
+    // calibration-window behaviour, and the reason `PBWRService` exists.
+    const base = { weightKg: 60, gender: 'Female' as const, age: 30 };
+    expect(computeTargetDailyMl({ ...base, activityLevel: 'elite' })).toBe(2946);
+    expect(computeTargetDailyMl({ ...base, selectedCity: 'Chennai' })).toBe(2946);
   });
 
   it('refuses to compute a goal for a fluid-restricted condition', () => {
     // CKD, hypertension and heart disease are all `requiresPhysicianLimit`.
-    // These used to return 1850 / 2700 — a formula-derived goal for someone
-    // on a fluid restriction, which is the defect this suite now guards.
     expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['ckd'] })).toBeNull();
     expect(
       computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes', 'hypertension'] })
@@ -119,33 +146,20 @@ describe('computeTargetDailyMl', () => {
   });
 
   it('ignores a condition it has no rule for', () => {
-    expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['cardio'] })).toBe(2100);
-  });
-
-  it('adds a climate allowance by city band', () => {
-    expect(climateModifierFor('Chennai')).toBe(350);
-    expect(climateModifierFor('Bengaluru')).toBe(100);
-    expect(climateModifierFor('Patna')).toBe(0);
-    expect(climateModifierFor(undefined)).toBe(0);
-    expect(computeTargetDailyMl({ weightKg: 60, selectedCity: 'Chennai' })).toBe(2450);
-  });
-
-  it('clamps to a safe range whatever the inputs say', () => {
-    // A tiny frame with no restricted diagnosis still gets the floor.
-    expect(computeTargetDailyMl({ weightKg: 30 })).toBe(1500);
     expect(
-      computeTargetDailyMl({
-        weightKg: 140,
-        activityLevel: 'elite',
-        medicalConditions: ['diabetes'],
-        selectedCity: 'Delhi',
-      })
-    ).toBe(4500);
+      computeTargetDailyMl({ weightKg: 60, gender: 'Female', age: 30, medicalConditions: ['cardio'] })
+    ).toBe(2946);
   });
 
-  it('rounds to something a bottle can actually deliver', () => {
-    // 63kg * 35 = 2205 → 2200.
-    expect(computeTargetDailyMl({ weightKg: 63 })).toBe(2200);
+  it('caps at the §6 ceiling and floors at the §7 minimum', () => {
+    // A tiny frame still gets the 1.5 L floor.
+    expect(computeTargetDailyMl({ weightKg: 25, gender: 'Female', age: 65 })).toBe(1500);
+    // A heavy frame is capped: 140 × 56.9 = 7966, healthy male ceiling 4500.
+    expect(computeTargetDailyMl({ weightKg: 140, gender: 'Male', age: 30 })).toBe(4500);
+    // Declaring high strain raises the ceiling to the §6 Gym row, 5000.
+    expect(
+      computeTargetDailyMl({ weightKg: 140, gender: 'Male', age: 30, activityLevel: 'elite' })
+    ).toBe(5000);
   });
 });
 
@@ -165,20 +179,22 @@ describe('updateProfile', () => {
 
   it('recomputes the daily goal from the corrected answers', async () => {
     await updateProfile({ weightKg: 65 });
-    // 65 * 35 = 2275, +100 for Bengaluru = 2375 → 2400 at the nearest 50.
-    expect(savedProfile().targetDailyMl).toBe(2400);
+    // 65 kg female, age 30 → 65 × 49.1 × 1.00 = 3191.5 → 3192.
+    expect(savedProfile().targetDailyMl).toBe(3192);
   });
 
   it('moves the goal when a diagnosis is added', async () => {
     await updateProfile({ medicalConditions: ['diabetes'] });
-    // 2100 + 450 + 100 = 2650.
-    expect(savedProfile().targetDailyMl).toBe(2650);
+    // 60 × 49.1 = 2946, + the §4 diabetes adjustment of 400.
+    expect(savedProfile().targetDailyMl).toBe(3346);
   });
 
   it('keeps the dashboard’s location field in step with the chosen city', async () => {
     await updateProfile({ selectedCity: 'Chennai' });
     expect(savedProfile().location).toBe('Chennai');
-    expect(savedProfile().targetDailyMl).toBe(2450);
+    // The city moves the risk engine's climate band, not the goal: §4 bands
+    // temperature and humidity from what the device observed.
+    expect(savedProfile().targetDailyMl).toBe(2946);
   });
 
   it('recomputes waking hours and hands the window to the OS', async () => {
@@ -217,6 +233,8 @@ describe('updateProfile', () => {
     });
 
     expect(result.status).toBe('saved');
-    expect(savedProfile()).toMatchObject({ fullName: 'New User', targetDailyMl: 2450 });
+    // No stored row, so no age or gender either: Stage 1 falls back to 30
+    // years and the male rate — 70 × 56.9 × 1.00.
+    expect(savedProfile()).toMatchObject({ fullName: 'New User', targetDailyMl: 3983 });
   });
 });

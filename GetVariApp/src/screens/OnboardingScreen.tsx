@@ -261,12 +261,15 @@ const OnboardingScreen = ({ navigation }: any) => {
           // activity or diagnoses moves the goal by exactly these rules.
           const targetMl = computeTargetDailyMl({
             weightKg: weight,
+            // Stage 1 of the PBWR pipeline scales the baseline by both.
+            gender,
+            age,
+            workEnvironment,
             activityLevel,
             medicalConditions,
-            selectedCity,
-            // For a fluid-restricted diagnosis this *is* the goal — the
-            // formula above it does not run. Step 6 will not let the user
-            // past without it.
+            // For a fluid-restricted diagnosis this becomes the ceiling the
+            // formula is capped to, and zeroes the health adjustment. Step 6
+            // will not let the user past without it.
             physicianLimitMl: physicianLimit ? parseInt(physicianLimit, 10) : undefined,
           });
 

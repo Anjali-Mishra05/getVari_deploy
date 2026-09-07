@@ -1056,20 +1056,29 @@ class NotificationService {
    * Whether a reminder would actually take over the screen, or quietly fall
    * back to a banner.
    *
-   * Two independent things can suppress it, and both belong to the user: the
-   * Android 14+ full-screen-intent grant, and the channel's importance (a
-   * channel the user has turned down below HIGH loses the full-screen
-   * behaviour). Both are reported here so the app can explain the actual
-   * reason rather than guessing.
+   * Three independent things can suppress it, and all belong to the user: the
+   * Android 14+ full-screen-intent grant, the "Display over other apps" grant
+   * that covers the unlocked-and-in-use case the first one does not, and the
+   * channel's importance (a channel the user has turned down below HIGH loses
+   * the full-screen behaviour). All three are reported here so the app can
+   * explain the actual reason rather than guessing.
    */
   async fullScreenReminderStatus(): Promise<{
     granted: boolean;
     channelAllows: boolean;
+    canLaunchOverApps: boolean;
     available: boolean;
+    availableInUse: boolean;
   }> {
     if (Platform.OS !== 'android') {
       // iOS has no equivalent; the in-app prompt is the whole feature there.
-      return { granted: false, channelAllows: false, available: false };
+      return {
+        granted: false,
+        channelAllows: false,
+        canLaunchOverApps: false,
+        available: false,
+        availableInUse: false,
+      };
     }
 
     let granted = true;
@@ -1093,7 +1102,22 @@ class NotificationService {
       console.warn('[Reminders] Could not read reminder channel:', error);
     }
 
-    return { granted, channelAllows, available: granted && channelAllows };
+    const { granted: canLaunchOverApps } = await this.backgroundLaunchStatus();
+
+    return {
+      granted,
+      channelAllows,
+      canLaunchOverApps,
+      // Two different moments, two different permissions. `available` is the
+      // locked or dark phone, which is all the full-screen *intent* ever
+      // covers. `availableInUse` is the user awake with the phone in their
+      // hand — Android downgrades the intent to a banner there, so it takes
+      // the overlay grant instead. Reported apart because a reminder can
+      // genuinely work in one case and not the other, and collapsing them
+      // would have the app ask for a permission that changes nothing.
+      available: granted && channelAllows,
+      availableInUse: canLaunchOverApps && channelAllows,
+    };
   }
 
   /** Sends the user to the setting that allows full-screen reminders. */
@@ -1109,6 +1133,90 @@ class NotificationService {
       await notifee.openNotificationSettings(REMINDER_CHANNEL_ID);
     } catch (error) {
       console.error('[Reminders] Failed to open full-screen settings:', error);
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Raising the reminder while the phone is unlocked and in use
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Whether the app may open the reminder screen over another app.
+   *
+   * Separate from `fullScreenReminderStatus` because it is a different
+   * permission covering a different moment. The full-screen *intent* only
+   * ever fires on a screen that is off or locked — Android downgrades it to a
+   * heads-up banner as soon as the user is actually holding the phone. The
+   * unlocked-and-in-use case is the one the reminder most needs, and it needs
+   * "Display over other apps" instead.
+   */
+  async backgroundLaunchStatus(): Promise<{ granted: boolean }> {
+    if (Platform.OS !== 'android') return { granted: false };
+
+    try {
+      const native = NativeModules.FullScreenReminderModule;
+      if (native?.canLaunchOverOtherApps) {
+        return { granted: await native.canLaunchOverOtherApps() };
+      }
+    } catch (error) {
+      console.warn('[Reminders] Could not read the background-launch grant:', error);
+    }
+    // An old build of the native module, or none at all. Reported as granted
+    // so the app does not nag about a permission it cannot verify — the launch
+    // itself still reports honestly when it is refused.
+    return { granted: true };
+  }
+
+  /** Sends the user to the "Display over other apps" screen. */
+  async openBackgroundLaunchSettings(): Promise<void> {
+    try {
+      const native = NativeModules.FullScreenReminderModule;
+      if (native?.openOverlaySettings) await native.openOverlaySettings();
+    } catch (error) {
+      console.error('[Reminders] Failed to open overlay settings:', error);
+    }
+  }
+
+  /**
+   * Put the reminder screen in front of the user, wherever they are.
+   *
+   * Called on every reminder delivery that reaches the background handler. It
+   * is deliberately unconditional at the call site and selective here, because
+   * only the native side can see the three things that decide the answer —
+   * whether the screen is on, whether the keyguard is up, and whether this app
+   * is already resumed. The states break down as:
+   *
+   *  - **App in the foreground** — nothing to do. `ReminderFullScreen` is
+   *    driven by the outstanding reminder, which the delivery has already
+   *    raised, so the prompt is on screen before this is even reached.
+   *  - **Screen off, or locked** — the notification's own `fullScreenAction`
+   *    is what fires, and `MainActivity.showOverLockScreen` brings it up over
+   *    the keyguard. Launching again here would be a duplicate.
+   *  - **Unlocked, user in another app** — this is the gap, and the only case
+   *    that actually starts an activity. Android will not do it for us.
+   *
+   * Never throws: a reminder that cannot be raised full-screen is still in the
+   * shade with its two inline actions, which is the fallback the whole feature
+   * is built to degrade to.
+   */
+  async presentReminderFullScreen(notification?: Notification | null): Promise<string> {
+    if (notification && notification.data?.type !== HYDRATION_REMINDER_TYPE) return 'not-a-reminder';
+    if (Platform.OS !== 'android') return 'unsupported';
+
+    try {
+      const native = NativeModules.FullScreenReminderModule;
+      if (!native?.presentReminder) return 'unsupported';
+
+      const outcome: string = await native.presentReminder();
+      if (outcome === 'not-permitted') {
+        // Worth a line in the log: this is the one outcome the user can fix,
+        // and the banner that asks them to is driven by the same grant.
+        console.log('[Reminders] Cannot open over other apps — the grant is missing.');
+      }
+      return outcome;
+    } catch (error) {
+      console.error('[Reminders] Failed to raise the reminder screen:', error);
+      return 'failed';
     }
   }
 
