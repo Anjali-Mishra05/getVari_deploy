@@ -29,6 +29,7 @@ module.exports = {
     '<rootDir>/__tests__/reminderScheduling.test.ts',
     '<rootDir>/__tests__/reminderPrompt.test.ts',
     '<rootDir>/__tests__/reminderPresentation.test.ts',
+    '<rootDir>/__tests__/reminderContent.test.ts',
     '<rootDir>/__tests__/appConfig.test.ts',
     '<rootDir>/__tests__/intakeCorrection.test.ts',
     '<rootDir>/__tests__/scoreStability.test.ts',

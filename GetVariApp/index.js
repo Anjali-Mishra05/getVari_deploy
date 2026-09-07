@@ -13,6 +13,7 @@ import NotificationService, {
 } from './src/services/NotificationService';
 import NotificationHistory from './src/services/NotificationHistory';
 import HydrationService from './src/services/HydrationService';
+import ReminderFactsService from './src/services/ReminderFactsService';
 
 /**
  * Events that reach the app while it is backgrounded or not running at all.
@@ -33,7 +34,30 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
 
   const verdict = await NotificationService.handleReminderEvent(type, detail);
 
-  if (type === EventType.DELIVERED) {
+  // The refresh below re-posts the reminder so Android will update its text,
+  // and that re-post arrives here as a second DELIVERED carrying `refreshed`.
+  // Everything in this branch has already run for it — `recordDelivery` and
+  // `ActiveReminder.raise` above both collapse the repeat on the unchanged
+  // event id, and doing the work twice would mean a second launch attempt.
+  const isFirstDelivery =
+    type === EventType.DELIVERED && detail.notification?.data?.refreshed !== '1';
+
+  if (isFirstDelivery) {
+    // Say something true about *this* user rather than the same fixed line
+    // twelve times a day. The numbers are read now, at delivery: a reminder is
+    // queued as an alarm up to a day ahead, and anything specific baked in at
+    // that point would be a wrong number on a health notification by the time
+    // it fired. Gathered outside the notification layer because the profile,
+    // the log and the telemetry history all already depend on it.
+    try {
+      const facts = await ReminderFactsService.gatherReminderFacts();
+      await NotificationService.refreshReminderContent(detail.notification, facts);
+    } catch (error) {
+      // A reminder that could not be personalised is still a reminder, and it
+      // is already in front of the user.
+      console.error('[Reminders] Could not personalise the reminder:', error);
+    }
+
     // Bring the reminder screen up over whatever the user is doing.
     //
     // The notification already carries a `fullScreenAction`, but Android only

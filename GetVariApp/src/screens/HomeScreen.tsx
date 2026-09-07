@@ -893,6 +893,12 @@ const HomeScreen = ({ navigation }: any) => {
           }}
           totalMl={totalWaterConsumed}
           targetMl={targetMl}
+          // The live solve, not the copy written into the notification at
+          // delivery. This screen is rendering now, so it can state the
+          // current number; the shade's line is fixed the moment it is posted.
+          riskScore={telemetry.solvedRisk.score}
+          riskStatus={telemetry.solvedRisk.status}
+          hoursSinceDrink={telemetry.effectiveHoursSinceDrink}
         />
 
         <NotificationCenter

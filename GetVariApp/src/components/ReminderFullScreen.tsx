@@ -60,6 +60,20 @@ export interface ReminderFullScreenProps {
   totalMl: number;
   /** The daily goal, or null while the profile is still loading. */
   targetMl: number | null;
+  /**
+   * The live hydration risk score, or null for "Insufficient Data".
+   *
+   * Read straight off the running solve rather than off the notification,
+   * which is why it can be shown at all: the shade's copy is written once at
+   * delivery and then fixed, while this screen is rendering now. A null score
+   * hides the row rather than printing a dash — a reminder is a bad place to
+   * explain why a number is missing.
+   */
+  riskScore?: number | null;
+  /** The engine's band for that score, e.g. "High Risk". */
+  riskStatus?: string | null;
+  /** Hours since the last logged drink, for the same line. */
+  hoursSinceDrink?: number | null;
 }
 
 /** "just now" / "12 minutes ago" — how long the reminder has been waiting. */
@@ -70,6 +84,26 @@ const describeAge = (firedAt: number | null, now: number): string => {
   if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
   const hours = Math.round(minutes / 60);
   return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+};
+
+/**
+ * The risk bands' colours, matching the dashboard's dial.
+ *
+ * Taken from the same thresholds rather than a second set of numbers: a
+ * reminder that colours 55 amber while the dashboard colours it red would have
+ * the user believe the two screens disagree about their body.
+ */
+const riskTone = (score: number): string => {
+  if (score >= 70) return '#ef4444';
+  if (score >= 40) return '#f59e0b';
+  return '#10b981';
+};
+
+/** "3h since your last drink" — the gap, in the units it is worth stating in. */
+const describeDrinkGap = (hours: number): string => {
+  const minutes = Math.round(hours * 60);
+  if (minutes < 60) return `${Math.max(0, minutes)} min since water`;
+  return `${Math.floor(hours)}h since water`;
 };
 
 /**
@@ -108,6 +142,9 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
   onClose,
   totalMl,
   targetMl,
+  riskScore,
+  riskStatus,
+  hoursSinceDrink,
 }) => {
   const [selectedMl, setSelectedMl] = useState<number>(() => primaryQuickAmount().ml);
   const [saving, setSaving] = useState(false);
@@ -286,6 +323,59 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
               </Text>
             )}
           </View>
+
+          {/*
+            Why the reminder states a number at all.
+
+            "Time to hydrate" is a thing the user already knows; it is the line
+            that turned this into something to dismiss. The risk score and the
+            gap since the last drink are the two facts that answer "why now?",
+            and they are the same figures the dashboard shows — read live here,
+            so unlike the shade's copy they cannot be stale.
+          */}
+          {(typeof riskScore === 'number' || typeof hoursSinceDrink === 'number') && (
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 10,
+                marginBottom: 12,
+              }}
+            >
+              {typeof riskScore === 'number' && (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 6,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: `${riskTone(riskScore)}33`,
+                    backgroundColor: `${riskTone(riskScore)}14`,
+                    paddingHorizontal: 11,
+                    paddingVertical: 5,
+                  }}
+                >
+                  <Text
+                    style={{ color: riskTone(riskScore), fontSize: 11, fontWeight: '900' }}
+                  >
+                    RISK {Math.round(riskScore)}
+                  </Text>
+                  {!!riskStatus && (
+                    <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '700' }}>
+                      {riskStatus}
+                    </Text>
+                  )}
+                </View>
+              )}
+
+              {typeof hoursSinceDrink === 'number' && (
+                <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '700' }}>
+                  {describeDrinkGap(hoursSinceDrink)}
+                </Text>
+              )}
+            </View>
+          )}
 
           {/* ------------------------------------------- Today's progress */}
           <View

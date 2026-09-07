@@ -75,6 +75,12 @@ jest.mock('react-native', () => ({
 
 const mockStore = new Map<string, string>();
 
+/** Notifications posted through `displayNotification`, in order. */
+const mockDisplayed: any[] = [];
+
+/** Notifications queued through `createTriggerNotification`, in order. */
+const mockQueued: any[] = [];
+
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
   default: {
@@ -101,8 +107,14 @@ jest.mock('@notifee/react-native', () => ({
     cancelTriggerNotifications: () => Promise.resolve(),
     getDisplayedNotifications: () => Promise.resolve([]),
     cancelDisplayedNotifications: () => Promise.resolve(),
-    createTriggerNotification: () => Promise.resolve(),
-    displayNotification: () => Promise.resolve(),
+    createTriggerNotification: (notification: any, trigger: any) => {
+      mockQueued.push({ notification, trigger });
+      return Promise.resolve();
+    },
+    displayNotification: (notification: any) => {
+      mockDisplayed.push(notification);
+      return Promise.resolve();
+    },
     openNotificationSettings: () => Promise.resolve(),
     onForegroundEvent: () => () => {},
     onBackgroundEvent: () => {},
@@ -140,6 +152,7 @@ jest.mock('../src/services/NotificationHistory', () => ({
 import NotificationService, {
   HYDRATION_REMINDER_TYPE,
 } from '../src/services/NotificationService';
+import { GENERIC_REMINDER_BODY } from '../src/utils/reminderContent';
 
 const reminder = () => ({
   id: 'hydration-reminder-1',
@@ -150,6 +163,8 @@ const NATIVE_MODULE = mockNativeModules;
 
 beforeEach(() => {
   mockStore.clear();
+  mockDisplayed.length = 0;
+  mockQueued.length = 0;
   mockNativeCalls.length = 0;
   mockPlatformOS = 'android';
   mockChannelImportance = 4;
@@ -307,5 +322,93 @@ describe('the background-launch grant on its own', () => {
 
     mockNativeModules = {};
     await expect(NotificationService.openBackgroundLaunchSettings()).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Rewriting a delivered reminder with figures that are true right now.
+ *
+ * Android has no way to change a posted notification except to post it again
+ * under the same id — and that second post arrives as another delivery. So the
+ * feature that makes a reminder say something useful is one missing guard away
+ * from an endless loop of heads-up notifications, which is the case this
+ * section exists for.
+ */
+describe('refreshing a delivered reminder', () => {
+  const facts = { hoursSinceDrink: 3, totalMl: 500, targetMl: 3000 };
+
+  it('re-posts the reminder with the delivery-time figures', async () => {
+    expect(await NotificationService.refreshReminderContent(reminder() as any, facts)).toBe(
+      'refreshed'
+    );
+    expect(mockDisplayed).toHaveLength(1);
+    expect(mockDisplayed[0].body).toBe('3h since your last drink · 500 / 3000 ml — 2500 ml to go');
+    // The expanded view has to carry the same line as the collapsed one.
+    expect(mockDisplayed[0].android.style.text).toBe(mockDisplayed[0].body);
+  });
+
+  it('never refreshes a re-post, so the rewrite cannot loop', async () => {
+    await NotificationService.refreshReminderContent(reminder() as any, facts);
+    const reposted = mockDisplayed[0];
+
+    // Exactly what Android hands back when the re-post is delivered.
+    expect(reposted.data.refreshed).toBe('1');
+    expect(await NotificationService.refreshReminderContent(reposted, facts)).toBe('skipped');
+    expect(mockDisplayed).toHaveLength(1);
+  });
+
+  it('keeps the event id, so the repeat collapses everywhere it is recorded', async () => {
+    // `ActiveReminder.raise` returns early on a reminder it already holds and
+    // `NotificationHistory` drops a duplicate id — both keyed on this. A fresh
+    // id would show two reminders in the bell menu and restart the "x minutes
+    // ago" the screen counts from.
+    await NotificationService.refreshReminderContent(reminder() as any, facts);
+    expect(mockDisplayed[0].data.eventId).toBe(reminder().data.eventId);
+    expect(mockDisplayed[0].id).toBe(reminder().id);
+  });
+
+  it('keeps the actions and the full-screen intent on the re-post', async () => {
+    // The re-post replaces the notification wholesale, so anything it omits is
+    // gone — including the two buttons that are the only way to answer a
+    // reminder on a device where the full screen never fires.
+    await NotificationService.refreshReminderContent(reminder() as any, facts);
+    const posted = mockDisplayed[0];
+    expect(posted.android.actions).toHaveLength(2);
+    expect(posted.android.fullScreenAction).toBeTruthy();
+    expect(posted.android.category).toBe('alarm');
+  });
+
+  it('does not re-post when there is nothing specific to say', async () => {
+    // Re-posting the identical generic line would cost the user a second
+    // heads-up for no new information.
+    expect(await NotificationService.refreshReminderContent(reminder() as any, {})).toBe(
+      'skipped'
+    );
+    expect(mockDisplayed).toHaveLength(0);
+  });
+
+  it('leaves a notification that is not a reminder alone', async () => {
+    const outcome = await NotificationService.refreshReminderContent(
+      { id: 'daily-morning', data: { type: 'daily_message' } } as any,
+      facts
+    );
+    expect(outcome).toBe('skipped');
+    expect(mockDisplayed).toHaveLength(0);
+  });
+
+  it('queues a reminder with the generic line, and personalises it later', async () => {
+    // A queued reminder is built up to a day before it fires, so it carries
+    // the generic line and nothing else; `refreshReminderContent` is what puts
+    // real figures on it at the moment of delivery. Asserting the queued shape
+    // here is what stops someone "helpfully" baking the numbers in at schedule
+    // time, which is exactly the stale-number trap this design avoids.
+    await NotificationService.fireTestReminder(60);
+    const queued = mockQueued.find(n => n?.notification?.data?.type === HYDRATION_REMINDER_TYPE);
+
+    expect(queued).toBeTruthy();
+    expect(queued.notification.body).toBe(GENERIC_REMINDER_BODY);
+    expect(queued.notification.data.refreshed).toBeUndefined();
   });
 });

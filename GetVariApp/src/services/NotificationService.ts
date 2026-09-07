@@ -29,6 +29,12 @@ import ActiveReminder from './ActiveReminder';
 import NotificationHistory from './NotificationHistory';
 import { primaryQuickAmount } from '../utils/hydrationAmounts';
 import {
+  GENERIC_REMINDER_BODY,
+  REMINDER_TITLE,
+  buildReminderContent,
+  type ReminderFacts,
+} from '../utils/reminderContent';
+import {
   DEFAULT_SLEEP_SCHEDULE,
   SleepSchedule,
   isAsleepAt,
@@ -190,8 +196,17 @@ export const DAILY_HORIZON_DAYS = 7;
  * this still opens the logging conversation — that is the press action, not a
  * second kind of notification.
  */
-const REMINDER_TITLE = '💧 Hydration';
-const REMINDER_BODY = 'Time to hydrate! Please drink some water to stay hydrated.';
+/**
+ * The line a reminder falls back to.
+ *
+ * Every queued reminder starts with this, because a trigger notification is
+ * built up to 24 hours before it fires and nothing specific about the user
+ * stays true that long. `refreshReminderContent` rewrites it with real numbers
+ * at the moment it is delivered; this is what stands if that rewrite cannot
+ * run — the app was killed and the read failed, or there is genuinely nothing
+ * known yet.
+ */
+const REMINDER_BODY = GENERIC_REMINDER_BODY;
 
 /** Makes each locally displayed notification's event id unique. */
 let displayCounter = 0;
@@ -279,22 +294,41 @@ const androidOptions = (
  * vanish before its handler has run; the handlers cancel it themselves once
  * they have done the work.
  */
-const reminderNotification = ({ id, eventId }: { id: string; eventId: string }): Notification => {
+const reminderNotification = ({
+  id,
+  eventId,
+  body = REMINDER_BODY,
+  refreshed = false,
+}: {
+  id: string;
+  eventId: string;
+  /** The delivery-time line, when there is one. See `refreshReminderContent`. */
+  body?: string;
+  /**
+   * Marks a re-post, so the delivery it produces is not refreshed again.
+   *
+   * Android updates a notification by posting it a second time under the same
+   * id, and that post arrives as another DELIVERED event. Without this flag
+   * the refresh would trigger its own refresh, forever.
+   */
+  refreshed?: boolean;
+}): Notification => {
   const primary = primaryQuickAmount();
 
   return {
     id,
     title: REMINDER_TITLE,
-    body: REMINDER_BODY,
+    body,
     data: {
       type: HYDRATION_REMINDER_TYPE,
       eventId,
       // Carried on the notification so a background action press knows what
       // "Log" meant without having to read the config it may not have loaded.
       primaryMl: String(primary.ml),
+      ...(refreshed ? { refreshed: '1' } : {}),
     },
     android: {
-      ...androidOptions(REMINDER_CHANNEL_ID, REMINDER_BODY, {
+      ...androidOptions(REMINDER_CHANNEL_ID, body, {
         importance: AndroidImportance.HIGH,
         pressAction: { id: REMINDER_PRESS_ACTION, launchActivity: 'default' },
         summary: 'Hydration reminder',
@@ -1133,6 +1167,67 @@ class NotificationService {
       await notifee.openNotificationSettings(REMINDER_CHANNEL_ID);
     } catch (error) {
       console.error('[Reminders] Failed to open full-screen settings:', error);
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * What the reminder says, at the moment it says it
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Rewrite a delivered reminder with what is true right now.
+   *
+   * Reminders are queued as one-shot alarms up to `REMINDER_COVERAGE_MS` — a
+   * full day — ahead of time, and `createTriggerNotification` bakes the text
+   * in when it queues. So anything specific written at that point is stale by
+   * the time it fires: a risk score from yesterday morning shown at nine
+   * tonight is not a stale detail, it is a wrong number on a health
+   * notification, which the user has no way to check.
+   *
+   * Android's only way to change a posted notification is to post it again
+   * under the same id, so that is what this does. The re-post carries
+   * `refreshed`, and the caller skips a delivery that already has it —
+   * otherwise the refresh would trigger its own refresh without end. The
+   * `eventId` is deliberately unchanged, so the second delivery collapses into
+   * the first everywhere it is recorded: `ActiveReminder.raise` returns early
+   * on a reminder it is already holding, and `NotificationHistory` drops a
+   * duplicate id, so the bell menu shows one reminder and its "x minutes ago"
+   * still counts from the original.
+   *
+   * The facts are passed in rather than read here. Gathering them needs the
+   * profile, the hydration log and the telemetry history — all of which
+   * already depend on this module, so reading them from inside it would close
+   * an import cycle. `ReminderFactsService` does the gathering; this does the
+   * wording and the posting.
+   *
+   * Never throws. A reminder that could not be personalised is still a
+   * reminder, and it is already on the user's screen by the time this runs.
+   */
+  async refreshReminderContent(
+    notification: Notification | null | undefined,
+    facts: ReminderFacts
+  ): Promise<'refreshed' | 'skipped'> {
+    if (notification?.data?.type !== HYDRATION_REMINDER_TYPE) return 'skipped';
+    if (notification.data.refreshed === '1') return 'skipped';
+
+    const id = notification.id;
+    const eventId = readReminderEventId(notification);
+    if (!id) return 'skipped';
+
+    try {
+      const { body } = buildReminderContent(facts);
+
+      // Nothing specific to add. Re-posting the identical line would cost the
+      // user a second heads-up for no new information.
+      if (body === GENERIC_REMINDER_BODY) return 'skipped';
+
+      await notifee.displayNotification(
+        reminderNotification({ id, eventId, body, refreshed: true })
+      );
+      return 'refreshed';
+    } catch (error) {
+      console.error('[Reminders] Failed to refresh the reminder content:', error);
+      return 'skipped';
     }
   }
 
