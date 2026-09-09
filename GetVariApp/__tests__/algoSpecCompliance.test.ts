@@ -1,5 +1,6 @@
 /**
- * getVari_algo.pdf, checked against the code paths a real user goes through.
+ * docs/reference/hydration-risk-algorithm.pdf, checked against the code paths
+ * a real user actually goes through.
  *
  * `algoCompliance.test.ts` already walks the document's three worked examples.
  * This file exists because those tests were passing while the algorithm was

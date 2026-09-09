@@ -8,7 +8,7 @@
  * `> 22` moves a 22.0 °C day by 250 ml and nothing about the output looks
  * wrong.
  *
- * Source: `getVari_Algorithm/PBWR_v2_developer_onepager.docx`.
+ * Source: `docs/reference/pbwr-v2-developer-onepager.docx`.
  *
  *   npx jest --config jest.config.logic.js __tests__/pbwrSpec.test.ts
  */

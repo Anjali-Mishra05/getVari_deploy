@@ -16,7 +16,7 @@ import {
  * 7-day averages §3 asks for, decides whether the account is still calibrating,
  * and reports what is left to drink today.
  *
- * See `getVari_Algorithm/PBWR_v2_developer_onepager.docx`.
+ * See `docs/reference/pbwr-v2-developer-onepager.docx`.
  */
 
 export interface PBWRBreakdown extends PBWRCoreBreakdown {

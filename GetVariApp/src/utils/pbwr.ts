@@ -2,7 +2,7 @@
  * The Personalized Base Water Requirement (PBWR v2) pipeline.
  *
  * This is the calculation described in
- * `getVari_Algorithm/PBWR_v2_developer_onepager.docx`, and it is the *only*
+ * `docs/reference/pbwr-v2-developer-onepager.docx`, and it is the *only*
  * place the daily hydration goal is worked out. It used to have a rival: a
  * `weight × 35 + bonuses` formula in `hydrationTarget.ts` produced the number
  * stored on the profile — the one reminders, the chatbot, the admin console

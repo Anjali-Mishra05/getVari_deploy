@@ -12,7 +12,7 @@
  * What that shared calculation *was* is the more important half. This file
  * used to carry a formula of its own — `weight × 35`, plus an activity bonus,
  * a per-condition adjustment and a city climate allowance, rounded to 50 and
- * clamped to 1.5–4.5 L — while `PBWR_v2_developer_onepager.docx` described a
+ * clamped to 1.5–4.5 L — while the PBWR v2 one-pager described a
  * different five-stage pipeline that only the dashboard ran. The stored
  * `targetDailyMl` came from here, so reminders, the chatbot's progress, the
  * admin console and the web app all paced users by the formula that was not
