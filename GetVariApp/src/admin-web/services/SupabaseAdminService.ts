@@ -98,7 +98,7 @@ export class SupabaseAdminService {
           const historyRisk = HydrationRiskEngine.solveRisk({
             ...mockTelemetry,
             timeSinceWaterIntake: Math.max(0, Math.min(8, hoursSince))
-          }, activeAbsorbed, profile);
+          }, 200, profile);
 
           riskHistory.push(historyRisk.score);
         }
