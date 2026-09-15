@@ -1,0 +1,268 @@
+{
+  "version": 0,
+  "updatedAt": "1970-01-01T00:00:00.000Z",
+  "medicalConditions": [
+    {
+      "id": "diabetes",
+      "title": "Diabetes (Type I/II)",
+      "description": "Heightened systemic glucose requires higher osmotic dilution.",
+      "enabled": true,
+      "targetAdjustmentMl": 450,
+      "recoveryMultiplier": 1.25,
+      "absorptionEfficiency": 0.9,
+      "riskWeightDeltas": {
+        "heart": 0.05,
+        "time": 0.05,
+        "humidity": -0.05,
+        "temp": -0.05
+      },
+      "riskLoadMultipliers": {
+        "heart": 1.15,
+        "time": 1.1
+      },
+      "pbwrAdjustmentMl": 400,
+      "pbwrUpperLimitMl": 5000,
+      "requiresPhysicianLimit": false
+    },
+    {
+      "id": "hypertension",
+      "title": "Hypertension / High BP",
+      "description": "Heart pressure feedback active. Physician limit recommended.",
+      "enabled": true,
+      "targetAdjustmentMl": 150,
+      "recoveryMultiplier": 1.1,
+      "absorptionEfficiency": 1.0,
+      "riskWeightDeltas": {
+        "heart": 0.05,
+        "activity": -0.05
+      },
+      "riskLoadMultipliers": {
+        "heart": 1.1
+      },
+      "pbwrAdjustmentMl": 0,
+      "pbwrUpperLimitMl": null,
+      "requiresPhysicianLimit": true
+    },
+    {
+      "id": "ckd",
+      "title": "Kidney Disease / CKD",
+      "description": "Strict clearance limits relieve the tubules. Physician limit required.",
+      "enabled": true,
+      "targetAdjustmentMl": -250,
+      "recoveryMultiplier": 1.4,
+      "absorptionEfficiency": 0.85,
+      "riskWeightDeltas": {
+        "time": 0.1,
+        "humidity": -0.05,
+        "temp": -0.05
+      },
+      "riskLoadMultipliers": {
+        "time": 1.25
+      },
+      "pbwrAdjustmentMl": 0,
+      "pbwrUpperLimitMl": null,
+      "requiresPhysicianLimit": true
+    },
+    {
+      "id": "heart",
+      "title": "Heart Condition",
+      "description": "Prevents rapid blood volume expansion. Physician limit required.",
+      "enabled": true,
+      "targetAdjustmentMl": 0,
+      "recoveryMultiplier": 1.0,
+      "absorptionEfficiency": 1.0,
+      "riskWeightDeltas": {},
+      "riskLoadMultipliers": {},
+      "pbwrAdjustmentMl": 0,
+      "pbwrUpperLimitMl": null,
+      "requiresPhysicianLimit": true
+    },
+    {
+      "id": "stones",
+      "title": "Kidney Stone History",
+      "description": "Raises the PBWR ceiling to keep crystals from forming.",
+      "enabled": true,
+      "targetAdjustmentMl": 0,
+      "recoveryMultiplier": 1.0,
+      "absorptionEfficiency": 1.0,
+      "riskWeightDeltas": {},
+      "riskLoadMultipliers": {},
+      "pbwrAdjustmentMl": 500,
+      "pbwrUpperLimitMl": 5000,
+      "requiresPhysicianLimit": false
+    },
+    {
+      "id": "heat_stress",
+      "title": "Chronic Heat Stress",
+      "description": "Sustained thermal load raises baseline sweat losses.",
+      "enabled": true,
+      "targetAdjustmentMl": 0,
+      "recoveryMultiplier": 1.0,
+      "absorptionEfficiency": 1.0,
+      "riskWeightDeltas": {
+        "temp": 0.05,
+        "time": -0.05
+      },
+      "riskLoadMultipliers": {
+        "temp": 1.2
+      },
+      "pbwrAdjustmentMl": 0,
+      "pbwrUpperLimitMl": null,
+      "requiresPhysicianLimit": false
+    }
+  ],
+  "activityLevels": [
+    {
+      "id": "sedentary",
+      "title": "Sedentary",
+      "description": "Minimal physical exertion. Remote work style.",
+      "enabled": true,
+      "targetBonusMl": 0
+    },
+    {
+      "id": "light",
+      "title": "Light Active",
+      "description": "Slight exertion. Light walks or stretching/yoga.",
+      "enabled": true,
+      "targetBonusMl": 0
+    },
+    {
+      "id": "moderate",
+      "title": "Moderate Load",
+      "description": "Moderate physical load, gym session 3-4x/week.",
+      "enabled": true,
+      "targetBonusMl": 0
+    },
+    {
+      "id": "active",
+      "title": "High Strain",
+      "description": "Daily athletic strain, high sweating baseline.",
+      "enabled": true,
+      "targetBonusMl": 600
+    },
+    {
+      "id": "elite",
+      "title": "Elite / Hybrid",
+      "description": "Double sessions daily or intensive endurance sports.",
+      "enabled": true,
+      "targetBonusMl": 1200
+    }
+  ],
+  "workEnvironments": [
+    {
+      "id": "indoor",
+      "label": "Indoor/Office",
+      "enabled": true,
+      "pbwrAdjustmentMl": 0
+    },
+    {
+      "id": "ac_office",
+      "label": "AC Office",
+      "enabled": true,
+      "pbwrAdjustmentMl": 250
+    },
+    {
+      "id": "hybrid",
+      "label": "Hybrid",
+      "enabled": true,
+      "pbwrAdjustmentMl": 500
+    },
+    {
+      "id": "outdoor",
+      "label": "Outdoor",
+      "enabled": true,
+      "pbwrAdjustmentMl": 750
+    },
+    {
+      "id": "heavy_outdoor",
+      "label": "Heavy Outdoor",
+      "enabled": true,
+      "pbwrAdjustmentMl": 1300
+    }
+  ],
+  "climateBands": [
+    {
+      "id": "hot",
+      "label": "Hot / humid",
+      "cities": [
+        "Mumbai",
+        "Delhi",
+        "Chennai",
+        "Kolkata",
+        "Hyderabad",
+        "Ahmedabad",
+        "Jaipur",
+        "Nagpur",
+        "Surat",
+        "Vijayawada"
+      ],
+      "targetAdjustmentMl": 350,
+      "riskLoadMultiplier": 1.15,
+      "riskWeightDeltas": {
+        "temp": 0.05,
+        "humidity": 0.05,
+        "time": -0.05,
+        "activity": -0.05
+      }
+    },
+    {
+      "id": "moderate",
+      "label": "Moderate",
+      "cities": [
+        "Bengaluru",
+        "Pune",
+        "Mysuru",
+        "Shimla",
+        "Dehradun",
+        "Srinagar",
+        "Ooty",
+        "Kodaikanal"
+      ],
+      "targetAdjustmentMl": 100,
+      "riskLoadMultiplier": 1.0,
+      "riskWeightDeltas": {}
+    },
+    {
+      "id": "temperate",
+      "label": "Temperate",
+      "cities": [],
+      "targetAdjustmentMl": 0,
+      "riskLoadMultiplier": 1.0,
+      "riskWeightDeltas": {}
+    }
+  ],
+  "targetFormula": {
+    "mlPerKg": 35,
+    "minTargetMl": 1500,
+    "maxTargetMl": 4500,
+    "roundToMl": 50
+  },
+  "riskThresholds": {
+    "elevated": 60,
+    "high": 80,
+    "recovery": 40
+  },
+  "quickLogAmounts": [
+    {
+      "label": "250 ml",
+      "ml": 250,
+      "primary": false
+    },
+    {
+      "label": "500 ml",
+      "ml": 500,
+      "primary": true
+    },
+    {
+      "label": "750 ml",
+      "ml": 750,
+      "primary": false
+    },
+    {
+      "label": "1 litre",
+      "ml": 1000,
+      "primary": false
+    }
+  ],
+  "disabledFeatures": []
+}
