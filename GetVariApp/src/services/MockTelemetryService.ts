@@ -62,6 +62,7 @@ export class MockTelemetryService {
     let humidity = 45;
     let sweatGSR = 1.5;
     let steps = 2000;
+    let lastSignificantMotionMinutesAgo = 15;
 
     switch (selectedProfile) {
       case 'sedentary':
@@ -70,6 +71,7 @@ export class MockTelemetryService {
         temperature = 22 + variation * 0.5;
         humidity = 40 + variation * 2;
         steps = 1500 + variation * 200;
+        lastSignificantMotionMinutesAgo = 45;
         break;
       case 'active':
         heartRate = 110 + variation * 15;
@@ -78,6 +80,7 @@ export class MockTelemetryService {
         humidity = 55 + variation * 5;
         sweatGSR = 8.0 + variation * 2;
         steps = 12000 + variation * 1000;
+        lastSignificantMotionMinutesAgo = 5;
         break;
       case 'heat_stress':
         heartRate = 95 + variation * 10;
@@ -86,6 +89,7 @@ export class MockTelemetryService {
         humidity = 75 + variation * 10;
         sweatGSR = 12.0 + variation * 3;
         steps = 4000 + variation * 500;
+        lastSignificantMotionMinutesAgo = 25;
         break;
       case 'critical_risk':
         heartRate = 145 + variation * 10;
@@ -94,6 +98,7 @@ export class MockTelemetryService {
         humidity = 85 + variation * 5;
         sweatGSR = 15.0 + variation * 2;
         steps = 18000 + variation * 1000;
+        lastSignificantMotionMinutesAgo = 40;
         break;
       case 'balanced':
       default:
@@ -102,6 +107,7 @@ export class MockTelemetryService {
         temperature = 25 + variation * 1.0;
         humidity = 50 + variation * 5;
         steps = 5500 + variation * 500;
+        lastSignificantMotionMinutesAgo = 20;
         break;
     }
 
@@ -115,6 +121,7 @@ export class MockTelemetryService {
       batteryLevel: 85,
       rssi: -60,
       lastUpdated: new Date(timestamp).toISOString(),
+      lastSignificantMotionMinutesAgo,
     };
   }
 

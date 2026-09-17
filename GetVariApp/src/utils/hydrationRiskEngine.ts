@@ -190,7 +190,11 @@ export class HydrationRiskEngine {
 
   public static calculateTimeLoad(hoursSinceDrink: number | null): number | null {
     if (hoursSinceDrink === null) return null;
-    return this.mapLoad(hoursSinceDrink, RISK_CONFIG.LOAD_MAPPING.TIME_SINCE_DRINK);
+    const minutes = hoursSinceDrink * 60;
+    if (minutes <= 30) return 10;
+    if (minutes <= 60) return 30;
+    if (minutes <= 120) return 60;
+    return 90;
   }
 
   private static mapLoad(value: number, ranges: { min: number; max: number; load: number }[]): number {

@@ -82,6 +82,8 @@ export interface SensorData {
   batteryLevel: number | null; // wearable battery %, null if missing/invalid
   rssi: number | null; // Bluetooth signal strength, null if missing/invalid
   lastUpdated: string; // ISO string
+  /** Minutes since the last significant posture or motion change (IMU-derived). */
+  lastSignificantMotionMinutesAgo?: number | null;
 }
 
 export interface HydrationRiskDetails {

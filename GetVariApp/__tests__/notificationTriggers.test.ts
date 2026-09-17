@@ -514,19 +514,24 @@ describe('Notification delivery rules', () => {
     expect(fired).not.toContain('no_water_3h');
   });
 
-  test('critical risk alerts are raised during sleep and bypass the quiet window', async () => {
+  test('critical risk alerts are raised during sleep but NOT delivered', async () => {
     jest.setSystemTime(TUESDAY(2));
     mockDisplayNotification.mockClear();
     mockStore.clear();
-    await NotificationEngine.evaluate({
+    const evaluation = await NotificationEngine.evaluate({
       sensorData: baseSensor(),
       profile: baseProfile(),
       todayLogs: [],
       solvedRisk: risk(90),
     });
-    const call = mockDisplayNotification.mock.calls.find((c: any[]) => c[0] === '🚨 High Risk');
-    expect(call).toBeDefined();
-    expect((call as any[])[4]).toEqual({ ignoreSleepWindow: true });
+
+    expect(evaluation.raised).toContain('high_risk');
+    expect(evaluation.delivered).toHaveLength(0);
+    expect(mockDisplayNotification).not.toHaveBeenCalled();
+
+    // Verify lastAlerts was NOT updated (important for cooldown logic)
+    const state = JSON.parse(mockStore.get(ENGINE_STATE_KEY) || '{}');
+    expect(state.lastAlerts?.high_risk).toBeUndefined();
   });
 
   test('nothing is delivered when notification permission is denied', async () => {
@@ -535,12 +540,12 @@ describe('Notification delivery rules', () => {
     expect(fired).toHaveLength(0);
   });
 
-  test('cooldown state still advances while permission is denied', async () => {
+  test('cooldown state does NOT advance while permission is denied', async () => {
     mockRequestPermission.mockResolvedValue(false as any);
     await fire({ at: TUESDAY(14), score: 85, logs: [logAt(1, 900)] });
 
-    const persisted = JSON.parse(mockStore.get(ENGINE_STATE_KEY)!);
-    expect(persisted.lastAlerts.high_risk).toBe(TUESDAY(14).getTime());
+    const persisted = JSON.parse(mockStore.get(ENGINE_STATE_KEY) || '{}');
+    expect(persisted.lastAlerts?.high_risk).toBeUndefined();
   });
 
   test('a missing sensor reading raises no environmental or device alert', async () => {
@@ -609,36 +614,31 @@ describe('Burst control', () => {
     logs: [logAt(4, 900)],
   };
 
-  test('several simultaneous conditions deliver one notification, not all of them', async () => {
+  test('several simultaneous conditions deliver all eligible notifications', async () => {
     const { raised, delivered } = await evaluate(clump);
 
-    expect(raised).toEqual(
-      expect.arrayContaining(['extreme_heat', 'high_humidity', 'no_water_3h', 'low_intake_12pm'])
-    );
-    expect(delivered).toHaveLength(1);
-    // The most urgent of the three goes first.
-    expect(delivered).toEqual(['extreme_heat']);
+    const expected = ['extreme_heat', 'high_humidity', 'no_water_3h', 'low_intake_12pm'];
+    expect(raised).toEqual(expect.arrayContaining(expected));
+    expect(delivered).toEqual(expect.arrayContaining(expected));
+    expect(delivered).toHaveLength(expected.length);
   });
 
-  test('a held-back trigger keeps its cooldown and is delivered once the gap has passed', async () => {
+  test('a trigger on cooldown does not suppress other eligible triggers', async () => {
+    // 1. Initial evaluation triggers all
     await evaluate(clump);
 
-    // Same conditions one minute later: still inside the spacing floor.
+    // 2. Immediate follow-up with same conditions (all on cooldown)
     const held = await evaluate({ ...clump, at: TUESDAY(14, 1) });
-    expect(held.raised).toContain('high_humidity');
     expect(held.delivered).toHaveLength(0);
 
-    // From there the clump drains in priority order, one notification per
-    // gap, instead of arriving together the moment the app opens.
-    expect((await evaluate({ ...clump, at: TUESDAY(14, 20) })).delivered).toEqual(['no_water_3h']);
-    expect((await evaluate({ ...clump, at: TUESDAY(14, 40) })).delivered).toEqual(['low_intake_12pm']);
-    expect((await evaluate({ ...clump, at: TUESDAY(15, 0) })).delivered).toEqual(['high_humidity']);
-  });
-
-  test('a high-risk alert is not made to wait behind the spacing floor', async () => {
-    await evaluate(clump);
-
-    const critical = await evaluate({ ...clump, at: TUESDAY(14, 1), score: 90 });
-    expect(critical.delivered).toEqual(['high_risk']);
+    // 3. One minute later, a NEW condition comes true (e.g. low battery)
+    // It should be delivered even though others are on cooldown
+    const battery = await evaluate({
+      ...clump,
+      at: TUESDAY(14, 2),
+      sensor: { ...clump.sensor, batteryLevel: 10 }
+    });
+    expect(battery.delivered).toContain('low_battery');
+    expect(battery.delivered).not.toContain('extreme_heat'); // Still on cooldown
   });
 });

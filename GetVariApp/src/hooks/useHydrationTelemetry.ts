@@ -64,6 +64,7 @@ const NO_READINGS: SensorData = {
   batteryLevel: null,
   rssi: null,
   lastUpdated: new Date(0).toISOString(),
+  lastSignificantMotionMinutesAgo: 5,
 };
 
 /**
@@ -94,6 +95,7 @@ const baselineFor = (profile?: UserProfile): SensorData => {
     lastUpdated: new Date().toISOString(),
   };
 };
+
 
 /**
  * Hours to assume since the last drink when the user has logged nothing today.
@@ -362,6 +364,11 @@ export const useHydrationTelemetry = (
         const humidity = hold(pinned?.humidity, Math.round(step(prev.humidity, baseline.humidity!, 1, 10, 100)));
         const sweatGSR = Number(step(prev.sweatGSR, baseline.sweatGSR!, 0.15, 0.1, 15).toFixed(2));
 
+        // Drift motion timer: increment by simulated minutes, reset occasionally
+        const lastSignificantMotionMinutesAgo = prev.lastSignificantMotionMinutesAgo !== undefined && prev.lastSignificantMotionMinutesAgo !== null
+          ? (Math.random() > 0.98 ? 0 : Number((prev.lastSignificantMotionMinutesAgo + SIM_MINUTES_PER_TICK).toFixed(1)))
+          : 5;
+
         return {
           ...prev,
           batteryLevel: prev.batteryLevel ?? baseline.batteryLevel,
@@ -372,6 +379,7 @@ export const useHydrationTelemetry = (
           humidity,
           sweatGSR,
           lastUpdated: new Date().toISOString(),
+          lastSignificantMotionMinutesAgo,
         };
       });
 

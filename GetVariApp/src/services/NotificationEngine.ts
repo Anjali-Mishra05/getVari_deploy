@@ -14,6 +14,12 @@ import {
 } from '../utils/sleepWindow';
 import NotificationService from './NotificationService';
 import TelemetryHistoryService from './TelemetryHistoryService';
+import {
+  calculateCDI,
+  calculateFDI,
+  classifyCDI,
+  classifyFDI,
+} from '../utils/focusCognitiveDrop';
 
 const ALERT_STATE_KEY = 'getvari_notification_engine_state';
 
@@ -37,6 +43,10 @@ export type NotificationTrigger =
   | 'morning_msg'
   | 'night_msg'
   | 'weekly_summary'
+  | 'focus_slipping'
+  | 'focus_lost'
+  | 'cognitive_decline'
+  | 'cognitive_impairment'
   | 'ai_reminder'
   | 'ai_insight'
   | 'ai_activity'
@@ -87,38 +97,6 @@ interface EnginePersistentState {
 
 /** Alerts scoped to one activity session rather than to a cooldown window. */
 const ACTIVITY_SESSION_TRIGGERS: NotificationTrigger[] = ['post_activity', 'long_activity'];
-
-/**
- * Delivery order when several conditions come true in the same evaluation.
- *
- * Only the first still-deliverable trigger goes out per tick (see
- * `selectDeliverable`), so this is what decides *which* of a clump the user
- * hears about first. Anything unlisted sorts last.
- */
-const TRIGGER_PRIORITY: NotificationTrigger[] = [
-  'high_risk',
-  'elevated_risk',
-  'extreme_heat',
-  'no_water_3h',
-  'low_intake_12pm',
-  'below_target_4pm',
-  'high_temp',
-  'high_humidity',
-  'long_activity',
-  'post_activity',
-  'inactivity',
-  'low_battery',
-  'goal_achieved',
-  'risk_improved',
-  'fully_charged',
-  'weekly_summary',
-];
-
-/**
- * A high-risk alert is the one notification that must not wait its turn: it
- * already bypasses the quiet window, so it bypasses the spacing floor too.
- */
-const BYPASSES_SPACING: NotificationTrigger[] = ['high_risk'];
 
 type AiNudge = 'reminder' | 'insight' | 'activity' | 'risk' | 'progress';
 
@@ -182,6 +160,36 @@ class NotificationEngine {
         if (lastRiskTime > (lastAlerts['risk_improved'] || 0)) {
            triggers.push('risk_improved');
         }
+      }
+    }
+
+    // --- Focus / Cognitive Drop Notifications ---
+    if (solvedRisk.score !== null) {
+      const hasValidMotionData = sensorData.lastSignificantMotionMinutesAgo !== null &&
+        sensorData.lastSignificantMotionMinutesAgo !== undefined &&
+        Number.isFinite(sensorData.lastSignificantMotionMinutesAgo);
+
+      if (hasValidMotionData) {
+        const fdiScore = calculateFDI(solvedRisk.score, sensorData.lastSignificantMotionMinutesAgo);
+        const fdiClassification = classifyFDI(fdiScore);
+        if (fdiClassification === 'Focus Slipping' && this.canSend(now, lastAlerts, 'focus_slipping')) {
+          triggers.push('focus_slipping');
+        } else if (fdiClassification === 'Focus Lost' && this.canSend(now, lastAlerts, 'focus_lost')) {
+          triggers.push('focus_lost');
+        }
+      }
+
+      const cdiScore = calculateCDI(
+        solvedRisk.score,
+        solvedRisk.temperatureLoad ?? sensorData.temperature,
+        solvedRisk.humidityLoad ?? sensorData.humidity,
+        new Date(now)
+      );
+      const cdiClassification = classifyCDI(cdiScore);
+      if (cdiClassification === 'Cognitive Decline Risk' && this.canSend(now, lastAlerts, 'cognitive_decline')) {
+        triggers.push('cognitive_decline');
+      } else if (cdiClassification === 'Cognitive Impairment Risk' && this.canSend(now, lastAlerts, 'cognitive_impairment')) {
+        triggers.push('cognitive_impairment');
       }
     }
 
@@ -368,38 +376,42 @@ class NotificationEngine {
 
     // Process triggers
     //
-    // At most one goes out per evaluation, and no two are less than
-    // MIN_GAP_BETWEEN_ALERTS apart. Anything held back keeps its cooldown
-    // untouched, so a condition that is still true is simply raised again on a
-    // later tick rather than being lost.
+    // All eligible triggers are delivered in the same evaluation, subject to
+    // their per-trigger cooldowns. The sleep window is an absolute block: if
+    // the user is asleep, nothing is delivered and cooldown state is not updated.
     const hasPermission = await NotificationService.requestPermission();
-    const deliverable = this.selectDeliverable(triggers, now, state);
+    const delivered: NotificationTrigger[] = [];
 
-    if (deliverable.length) {
-      state.lastDeliveredAt = now;
-    }
+    if (!asleep) {
+      for (const trigger of triggers) {
+        // Only actually deliver if permission is granted
+        if (hasPermission) {
+          await this.sendNotification(trigger, profile);
+          delivered.push(trigger);
 
-    for (const trigger of deliverable) {
-      // Always update state that we "sent" it (to maintain cooldowns)
-      state.lastAlerts[trigger] = now;
-      if (trigger.startsWith('ai_')) {
-        state.lastAlerts['ai_generic'] = now;
-      }
-      if (ACTIVITY_SESSION_TRIGGERS.includes(trigger)) {
-        state.activitySessionAlerts.push(trigger);
+          // Update state ONLY if actually delivered
+          state.lastAlerts[trigger] = now;
+          if (trigger.startsWith('ai_')) {
+            state.lastAlerts['ai_generic'] = now;
+          }
+          if (ACTIVITY_SESSION_TRIGGERS.includes(trigger)) {
+            state.activitySessionAlerts.push(trigger);
+          }
+        } else {
+          console.log(`[NotificationEngine] Suppressed ${trigger} - Permission Denied`);
+        }
       }
 
-      // Only actually deliver if permission is granted
-      if (hasPermission) {
-        await this.sendNotification(trigger, profile);
-      } else {
-        console.log(`[NotificationEngine] Suppressed ${trigger} - Permission Denied`);
+      if (delivered.length) {
+        state.lastDeliveredAt = now;
       }
+    } else {
+      console.log(`[NotificationEngine] Suppressed ${triggers.join(', ')} - User is asleep`);
     }
 
     await this.savePersistentState(state);
 
-    return { raised: triggers, delivered: hasPermission ? deliverable : [] };
+    return { raised: triggers, delivered };
   }
 
   /**
@@ -455,44 +467,6 @@ class NotificationEngine {
     return this.aiQuotaExhausted;
   }
 
-  /**
-   * The subset of this tick's triggers that may be delivered now.
-   *
-   * Returns at most one, the most urgent, and nothing at all while the spacing
-   * floor is still running — except for the alerts in `BYPASSES_SPACING`,
-   * which are urgent enough to interrupt.
-   */
-  private selectDeliverable(
-    triggers: NotificationTrigger[],
-    now: number,
-    state: EnginePersistentState
-  ): NotificationTrigger[] {
-    if (!triggers.length) return [];
-
-    const [top, ...held] = [...triggers].sort(
-      (a, b) => this.priorityOf(a) - this.priorityOf(b)
-    );
-
-    const sinceLast = now - (state.lastDeliveredAt || 0);
-    if (!BYPASSES_SPACING.includes(top) && sinceLast < NOTIFICATION_COOLDOWNS.MIN_GAP_BETWEEN_ALERTS) {
-      console.log(
-        `[NotificationEngine] Holding ${[top, ...held].join(', ')} — ` +
-          `${Math.round(sinceLast / 60000)} min since the last notification.`
-      );
-      return [];
-    }
-
-    if (held.length) {
-      console.log(`[NotificationEngine] Deferring ${held.join(', ')} behind ${top}.`);
-    }
-    return [top];
-  }
-
-  private priorityOf(trigger: NotificationTrigger): number {
-    const index = TRIGGER_PRIORITY.indexOf(trigger);
-    return index === -1 ? TRIGGER_PRIORITY.length : index;
-  }
-
   private canSend(now: number, lastAlerts: Record<string, number>, trigger: NotificationTrigger): boolean {
     const cooldown = this.getCooldownFor(trigger);
     const lastSent = lastAlerts[trigger] || 0;
@@ -509,6 +483,10 @@ class NotificationEngine {
     switch (trigger) {
       case 'high_risk':
       case 'elevated_risk':
+      case 'focus_slipping':
+      case 'focus_lost':
+      case 'cognitive_decline':
+      case 'cognitive_impairment':
         return NOTIFICATION_COOLDOWNS.RISK_ALERT;
       case 'low_battery':
         return NOTIFICATION_COOLDOWNS.LOW_BATTERY;
@@ -540,6 +518,10 @@ class NotificationEngine {
       inactivity: { title: '🚶 Inactivity', body: 'You’ve been inactive for 3 hours. Take a short break, move around, and drink some water.' },
       post_activity: { title: '💪 Post-Activity', body: 'You’ve completed 30+ minutes of activity. Please drink 250–500 mL of water to replenish fluids.' },
       long_activity: { title: '🏃 Long Activity', body: 'You’ve completed a long activity session. Your body may need extra water, so please increase your water intake.' },
+      focus_slipping: { title: '🧭 Focus Slipping', body: 'Take a quick posture break and have a sip of water to reset your focus.' },
+      focus_lost: { title: '🚨 Focus Alert', body: 'Your focus has dropped significantly. Take a posture break, reduce distractions, and hydrate now.' },
+      cognitive_decline: { title: '💧 Cognitive Decline Risk', body: 'Cognitive load is rising. Prioritize fluid intake and cooling to maintain alertness.' },
+      cognitive_impairment: { title: '⚠️ Priority Alert', body: 'Cognitive impairment risk is elevated. Prioritize recovery, hydration, and cooling immediately.' },
       low_battery: { title: '🔋 Low Battery', body: 'Your battery is low. Please charge your device to keep hydration tracking and reminders active.' },
       fully_charged: { title: '⚡ Fully Charged', body: 'Your device is fully charged. You’re all set to continue your hydration tracking.' },
       // morning_msg / night_msg live in NotificationService.DAILY_MESSAGES —
@@ -561,9 +543,7 @@ class NotificationEngine {
     }
 
     if (title && body) {
-      await NotificationService.displayNotification(title, body, undefined, 'local', {
-         ignoreSleepWindow: trigger === 'high_risk' || trigger === 'elevated_risk' // Critical alerts bypass
-      });
+      await NotificationService.displayNotification(title, body, undefined, 'local');
     }
   }
 

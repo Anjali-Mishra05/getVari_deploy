@@ -643,12 +643,12 @@ class NotificationService {
     body: string,
     channelId: string = REMINDER_CHANNEL_ID,
     kind: NotificationKind = 'local',
-    options: { ignoreSleepWindow?: boolean } = {}
+    _options: { ignoreSleepWindow?: boolean } = {}
   ) {
     // The whole app goes quiet during the user's sleep window, push messages
-    // included — a nudge that wakes someone up costs more than it earns. Only
-    // a caller that explicitly opts out gets through.
-    if (!options.ignoreSleepWindow && (await this.isSleeping())) {
+    // included — a nudge that wakes someone up costs more than it earns.
+    // Absolute block: no notification is displayed while the user is asleep.
+    if (await this.isSleeping()) {
       console.log('[Notifications] Suppressed during sleep window:', title);
       return;
     }
