@@ -33,6 +33,9 @@ const DEMO_IDS_KEY = 'getvari_demo_identities';
 const LEGACY_KEYCHAIN_SERVICE = 'com.getvari.auth';
 const PROFILES_TABLE = 'getvari_profiles';
 
+/** How long the startup profile lookup may hold the splash screen. */
+const STARTUP_LOOKUP_TIMEOUT_MS = 5000;
+
 /** The passcode printed on the login and OTP screens. */
 export const DEMO_PASSCODE = '884200';
 
@@ -301,6 +304,12 @@ export class AuthService {
    * Where a cold start should land. Called by the loading screen, including
    * the cold start caused by tapping a hydration reminder — which is why a
    * signed-in user must never be sent back to `Login` from here.
+   *
+   * The one network call in here is on a deadline. This runs while the splash
+   * screen is up and nothing else is on screen, so a request that hangs —
+   * which is what a request made with no route out of the phone does — holds
+   * the user on an animation with no way forward and no way back. Past the
+   * deadline the lookup is abandoned and the existing fallback applies.
    */
   static async resolveStartupRoute(): Promise<StartupRoute> {
     const userId = await AuthService.getCurrentUserId();
@@ -311,11 +320,18 @@ export class AuthService {
 
     // No local flag: the profile may still exist from a previous install.
     try {
-      const { data } = await supabase
+      const lookup = supabase
         .from(PROFILES_TABLE)
         .select('id')
         .eq('id', userId)
         .maybeSingle();
+
+      const data = await Promise.race([
+        lookup.then(result => result.data),
+        new Promise<null>(resolve =>
+          setTimeout(() => resolve(null), STARTUP_LOOKUP_TIMEOUT_MS)
+        ),
+      ]);
 
       if (data?.id) {
         await AuthService.markOnboardingComplete();

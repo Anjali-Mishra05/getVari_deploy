@@ -27,6 +27,15 @@ import ReminderFactsService from './src/services/ReminderFactsService';
  */
 notifee.onBackgroundEvent(async ({ type, detail }) => {
   if (type === EventType.DELIVERED) {
+    // Before anything else looks at it: a notification that fired inside the
+    // user's sleep window is withdrawn, not logged, not turned into an
+    // outstanding reminder, and above all not allowed to raise the full-screen
+    // prompt below. Slots are shifted out of the night when they are queued,
+    // but reminders are handed to AlarmManager up to a day ahead and the app
+    // is not running to re-queue them when the window changes — so this is the
+    // one place a 2 AM delivery can still be caught.
+    if (await NotificationService.suppressIfAsleep(detail.notification)) return;
+
     await NotificationHistory.recordDelivery(detail.notification);
   } else if (type === EventType.PRESS || type === EventType.ACTION_PRESS) {
     await NotificationHistory.recordPress(detail.notification);

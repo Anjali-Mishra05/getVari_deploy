@@ -211,6 +211,19 @@ const REMINDER_BODY = GENERIC_REMINDER_BODY;
 /** Makes each locally displayed notification's event id unique. */
 let displayCounter = 0;
 
+/**
+ * The same notification (by title) is not shown twice inside this window.
+ * A backstop under every path that displays immediately — engine alerts and
+ * foreground pushes — so a repeat from any source cannot stack in the tray.
+ */
+const DUPLICATE_WINDOW_MS = 30 * 60 * 1000;
+const RECENT_SHOWN_KEY = 'getvari_recently_shown_notifications';
+/** Set at login; the welcome notification is shown when the dashboard opens. */
+const PENDING_WELCOME_KEY = 'getvari_pending_welcome';
+
+/** FCM listeners are registered once per app run; see `setupFCM`. */
+let fcmListenersRegistered = false;
+
 const isHydrationReminder = (event: Event): boolean =>
   event.detail.notification?.data?.type === HYDRATION_REMINDER_TYPE;
 
@@ -255,6 +268,11 @@ const androidOptions = (
   } = {}
 ) => ({
   channelId,
+  // A white-on-transparent silhouette of the logo. Without one Android falls
+  // back to the launcher icon, which is now an adaptive icon — not a valid
+  // notification icon — and some phones draw a warning "!" in its place.
+  smallIcon: 'ic_stat_notification',
+  color: '#012060',
   importance: overrides.importance ?? AndroidImportance.DEFAULT,
   pressAction: overrides.pressAction ?? { id: 'default', launchActivity: 'default' },
   // Attached only when there is something to expand into. Notifee's validator
@@ -448,27 +466,37 @@ class NotificationService {
    * Store the user's sleep window and re-queue reminders around it. Called
    * when onboarding finishes and whenever the profile is (re)loaded, so a
    * schedule edited on another device reaches this one on the next open.
+   *
+   * ## Nothing is not an answer
+   *
+   * A null or unparseable schedule leaves the stored window alone. Every
+   * caller here passes `normaliseSleepSchedule(profile)`, which returns null
+   * for a profile row that merely does not carry the field — an older row, or
+   * one written before the question was asked — and treating that as "the
+   * user has no quiet hours" wiped the window they set during onboarding on
+   * the very next profile load. Reminders then resumed on the default
+   * 23:00-07:00, which is why a user who sleeps at nine was still being
+   * nudged at ten. Forgetting the window is what `clearSleepSchedule` is for,
+   * and sign-out is the only thing that asks for it.
    */
   async setSleepSchedule(schedule: SleepSchedule | null | undefined): Promise<void> {
     const normalised = schedule ? normaliseSleepSchedule(schedule) : null;
+    if (!normalised) {
+      console.log('[Reminders] No sleep window in this profile; keeping the stored one.');
+      return;
+    }
+
     const changed = JSON.stringify(normalised) !== JSON.stringify(this.sleepSchedule ?? null);
     this.sleepSchedule = normalised;
 
     try {
-      if (normalised) {
-        await AsyncStorage.setItem(SLEEP_SCHEDULE_KEY, JSON.stringify(normalised));
-      } else {
-        await AsyncStorage.removeItem(SLEEP_SCHEDULE_KEY);
-      }
+      await AsyncStorage.setItem(SLEEP_SCHEDULE_KEY, JSON.stringify(normalised));
     } catch (error) {
       console.error('[Reminders] Failed to persist sleep window:', error);
     }
 
     if (!changed) return;
-    console.log(
-      '[Reminders] Sleep window set to',
-      normalised ? describeSleepWindow(normalised) : 'none'
-    );
+    console.log('[Reminders] Sleep window set to', describeSleepWindow(normalised));
     // The queue in the OS was built against the previous window.
     await this.scheduleHydrationReminders();
     await this.scheduleDailyNotifications();
@@ -501,6 +529,44 @@ class NotificationService {
   /** Whether the app is currently in its quiet, "user is asleep" state. */
   async isSleeping(at: number = Date.now()): Promise<boolean> {
     return isAsleepAt(await this.getSleepSchedule(), at);
+  }
+
+  /**
+   * The last gate: a notification that arrives inside the quiet window is
+   * pulled back off the screen. Returns whether it was.
+   *
+   * Everything else about the sleep window happens *before* a notification
+   * exists — slots are shifted out of the night when they are queued, daily
+   * messages inside it are never queued, and `displayNotification` refuses to
+   * post one. None of that can help a reminder that was already queued when
+   * the window changed: reminders are handed to AlarmManager up to a day
+   * ahead, the app is not running to re-queue them, and Android fires exactly
+   * what it was given. That is the one path by which a nudge still arrives at
+   * 2 AM, and it is the path this closes.
+   *
+   * The queue is rebuilt on the way out, which moves the rest of the night's
+   * slots to the wake-up time — so one stray delivery repairs the whole
+   * night rather than being cancelled once per hour until morning.
+   */
+  async suppressIfAsleep(notification?: Notification | null): Promise<boolean> {
+    if (!(await this.isSleeping())) return false;
+
+    const id = notification?.id;
+    console.log('[Notifications] Withdrawing a delivery inside the sleep window:', id);
+
+    try {
+      if (id) await notifee.cancelDisplayedNotifications([id]);
+    } catch (error) {
+      console.error('[Notifications] Could not withdraw the delivery:', error);
+    }
+
+    try {
+      await this.scheduleHydrationReminders();
+    } catch (error) {
+      console.error('[Notifications] Could not re-queue past the night:', error);
+    }
+
+    return true;
   }
 
   /** Forgets the window — used on sign-out, alongside the rest of the state. */
@@ -572,6 +638,13 @@ class NotificationService {
    * Setup FCM listeners.
    */
   async setupFCM() {
+    // Once per app run. This is called every time the dashboard sets up
+    // notifications, and each call used to add another `onMessage` listener
+    // that was never removed — so after a few logins or remounts a single
+    // push was displayed once per listener.
+    if (fcmListenersRegistered) return;
+    fcmListenersRegistered = true;
+
     const messaging = getMessaging();
 
     // 1. Handle background messages
@@ -643,7 +716,7 @@ class NotificationService {
     body: string,
     channelId: string = REMINDER_CHANNEL_ID,
     kind: NotificationKind = 'local',
-    _options: { ignoreSleepWindow?: boolean } = {}
+    options: { ignoreSleepWindow?: boolean; allowRepeat?: boolean } = {}
   ) {
     // The whole app goes quiet during the user's sleep window, push messages
     // included — a nudge that wakes someone up costs more than it earns.
@@ -657,11 +730,20 @@ class NotificationService {
     const hasPermission = await this.requestPermission();
     if (!hasPermission) return;
 
+    // Drop a repeat of something shown recently (see DUPLICATE_WINDOW_MS).
+    // `allowRepeat` is for notifications already limited by their own rule.
+    if (!options.allowRepeat && (await this.shownRecently(title))) {
+      console.log('[Notifications] Suppressed duplicate:', title);
+      return;
+    }
+
     // Ensure channel exists
     await this.createNotificationChannel();
 
-    // Display the notification
+    // Display the notification. The id is derived from the title, so if a
+    // repeat does get through it replaces the one in the tray, not stacks.
     await notifee.displayNotification({
+      id: `shown:${title}`,
       title,
       body,
       data: {
@@ -670,6 +752,77 @@ class NotificationService {
       },
       android: androidOptions(channelId, body),
     });
+  }
+
+  /**
+   * Called at login: a welcome is owed, to be shown when the user reaches the
+   * dashboard (see `showPendingWelcome`) — after onboarding and the device
+   * step, not the moment the OTP is accepted.
+   */
+  async queueWelcomeNotification(): Promise<void> {
+    try {
+      await AsyncStorage.setItem(PENDING_WELCOME_KEY, '1');
+    } catch (error) {
+      console.error('[Notifications] Could not queue welcome:', error);
+    }
+  }
+
+  /**
+   * Shows the welcome if one is owed, once. Called when the dashboard opens,
+   * so a cold start without a fresh login shows nothing.
+   */
+  async showPendingWelcome(): Promise<void> {
+    try {
+      if ((await AsyncStorage.getItem(PENDING_WELCOME_KEY)) !== '1') return;
+      await AsyncStorage.removeItem(PENDING_WELCOME_KEY);
+      await this.showWelcomeNotification();
+    } catch (error) {
+      console.error('[Notifications] Pending welcome failed:', error);
+    }
+  }
+
+  /**
+   * The welcome greeting itself. Goes through `displayNotification`, so it
+   * respects the sleep window and the notification permission (asking for it
+   * if needed).
+   */
+  async showWelcomeNotification(): Promise<void> {
+    try {
+      await this.displayNotification(
+        '👋 Welcome to GetVari',
+        "You're signed in. We'll track your hydration and remind you when it matters.",
+        REMINDER_CHANNEL_ID,
+        'local',
+        // Already once per login (see `showPendingWelcome`). Without this, a
+        // quick log out and back in was swallowed as a "duplicate".
+        { allowRepeat: true }
+      );
+    } catch (error) {
+      console.error('[Notifications] Welcome notification failed:', error);
+    }
+  }
+
+  /**
+   * True if a notification with this title was shown in the last
+   * DUPLICATE_WINDOW_MS; otherwise records it as shown now and returns false.
+   */
+  private async shownRecently(title: string): Promise<boolean> {
+    const now = Date.now();
+    try {
+      const raw = await AsyncStorage.getItem(RECENT_SHOWN_KEY);
+      const recent: Record<string, number> = raw ? JSON.parse(raw) : {};
+      if (now - (recent[title] ?? 0) < DUPLICATE_WINDOW_MS) return true;
+
+      const next: Record<string, number> = { [title]: now };
+      for (const [key, at] of Object.entries(recent)) {
+        if (now - at < DUPLICATE_WINDOW_MS) next[key] = at;
+      }
+      await AsyncStorage.setItem(RECENT_SHOWN_KEY, JSON.stringify(next));
+    } catch (error) {
+      // An unreadable record must not silence the app.
+      console.error('[Notifications] Could not read recent notifications:', error);
+    }
+    return false;
   }
 
   /* ------------------------------------------------------------------ *
@@ -855,6 +1008,9 @@ class NotificationService {
     const eventId = readReminderEventId(notification);
 
     if (type === EventType.DELIVERED) {
+      // A reminder that reaches the user inside the quiet window is taken back
+      // rather than answered. See `suppressIfAsleep`.
+      if (await this.suppressIfAsleep(notification)) return 'none';
       await this.noteReminderDelivered(notification);
       return 'none';
     }

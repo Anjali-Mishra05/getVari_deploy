@@ -171,23 +171,29 @@ describe('A doctor’s number caps the formula', () => {
       ),
     });
 
-    expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] })).toBeNull();
+    // The limit is optional: without one, a goal is still computed.
+    expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'] })).toEqual(
+      expect.any(Number)
+    );
     expect(
       computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes'], physicianLimitMl: 1800 })
     ).toBe(1800);
   });
 });
 
-describe('With no number on file, there is no goal', () => {
-  it('returns null rather than a formula-derived guess', () => {
-    expect(computeTargetDailyMl({ weightKg: 70, medicalConditions: ['ckd'] })).toBeNull();
+describe('With no number on file, the limit is optional', () => {
+  it('computes the formula goal instead of refusing one', () => {
+    const goal = computeTargetDailyMl({ weightKg: 70, medicalConditions: ['ckd'] });
+    expect(goal).toEqual(expect.any(Number));
+    expect(goal!).toBeGreaterThan(0);
   });
 
-  it('treats a zero or negative limit as missing', () => {
+  it('treats a zero or negative limit as missing, not as the ceiling', () => {
+    const withoutLimit = computeTargetDailyMl({ weightKg: 70, medicalConditions: ['ckd'] });
     for (const limit of [0, -500, Number.NaN]) {
       expect(
         computeTargetDailyMl({ weightKg: 70, medicalConditions: ['ckd'], physicianLimitMl: limit })
-      ).toBeNull();
+      ).toBe(withoutLimit);
     }
   });
 
@@ -227,9 +233,9 @@ describe('Reading it back off a stored profile', () => {
 });
 
 describe('What the user is allowed to type', () => {
-  it('rejects a blank field', () => {
-    expect(validatePhysicianLimitMl('')).toMatch(/required/i);
-    expect(validatePhysicianLimitMl('   ')).toMatch(/required/i);
+  it('accepts a blank field, because the limit is optional', () => {
+    expect(validatePhysicianLimitMl('')).toBeNull();
+    expect(validatePhysicianLimitMl('   ')).toBeNull();
   });
 
   it('rejects a slipped digit in either direction', () => {

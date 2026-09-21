@@ -18,6 +18,19 @@ import { formatMl } from '../utils/hydrationFormat';
 const ACCENT = '#00f2fe';
 const BACKDROP = '#02050e';
 
+/**
+ * The screen's spacing, in two numbers.
+ *
+ * Everything here used to carry its own margin — 26 under the header, 12 under
+ * the chips, 22 under the progress card, 22 under the amounts, 14 and 12 and 8
+ * between the buttons — so no two gaps on the screen were the same and none of
+ * them matched the dashboard behind it.
+ */
+const GUTTER = 24;
+const GAP = 16;
+/** The gap inside a group — between two amount chips, or two stacked buttons. */
+const TIGHT = 10;
+
 /** How long the confirmation stays up before the screen closes itself. */
 const CONFIRM_MS = 1100;
 
@@ -250,18 +263,30 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
     >
       <StatusBar barStyle="light-content" backgroundColor={BACKDROP} />
       <SafeAreaView style={{ flex: 1, backgroundColor: BACKDROP }}>
+        {/*
+          Only what can be read scrolls; what has to be *pressed* does not.
+
+          This was one scroll view with the buttons at the end of it, centred
+          as a block. On a short screen — and with the chips, the progress card
+          and four amounts above them, that is most screens — the actions sat
+          below the fold, so the reminder opened showing a headline, a number
+          and no way to answer either. A prompt the user is meant to answer
+          cannot put its answers somewhere they have to go looking for, so the
+          actions are pinned to the bottom of the screen and the content above
+          takes whatever room is left.
+        */}
         <ScrollView
           contentContainerStyle={{
             flexGrow: 1,
-            paddingHorizontal: 24,
-            paddingTop: 28,
-            paddingBottom: 28,
+            paddingHorizontal: GUTTER,
+            paddingTop: GUTTER,
+            paddingBottom: GAP,
             justifyContent: 'center',
           }}
           showsVerticalScrollIndicator={false}
         >
           {/* -------------------------------------------------- Header */}
-          <View style={{ alignItems: 'center', marginBottom: 26 }}>
+          <View style={{ alignItems: 'center', marginBottom: GUTTER }}>
             <View
               style={{
                 width: 84,
@@ -339,7 +364,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 10,
-                marginBottom: 12,
+                marginBottom: GAP,
               }}
             >
               {typeof riskScore === 'number' && (
@@ -386,7 +411,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
               backgroundColor: 'rgba(255,255,255,0.03)',
               paddingHorizontal: 18,
               paddingVertical: 14,
-              marginBottom: 22,
+              marginBottom: GAP,
             }}
           >
             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
@@ -428,7 +453,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
 
           {/* ------------------------------------------------- Amounts */}
           {!logged && (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 22 }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: TIGHT }}>
               {amounts.map(amount => {
                 const isSelected = selectedMl === amount.ml;
                 return (
@@ -486,113 +511,121 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
               })}
             </View>
           )}
+        </ScrollView>
 
-          {failed && (
-            <Text
-              style={{
-                color: '#f43f5e',
-                fontSize: 12,
-                fontWeight: '700',
-                textAlign: 'center',
-                marginBottom: 12,
-              }}
-            >
-              Couldn't save that entry. Check your connection and try again.
-            </Text>
-          )}
+        {/* ------------------------------------------------- Actions */}
+        {!logged && (
+          <View
+            style={{
+              paddingHorizontal: GUTTER,
+              paddingTop: GAP,
+              paddingBottom: GUTTER,
+              borderTopWidth: 1,
+              borderTopColor: 'rgba(255,255,255,0.06)',
+              backgroundColor: BACKDROP,
+            }}
+          >
+            {failed && (
+              <Text
+                style={{
+                  color: '#f43f5e',
+                  fontSize: 12,
+                  fontWeight: '700',
+                  textAlign: 'center',
+                  marginBottom: TIGHT,
+                }}
+              >
+                Couldn't save that entry. Check your connection and try again.
+              </Text>
+            )}
+            <Button
+              label={`Log ${formatMl(selectedMl)}`}
+              onPress={commit}
+              size="lg"
+              fullWidth
+              loading={saving && !snoozeOpen}
+              disabled={busy}
+              testID="reminder-log"
+            />
 
-          {/* ------------------------------------------------- Actions */}
-          {!logged && (
-            <>
-              <Button
-                label={`Log ${formatMl(selectedMl)}`}
-                onPress={commit}
-                size="lg"
-                fullWidth
-                loading={saving && !snoozeOpen}
-                disabled={busy}
-                testID="reminder-log"
-              />
-
-              {snoozeOpen ? (
-                <View style={{ marginTop: 14, gap: 8 }}>
-                  {[
-                    ...SNOOZE_OPTIONS_MIN.map(minutes => ({
-                      label: `In ${minutes} minutes`,
-                      minutes: minutes as number,
-                    })),
-                    ...RESCHEDULE_OPTIONS,
-                  ].map(option => (
-                    <TouchableOpacity
-                      key={option.minutes}
-                      onPress={() => void snooze(option.minutes)}
-                      disabled={busy}
-                      activeOpacity={0.8}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Remind me ${option.label.toLowerCase()}`}
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 8,
-                        paddingVertical: 14,
-                        borderRadius: 18,
-                        backgroundColor: 'rgba(255,255,255,0.04)',
-                        borderWidth: 1,
-                        borderColor: 'rgba(255,255,255,0.08)',
-                        opacity: busy ? 0.5 : 1,
-                      }}
-                    >
-                      <Clock color="#94a3b8" size={15} />
-                      <Text style={{ color: '#cbd5e1', fontSize: 13, fontWeight: '800' }}>
-                        {option.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-
-                  <Button
-                    label="Not now — skip this one"
-                    onPress={skip}
-                    variant="ghost"
-                    size="md"
-                    fullWidth
+            {snoozeOpen ? (
+              <View style={{ marginTop: TIGHT, gap: TIGHT }}>
+                {[
+                  ...SNOOZE_OPTIONS_MIN.map(minutes => ({
+                    label: `In ${minutes} minutes`,
+                    minutes: minutes as number,
+                  })),
+                  ...RESCHEDULE_OPTIONS,
+                ].map(option => (
+                  <TouchableOpacity
+                    key={option.minutes}
+                    onPress={() => void snooze(option.minutes)}
                     disabled={busy}
-                    style={{ marginTop: 2 }}
-                  />
-                </View>
-              ) : (
-                <Button
-                  label="Remind me later"
-                  onPress={() => setSnoozeOpen(true)}
-                  variant="secondary"
-                  size="lg"
-                  fullWidth
-                  disabled={busy}
-                  icon={<Clock color="#cbd5e1" size={16} />}
-                  style={{ marginTop: 12 }}
-                  testID="reminder-snooze"
-                />
-              )}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remind me ${option.label.toLowerCase()}`}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      paddingVertical: 14,
+                      borderRadius: 18,
+                      backgroundColor: 'rgba(255,255,255,0.04)',
+                      borderWidth: 1,
+                      borderColor: 'rgba(255,255,255,0.08)',
+                      opacity: busy ? 0.5 : 1,
+                    }}
+                  >
+                    <Clock color="#94a3b8" size={15} />
+                    <Text style={{ color: '#cbd5e1', fontSize: 13, fontWeight: '800' }}>
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
 
-              {!snoozeOpen && (
                 <Button
-                  label="Ask Vari instead"
-                  onPress={() => {
-                    onClose();
-                    onAskVari();
-                  }}
+                  label="Not now — skip this one"
+                  onPress={skip}
                   variant="ghost"
                   size="md"
                   fullWidth
                   disabled={busy}
-                  icon={<MessageCircle color="#94a3b8" size={15} />}
-                  style={{ marginTop: 8 }}
-                  testID="reminder-ask-vari"
+                  style={{ marginTop: 2 }}
                 />
-              )}
-            </>
-          )}
-        </ScrollView>
+              </View>
+            ) : (
+              <Button
+                label="Remind me later"
+                onPress={() => setSnoozeOpen(true)}
+                variant="secondary"
+                size="lg"
+                fullWidth
+                disabled={busy}
+                icon={<Clock color="#cbd5e1" size={16} />}
+                style={{ marginTop: TIGHT }}
+                testID="reminder-snooze"
+              />
+            )}
+
+            {!snoozeOpen && (
+              <Button
+                label="Ask Vari instead"
+                onPress={() => {
+                  onClose();
+                  onAskVari();
+                }}
+                variant="ghost"
+                size="md"
+                fullWidth
+                disabled={busy}
+                icon={<MessageCircle color="#94a3b8" size={15} />}
+                style={{ marginTop: TIGHT }}
+                testID="reminder-ask-vari"
+              />
+            )}
+          </View>
+        )}
       </SafeAreaView>
     </Modal>
   );

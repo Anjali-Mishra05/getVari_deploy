@@ -10,6 +10,7 @@
  *   npx jest --config jest.config.logic.js __tests__/notificationTriggers.test.ts
  */
 
+import { unhedgedWord } from '../src/utils/notificationCopy';
 import type {
   SensorData,
   UserProfile,
@@ -49,6 +50,12 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 
 const mockDisplayNotification = jest.fn((..._args: any[]) => Promise.resolve());
 const mockRequestPermission = jest.fn((..._args: any[]) => Promise.resolve(true));
+/**
+ * The quiet window as `NotificationService` sees it — the persisted schedule,
+ * which is a different source from the one on the profile. The engine has to
+ * honour either of them saying "asleep", so the two are driven apart here.
+ */
+const mockIsSleeping = jest.fn((..._args: any[]) => Promise.resolve(false));
 
 // The factory runs while the hoisted imports resolve, i.e. before the `const`s
 // above are initialised — so every reference to them has to be lazy.
@@ -58,7 +65,7 @@ jest.mock('../src/services/NotificationService', () => ({
     requestPermission: (...args: any[]) => mockRequestPermission.apply(null, args as []),
     displayNotification: (...args: any[]) => mockDisplayNotification.apply(null, args as []),
     scheduleHydrationReminders: () => Promise.resolve(),
-    isSleeping: () => Promise.resolve(false),
+    isSleeping: (...args: any[]) => mockIsSleeping.apply(null, args as []),
   },
 }));
 
@@ -248,6 +255,13 @@ const fire = async (s: Scenario): Promise<NotificationTrigger[]> => {
     .filter(Boolean) as NotificationTrigger[];
 };
 
+/** The bodies of everything delivered this tick, in order. */
+const bodies = (): string[] => mockDisplayNotification.mock.calls.map((call: any[]) => call[1]);
+
+/** The body delivered under `title`, or undefined when nothing was. */
+const bodyOf = (title: string): string | undefined =>
+  mockDisplayNotification.mock.calls.find((call: any[]) => call[0] === title)?.[1];
+
 /** Monday, so the weekly-summary window is reachable. */
 const MONDAY = (h: number, m = 0) => new Date(2026, 7, 31, h, m, 0, 0);
 /** Tuesday, for everything that must not collide with the weekly summary. */
@@ -266,6 +280,8 @@ beforeEach(() => {
   mockDisplayNotification.mockClear();
   mockRequestPermission.mockClear();
   mockRequestPermission.mockResolvedValue(true as any);
+  mockIsSleeping.mockClear();
+  mockIsSleeping.mockResolvedValue(false as any);
   mockGetHistory.mockResolvedValue([]);
 });
 
@@ -407,12 +423,12 @@ describe('Notification triggers N1-N24', () => {
     expect(await raise({ at: TUESDAY(22, 0), logs: [logAt(0.2, 250)] })).not.toContain('night_msg');
   });
 
-  test('N19: weekly_summary fires Monday at 08:00', async () => {
+  test('N19: weekly_summary is switched off and never raised', async () => {
     const raised = await raise({ at: MONDAY(8), logs: [logAt(0.2, 250)] });
-    expect(raised).toContain('weekly_summary');
+    expect(raised).not.toContain('weekly_summary');
   });
 
-  test('N19b: weekly_summary reports insufficient data with fewer than 5 days of history', async () => {
+  test('N19b: no Weekly Progress notification is shown on a Monday', async () => {
     jest.setSystemTime(MONDAY(8));
     mockDisplayNotification.mockClear();
     mockGetHistory.mockResolvedValue([{}, {}]);
@@ -423,8 +439,7 @@ describe('Notification triggers N1-N24', () => {
       solvedRisk: risk(null),
     });
     const summary = mockDisplayNotification.mock.calls.find((c: any[]) => c[0] === '📊 Weekly Progress');
-    expect(summary).toBeDefined();
-    expect(String(summary![1])).toMatch(/Insufficient data/i);
+    expect(summary).toBeUndefined();
   });
 
   test('N20: ai_reminder fires when nothing is logged past 10:00', async () => {
@@ -472,13 +487,14 @@ describe('Notification delivery rules', () => {
   });
 
   test('environmental alerts respect the 3-hour cooldown', async () => {
-    const first = await fire({ at: TUESDAY(12), sensor: { temperature: 38 }, logs: [logAt(1, 900)] });
+    // Enough logged that no intake alert competes for the one delivery slot.
+    const first = await fire({ at: TUESDAY(12), sensor: { temperature: 38 }, logs: [logAt(1, 2000)] });
     expect(first).toContain('extreme_heat');
 
-    const second = await fire({ at: TUESDAY(13), sensor: { temperature: 38 }, logs: [logAt(1, 900)] });
+    const second = await fire({ at: TUESDAY(13), sensor: { temperature: 38 }, logs: [logAt(1, 2000)] });
     expect(second).not.toContain('extreme_heat');
 
-    const third = await fire({ at: TUESDAY(15, 30), sensor: { temperature: 38 }, logs: [logAt(1, 900)] });
+    const third = await fire({ at: TUESDAY(15, 30), sensor: { temperature: 38 }, logs: [logAt(1, 2000)] });
     expect(third).toContain('extreme_heat');
   });
 
@@ -532,6 +548,34 @@ describe('Notification delivery rules', () => {
     // Verify lastAlerts was NOT updated (important for cooldown logic)
     const state = JSON.parse(mockStore.get(ENGINE_STATE_KEY) || '{}');
     expect(state.lastAlerts?.high_risk).toBeUndefined();
+  });
+
+  test('the stored quiet window silences the app even with none on the profile', async () => {
+    // The bug this covers: the engine used to decide quiet hours from
+    // `profile.sleepSchedule` alone, so a profile that simply does not carry
+    // the field — an older row, or a load that came back partial — read as
+    // "this user is never asleep", and every condition below became
+    // deliverable at three in the morning. `NotificationService` knew the
+    // window the whole time; nothing asked it.
+    mockIsSleeping.mockResolvedValue(true as any);
+
+    const fired = await fire({
+      at: TUESDAY(14),
+      profile: { sleepSchedule: undefined },
+      sensor: { temperature: 38 },
+      score: 85,
+      logs: [logAt(5, 400)],
+    });
+
+    expect(fired).toHaveLength(0);
+  });
+
+  test('a window on the profile still silences the app on its own', async () => {
+    // The other direction: the service has nothing stored (a fresh install
+    // that has not had the profile handed to it yet), the profile does.
+    mockIsSleeping.mockResolvedValue(false as any);
+    const fired = await fire({ at: TUESDAY(2), sensor: { temperature: 38 }, score: 85 });
+    expect(fired).toHaveLength(0);
   });
 
   test('nothing is delivered when notification permission is denied', async () => {
@@ -614,31 +658,173 @@ describe('Burst control', () => {
     logs: [logAt(4, 900)],
   };
 
-  test('several simultaneous conditions deliver all eligible notifications', async () => {
+  test('several simultaneous conditions deliver only one notification', async () => {
     const { raised, delivered } = await evaluate(clump);
 
     const expected = ['extreme_heat', 'high_humidity', 'no_water_3h', 'low_intake_12pm'];
     expect(raised).toEqual(expect.arrayContaining(expected));
-    expect(delivered).toEqual(expect.arrayContaining(expected));
-    expect(delivered).toHaveLength(expected.length);
+    // A login used to deliver every raised condition in the same second.
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toBe(raised[0]);
   });
 
-  test('a trigger on cooldown does not suppress other eligible triggers', async () => {
-    // 1. Initial evaluation triggers all
+  test('nothing else is delivered within 15 minutes of the last notification', async () => {
     await evaluate(clump);
 
-    // 2. Immediate follow-up with same conditions (all on cooldown)
-    const held = await evaluate({ ...clump, at: TUESDAY(14, 1) });
+    const held = await evaluate({ ...clump, at: TUESDAY(14, 5) });
+    expect(held.raised.length).toBeGreaterThan(0);
     expect(held.delivered).toHaveLength(0);
 
-    // 3. One minute later, a NEW condition comes true (e.g. low battery)
-    // It should be delivered even though others are on cooldown
-    const battery = await evaluate({
-      ...clump,
-      at: TUESDAY(14, 2),
-      sensor: { ...clump.sensor, batteryLevel: 10 }
+    // Past the gap, the next still-true condition goes out, one at a time.
+    const next = await evaluate({ ...clump, at: TUESDAY(14, 16) });
+    expect(next.delivered).toHaveLength(1);
+  });
+
+  test('a high risk alert is exempt from the gap', async () => {
+    await evaluate(clump);
+    const critical = await evaluate({ ...clump, at: TUESDAY(14, 2), score: 90 });
+    expect(critical.delivered).toEqual(['high_risk']);
+  });
+
+  test('right after login nothing but a high risk alert is delivered for 5 minutes', async () => {
+    try {
+      NotificationEngine.markSessionStart(TUESDAY(14).getTime());
+      const atLogin = await evaluate(clump);
+      expect(atLogin.raised.length).toBeGreaterThan(0);
+      expect(atLogin.delivered).toHaveLength(0);
+
+      const critical = await evaluate({ ...clump, at: TUESDAY(14, 1), score: 90 });
+      expect(critical.delivered).toEqual(['high_risk']);
+
+      mockStore.clear();
+      const later = await evaluate({ ...clump, at: TUESDAY(14, 6) });
+      expect(later.delivered).toHaveLength(1);
+    } finally {
+      NotificationEngine.markSessionStart(0);
+    }
+  });
+
+  test('overlapping evaluations at login do not each deliver', async () => {
+    // Several telemetry ticks land together when the dashboard mounts.
+    const results = await Promise.all([evaluate(clump), evaluate(clump), evaluate(clump)]);
+    const total = results.reduce((n, r) => n + r.delivered.length, 0);
+    expect(total).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What the delivered notifications actually say
+// ---------------------------------------------------------------------------
+
+describe('Notification wording', () => {
+  /**
+   * A world where both indices are in their first band.
+   *
+   * FDI = 0.6·50 + 0.4·TTL(20 min) = 30 + 10 = 40, which classifies as "Focus
+   * Slipping"; CDI = 0.55·50 + 0.25·0 + 0.20·60 (the 14:00 circadian band) =
+   * 39.5, "Cognitive Decline Risk". Both sit 20 points below the severe edge,
+   * so both project the same 45-minute lead.
+   */
+  const slippingWorld = {
+    at: TUESDAY(14),
+    score: 50,
+    sensor: { lastSignificantMotionMinutesAgo: 20 },
+  } as const;
+
+  test('a focus alert states when the drop could happen, and the risk behind it', async () => {
+    await evaluate(slippingWorld);
+    const body = bodyOf('🧭 Focus Slipping');
+
+    expect(body).toContain('Focus may slip within 45 min.');
+    expect(body).toContain('Risk 50.');
+    expect(body!.split(/\s+/).length).toBeLessThanOrEqual(15);
+  });
+
+  test('a cognitive alert reads the same way, from its own index', async () => {
+    // No motion reading, so only the cognitive index can fire.
+    await evaluate({
+      ...slippingWorld,
+      sensor: { lastSignificantMotionMinutesAgo: null },
     });
-    expect(battery.delivered).toContain('low_battery');
-    expect(battery.delivered).not.toContain('extreme_heat'); // Still on cooldown
+    const body = bodyOf('💧 Cognitive Decline Risk');
+
+    expect(body).toContain('Sharpness may dip within 45 min.');
+    expect(body).toContain('Risk 50.');
+    expect(body!.split(/\s+/).length).toBeLessThanOrEqual(15);
+  });
+
+  test('a deeper index brings the forecast forward', async () => {
+    // 90 risk and an hour and a half without significant motion: FDI = 0.6·90
+    // + 0.4·80 = 86, already past the severe edge.
+    await evaluate({
+      at: TUESDAY(14),
+      score: 90,
+      sensor: { lastSignificantMotionMinutesAgo: 91 },
+      // The high risk alert outranks it; put that on cooldown.
+      state: { lastAlerts: { high_risk: TUESDAY(14).getTime() } },
+    });
+
+    expect(bodyOf('🚨 Focus Alert')).toContain('Focus could drop sharply within 15 min.');
+  });
+
+  test('every hydration notification carries the score it was raised over', async () => {
+    await evaluate({ at: TUESDAY(14), score: 85, logs: [logAt(4, 900)] });
+
+    const risky = bodies().filter(body => !/battery|charged/i.test(body));
+    expect(risky.length).toBeGreaterThan(0);
+    for (const body of risky) {
+      expect(body).toContain('Hydration risk 85');
+    }
+  });
+
+  test('a notification raised with no score states none', async () => {
+    // "Insufficient Data" is a null score. A 0 printed here would read as
+    // perfect hydration, which is the opposite of what it means.
+    await evaluate({ at: TUESDAY(14), score: null, sensor: { temperature: 38 } });
+
+    for (const body of bodies()) {
+      expect(body).not.toContain('Hydration risk');
+    }
+  });
+
+  test('the device messages stay about the device', async () => {
+    // Only the battery condition is true, so it is the one delivered.
+    await evaluate({
+      at: TUESDAY(14),
+      score: 30,
+      logs: [logAt(0.5, 2000)],
+      sensor: { batteryLevel: 15 },
+      state: { lastAlerts: { cognitive_decline: TUESDAY(14).getTime() } },
+    });
+    expect(bodyOf('🔋 Low Battery')).toBeDefined();
+    expect(bodyOf('🔋 Low Battery')).not.toContain('Hydration risk');
+  });
+
+  test('nothing the engine can send claims certainty', async () => {
+    // One sweep across the conditions that reach the message table, asserting
+    // the product rule directly: forecasts and advice are hedged with "may"
+    // or "could", and the words that overstate what the app knows never
+    // appear. The table is edited far more often than the code that reads it.
+    const worlds: Scenario[] = [
+      { at: TUESDAY(14), score: 85, logs: [logAt(4, 900)], sensor: { temperature: 38, humidity: 80, batteryLevel: 15 } },
+      { at: TUESDAY(14), score: 50, sensor: { lastSignificantMotionMinutesAgo: 20 } },
+      { at: TUESDAY(14), score: 90, sensor: { lastSignificantMotionMinutesAgo: 91 } },
+      { at: TUESDAY(12, 30), score: 30, logs: [logAt(1, 200)] },
+      { at: TUESDAY(17), score: 30, logs: [logAt(1, 900)] },
+      { at: TUESDAY(14), score: 10, logs: [logAt(1, 3000)], sensor: { batteryLevel: 100 } },
+      { at: MONDAY(9), score: 45, logs: [logAt(2, 500)] },
+    ];
+
+    const seen: string[] = [];
+    for (const world of worlds) {
+      mockStore.clear();
+      await evaluate(world);
+      seen.push(...bodies());
+    }
+
+    expect(seen.length).toBeGreaterThan(5);
+    for (const body of seen) {
+      expect({ body, offender: unhedgedWord(body) }).toEqual({ body, offender: null });
+    }
   });
 });

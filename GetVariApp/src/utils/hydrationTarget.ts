@@ -68,7 +68,7 @@ export interface TargetInputs {
 export type PhysicianLimitState =
   | 'not-required' // no fluid-restricted condition on the profile
   | 'set' // restricted, and the doctor's daily limit is on file
-  | 'missing'; // restricted, and it is not — the app must not invent one
+  | 'missing'; // restricted, and it is not — optional, so the formula's ceiling applies
 
 /**
  * The range a typed physician limit has to fall inside to be believable.
@@ -106,7 +106,8 @@ export const physicianLimitStateFor = (
  */
 export const validatePhysicianLimitMl = (raw: string): string | null => {
   const trimmed = raw.trim();
-  if (!trimmed) return 'A physician daily limit is required for the conditions you selected.';
+  // Optional: leaving it blank uses the healthy ceiling instead.
+  if (!trimmed) return null;
 
   const value = Number.parseInt(trimmed, 10);
   if (!Number.isFinite(value) || value <= 0) return 'Enter the daily limit in millilitres.';
@@ -162,13 +163,11 @@ export const climateModifierFor = (selectedCity?: string): number =>
  *    to the full 3,000 — the maximum they are permitted, presented as the
  *    amount they should drink. Their baseline is under 2 L.
  *
- * ## And when there is no number, there is no goal
+ * ## And when there is no number, the healthy ceiling applies
  *
- * `null` is returned rather than a fallback. A goal is a number the user
- * drinks *towards*, so inventing one for a restricted patient is the same
- * mistake in a quieter form — which is what `requiresPhysicianLimit` already
- * promised not to do ("says so rather than guessing"). Callers show the
- * prompt for the missing limit instead of a figure.
+ * The limit is optional. With none on file, §5 step 3 falls back to the
+ * healthy ceiling, so a fluid-restricted profile still gets a goal and the
+ * breakdown card suggests adding the doctor's number.
  */
 export const computeTargetDailyMl = ({
   weightKg,
@@ -179,8 +178,6 @@ export const computeTargetDailyMl = ({
   medicalConditions = [],
   physicianLimitMl,
 }: TargetInputs): number | null => {
-  if (physicianLimitStateFor(medicalConditions, physicianLimitMl) === 'missing') return null;
-
   return computePBWRBreakdown(
     {
       weightKg,

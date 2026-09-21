@@ -20,6 +20,9 @@ interface QuickLogSheetProps {
 const ACCENT = '#00f2fe';
 
 /** How long the tick stays up before the sheet closes itself. */
+/** Presses on "Log" within this long of the sheet opening are ignored. */
+const OPEN_GUARD_MS = 600;
+
 const CONFIRM_MS = 850;
 
 /**
@@ -51,8 +54,12 @@ const QuickLogSheet: React.FC<QuickLogSheetProps> = ({
 
   // Every open starts clean, so a previous failure or tick is never inherited
   // — and back on the pre-selected amount, not on whatever was chosen last.
+  /** When the sheet last opened; see `commit`. */
+  const openedAt = React.useRef(0);
+
   useEffect(() => {
     if (!visible) return;
+    openedAt.current = Date.now();
     setSelectedMl(primaryQuickAmount().ml);
     setSavingMl(null);
     setLoggedMl(null);
@@ -87,6 +94,10 @@ const QuickLogSheet: React.FC<QuickLogSheetProps> = ({
 
   const commit = async () => {
     if (selectedMl === null || savingMl !== null || loggedMl !== null) return;
+    // The "Log" button sits where the navbar's "Log" tab is, so a double tap
+    // on the tab used to open the sheet *and* log 500 ml. A press this soon
+    // after opening is that second tap, not a decision.
+    if (Date.now() - openedAt.current < OPEN_GUARD_MS) return;
 
     setSavingMl(selectedMl);
     setFailed(false);

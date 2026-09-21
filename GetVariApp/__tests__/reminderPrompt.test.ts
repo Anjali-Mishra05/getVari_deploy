@@ -128,7 +128,20 @@ const reminderEvent = (eventId = 'hydration-reminder-1@1000', primaryMl = '500')
   },
 });
 
+/**
+ * A fixed, waking Tuesday afternoon.
+ *
+ * Without this the suite ran on the wall clock, which meant every assertion
+ * about a delivered reminder depended on what time the developer happened to
+ * run it: the app withdraws a delivery that lands inside the quiet window, and
+ * with no schedule stored that window is the 23:00-07:00 default. Running the
+ * tests after eleven at night made them fail on a rule they are not about.
+ */
+const DAYTIME = new Date(2026, 8, 1, 14, 0, 0);
+
 beforeEach(async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(DAYTIME);
   mockStore.clear();
   mockQueued.length = 0;
   mockOsQueue.clear();

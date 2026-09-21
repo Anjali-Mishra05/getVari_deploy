@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Background behind the adaptive app icon's logo. -->
+    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- Tint for the notification icon. -->
+    <color name="notification_accent">#012060</color>
+</resources>

@@ -18,6 +18,8 @@ const mockQueued: Array<{ notification: any; trigger: any }> = [];
 const mockOsQueue = new Set<string>();
 let mockAuthStatus = 1; // AuthorizationStatus.AUTHORIZED
 const mockCancelledIds: string[] = [];
+/** Ids withdrawn from the tray, for the sleep-window gate below. */
+const mockCancelledDisplayed: string[] = [];
 /** Channels the fake OS holds, so the immutability rule can be asserted. */
 const mockChannels = new Map<string, any>();
 const mockDeletedChannels: string[] = [];
@@ -65,7 +67,10 @@ jest.mock('@notifee/react-native', () => ({
       return Promise.resolve();
     },
     getDisplayedNotifications: () => Promise.resolve([]),
-    cancelDisplayedNotifications: () => Promise.resolve(),
+    cancelDisplayedNotifications: (ids: string[]) => {
+      mockCancelledDisplayed.push(...ids);
+      return Promise.resolve();
+    },
     createTriggerNotification: (notification: any, trigger: any) => {
       mockQueued.push({ notification, trigger });
       mockOsQueue.add(notification.id);
@@ -126,6 +131,7 @@ beforeEach(async () => {
   mockQueued.length = 0;
   mockOsQueue.clear();
   mockCancelledIds.length = 0;
+  mockCancelledDisplayed.length = 0;
   mockAuthStatus = 1;
   // Clears the *user's* window; the 23:00–07:00 default still applies.
   await NotificationService.clearSleepSchedule();
@@ -397,5 +403,87 @@ describe('Burst of scheduling calls', () => {
     await Promise.all(calls);
     expect(settled).toHaveLength(5);
     expect(settled).toContain('write');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The sleep window as a thing that cannot be lost or slipped past
+// ---------------------------------------------------------------------------
+
+describe('The quiet window holds', () => {
+  test('a profile with no sleep window does not erase the one already stored', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 8, 1, 10, 0, 0));
+
+    await NotificationService.setSleepSchedule({ sleepStart: '21:00', wakeUp: '05:00' });
+
+    // What every caller actually passes: `normaliseSleepSchedule(profile)`,
+    // which is null for a profile row that simply does not carry the field —
+    // an older row, or a load that came back partial. Treating that as "this
+    // user has no quiet hours" wiped the window set during onboarding on the
+    // very next profile load, and the app fell back to the 23:00-07:00
+    // default: reminders at ten at night for someone who sleeps at nine.
+    await NotificationService.setSleepSchedule(null);
+
+    expect(await NotificationService.getSleepSchedule()).toEqual({
+      sleepStart: '21:00',
+      wakeUp: '05:00',
+    });
+    // 22:00 is inside the user's window and outside the default one.
+    expect(await NotificationService.isSleeping(new Date(2026, 8, 1, 22, 0, 0).getTime())).toBe(
+      true
+    );
+  });
+
+  test('signing out is still able to forget it', async () => {
+    await NotificationService.setSleepSchedule({ sleepStart: '21:00', wakeUp: '05:00' });
+    await NotificationService.clearSleepSchedule();
+
+    // Back to the default window rather than to no window at all.
+    expect(await NotificationService.getSleepSchedule()).toEqual({
+      sleepStart: '23:00',
+      wakeUp: '07:00',
+    });
+  });
+
+  test('a reminder that fires inside the window is withdrawn, not shown', async () => {
+    jest.useFakeTimers();
+    // 02:00, deep inside a 23:00-07:00 window. Reminders are handed to
+    // AlarmManager up to a day ahead, so one queued before the window changed
+    // can still arrive here with the app not running to re-queue it. This is
+    // the last gate.
+    jest.setSystemTime(new Date(2026, 8, 2, 2, 0, 0));
+    await NotificationService.setSleepSchedule({ sleepStart: '23:00', wakeUp: '07:00' });
+    mockCancelledDisplayed.length = 0;
+    mockQueued.length = 0;
+
+    const withdrawn = await NotificationService.suppressIfAsleep({
+      id: 'getvari-hydration-reminder-3',
+      data: { type: HYDRATION_REMINDER_TYPE },
+    } as any);
+
+    expect(withdrawn).toBe(true);
+    expect(mockCancelledDisplayed).toContain('getvari-hydration-reminder-3');
+
+    // …and the rest of the night is repaired on the way out, so one stray
+    // delivery does not become one an hour until morning.
+    const wakeUp = new Date(2026, 8, 2, 7, 0, 0).getTime();
+    expect(mockQueued.length).toBeGreaterThan(0);
+    expect(mockQueued.every(q => q.trigger.timestamp >= wakeUp)).toBe(true);
+  });
+
+  test('a reminder that fires while the user is up is left alone', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 8, 1, 14, 0, 0));
+    await NotificationService.setSleepSchedule({ sleepStart: '23:00', wakeUp: '07:00' });
+    mockCancelledDisplayed.length = 0;
+
+    const withdrawn = await NotificationService.suppressIfAsleep({
+      id: 'getvari-hydration-reminder-1',
+      data: { type: HYDRATION_REMINDER_TYPE },
+    } as any);
+
+    expect(withdrawn).toBe(false);
+    expect(mockCancelledDisplayed).toHaveLength(0);
   });
 });

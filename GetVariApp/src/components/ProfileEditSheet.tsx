@@ -182,14 +182,7 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
   // that does not exist, so the projection row is hidden instead.
   const targetDelta = projectedTargetMl === null ? null : projectedTargetMl - currentTargetMl;
 
-  /**
-   * The same rule onboarding enforces.
-   *
-   * This sheet used to label the field "Mandatory" and then save whatever was
-   * in it, blank included — so adding a fluid-restricted diagnosis here left
-   * the profile restricted with no limit on file, which is the one state the
-   * app is not allowed to guess its way out of.
-   */
+  /** The same rule onboarding enforces: optional, but range-checked if typed. */
   const physicianLimitError = ConfigService.requiresPhysicianLimit(medicalConditions)
     ? validatePhysicianLimitMl(physicianLimit)
     : null;
@@ -418,7 +411,7 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
                 on every screen that asks. */}
             {ConfigService.requiresPhysicianLimit(medicalConditions) && (
               <View className="mb-6">
-                <FieldLabel>Physician Daily Limit (ml)</FieldLabel>
+                <FieldLabel>Physician Daily Limit (ml) — optional</FieldLabel>
                 <TextInput
                   className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold mb-1"
                   placeholder="e.g. 2000"
@@ -427,7 +420,7 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
                   onChangeText={setPhysicianLimit}
                   keyboardType="numeric"
                 />
-                <Text className="text-[9px] text-amber-500 italic">Mandatory for fluid-restricted conditions.</Text>
+                <Text className="text-[9px] text-amber-500 italic">Optional. Your goal will never go above this limit.</Text>
               </View>
             )}
 

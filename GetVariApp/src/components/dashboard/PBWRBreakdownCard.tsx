@@ -3,6 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Droplet, Info, AlertTriangle } from 'lucide-react-native';
 import { PBWRBreakdown } from '../../services/PBWRService';
 import GlassCard from '../GlassCard';
+import { cardStyle } from './cardTheme';
 
 /**
  * Millilitres as litres, to two places.
@@ -38,7 +39,7 @@ const PBWRBreakdownCard: React.FC<Props> = ({ breakdown, hasPhysicianLimit, isPh
         <View style={styles.cautionBanner}>
           <AlertTriangle size={16} color="#fbbf24" />
           <Text style={styles.cautionText}>
-            Medical condition active. Please enter physician-recommended limit.
+            Medical condition active. You can add your physician's daily limit in your profile.
           </Text>
         </View>
       )}
@@ -86,11 +87,10 @@ const PipelineItem = ({ label, value, isAdj, isBold, subLabel }: any) => (
 );
 
 const styles = StyleSheet.create({
-  container: {
-    marginHorizontal: 16,
-    marginVertical: 8,
-    padding: 16,
-  },
+  // The one card that used to set its own horizontal margin, on top of the
+  // scroll view's padding — so it stood 16px narrower on each side than
+  // everything above and below it.
+  container: { ...cardStyle },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',

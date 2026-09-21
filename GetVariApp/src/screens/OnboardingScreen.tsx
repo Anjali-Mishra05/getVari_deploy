@@ -33,7 +33,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 import { BleManager, Device } from 'react-native-ble-plx';
-import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
+import { request, requestMultiple, PERMISSIONS, RESULTS } from 'react-native-permissions';
 
 import GlassCard from '../components/GlassCard';
 import Button from '../components/ui/Button';
@@ -145,12 +145,8 @@ const OnboardingScreen = ({ navigation }: any) => {
     ? 'Enter a valid email address.'
     : null;
   /**
-   * Fluid-restricted conditions are unsafe to pace without a doctor's number.
-   *
-   * The rule itself lives in `validatePhysicianLimitMl` so the profile editor
-   * enforces exactly the same one — it used to call the field "Mandatory" and
-   * save without it, which is how a profile could end up restricted with no
-   * limit on file.
+   * The physician limit is optional; a typed value is still range-checked.
+   * The rule lives in `validatePhysicianLimitMl`, shared with the profile editor.
    */
   const physicianLimitError = ConfigService.requiresPhysicianLimit(medicalConditions)
     ? validatePhysicianLimitMl(physicianLimit)
@@ -174,12 +170,15 @@ const OnboardingScreen = ({ navigation }: any) => {
     if (Platform.OS === 'android') {
       const apiLevel = parseInt(String(Platform.Version), 10);
       if (apiLevel >= 31) {
-        const result = await Promise.all([
-          request(PERMISSIONS.ANDROID.BLUETOOTH_SCAN),
-          request(PERMISSIONS.ANDROID.BLUETOOTH_CONNECT),
-          request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION),
+        // One combined request. Three concurrent `request` calls could
+        // overlap, and on some phones the overlapping one comes back denied
+        // without the user ever seeing a dialog for it.
+        const result = await requestMultiple([
+          PERMISSIONS.ANDROID.BLUETOOTH_SCAN,
+          PERMISSIONS.ANDROID.BLUETOOTH_CONNECT,
+          PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION,
         ]);
-        return result.every((res) => res === RESULTS.GRANTED);
+        return Object.values(result).every((res) => res === RESULTS.GRANTED);
       } else {
         const result = await request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
         return result === RESULTS.GRANTED;
@@ -355,6 +354,16 @@ const OnboardingScreen = ({ navigation }: any) => {
     setDevices([]);
 
     const currentState = await manager.state();
+    // A phone with no Bluetooth LE at all: say so, rather than asking the
+    // user to "turn on" something the phone does not have.
+    if (currentState === 'Unsupported') {
+      setBleState('idle');
+      Alert.alert(
+        'Bluetooth not supported',
+        "This phone doesn't support Bluetooth LE, so the wearable can't connect. You can continue and log water manually."
+      );
+      return;
+    }
     if (currentState !== 'PoweredOn') {
       setBleState('bluetoothOff');
       Alert.alert(
@@ -791,7 +800,7 @@ const OnboardingScreen = ({ navigation }: any) => {
                     {ConfigService.requiresPhysicianLimit(medicalConditions) && (
                       <View>
                         <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">
-                          Physician Daily Limit (ml) <Text className="text-red-400">*</Text>
+                          Physician Daily Limit (ml) <Text className="text-neutral-500">(optional)</Text>
                         </Text>
                         <TextInput
                           className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold mb-2"
@@ -802,8 +811,8 @@ const OnboardingScreen = ({ navigation }: any) => {
                           keyboardType="numeric"
                         />
                         <Text className="text-[10px] text-amber-500/80 leading-relaxed italic">
-                          Mandatory for the conditions you selected — the app will not pace your
-                          intake without your doctor's number.
+                          Optional. If your doctor gave you a daily limit, enter it and your goal
+                          will never go above it.
                         </Text>
                         {showFieldErrors && !!physicianLimitError && (
                           <Text className="text-[10px] text-red-400 mt-1.5">

@@ -13,6 +13,7 @@ import Animated, { FadeInUp } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
 import { AuthService, DEMO_PASSCODE } from '../services/AuthService';
+import NotificationService from '../services/NotificationService';
 import Button from '../components/ui/Button';
 import { Cpu } from 'lucide-react-native';
 import { cssInterop } from 'react-native-css-interop';
@@ -56,6 +57,8 @@ const OtpScreen = ({ route, navigation }: any) => {
 
     try {
       await AuthService.verifyOtp(confirmation, otpCode);
+      // The welcome itself shows when the user reaches the dashboard.
+      await NotificationService.queueWelcomeNotification();
       navigation.replace('Onboarding');
     } catch (err: any) {
       setError(err.message || 'Invalid authorization code.');

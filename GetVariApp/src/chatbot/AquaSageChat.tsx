@@ -12,19 +12,14 @@ import {
   Dimensions,
   Modal,
   Image,
+  Animated,
+  AppState,
+  Easing,
   StyleSheet,
   useWindowDimensions,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { MessageCircle, X, Send, Trash2, Droplets, Pencil } from 'lucide-react-native';
-import Animated, {
-  FadeIn,
-  LinearTransition,
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
 import { BACKEND_API_KEY, backendCandidates, resolveBackendUrl, warmBackend } from '../config/backend';
 import ChatBus from '../services/ChatBus';
 import HydrationService from '../services/HydrationService';
@@ -303,6 +298,11 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
    * bubble from parking over the dashboard's lower metric cards.
    */
   const [teaserIndex, setTeaserIndex] = useState(0);
+  /**
+   * Hidden while the sheet is open, and brought back when it closes. It used
+   * to hide for good on the first touch, so one accidental tap removed it
+   * until the app was restarted.
+   */
   const [teaserShown, setTeaserShown] = useState(true);
   const [serverUrl, setServerUrl] = useState<string | null>(null);
   /**
@@ -375,7 +375,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
    * edges twitch on every swap.
    */
   const teasers = [
-    'Can I help you? 💧',
+    'How can I help you? 💧',
     'Feeling thirsty?',
     'Ask me anything!',
     'Water check-in?',
@@ -388,32 +388,75 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   /** The two halves of the cross-fade. */
   const TEASER_FADE_OUT_MS = 420;
   const TEASER_FADE_IN_MS = 520;
+  /** How long the bubble stays up before tucking itself away (about 5 lines). */
+  const TEASER_VISIBLE_MS = 20000;
 
-  const teaserOpacity = useSharedValue(1);
-  const teaserTextStyle = useAnimatedStyle(() => ({ opacity: teaserOpacity.value }));
-
-  /** Swaps the copy while it is invisible, then brings it back up. */
-  const showNextTeaser = useCallback(() => {
-    setTeaserIndex(prev => (prev + 1) % teasers.length);
-    teaserOpacity.value = withTiming(1, { duration: TEASER_FADE_IN_MS });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teaserOpacity, teasers.length]);
+  /**
+   * React Native's own Animated, not Reanimated. The bubble used Reanimated's
+   * `entering`/`layout` animations and a worklet callback to swap the text;
+   * on a release build of the new architecture those did not reliably run,
+   * which left the bubble invisible (or empty after its first fade-out).
+   * Plain Animated driven from JS has no such dependency.
+   */
+  const teaserOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     // Nothing to say while the sheet is open — the chat is right there.
     if (isOpen || !teaserShown) return;
 
+    let cancelled = false;
+    Animated.timing(teaserOpacity, {
+      toValue: 1,
+      duration: TEASER_FADE_IN_MS,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+
     const interval = setInterval(() => {
-      // Only the text dissolves. The bubble itself never leaves, so the next
-      // line arrives in the same spot rather than the whole thing fading away
-      // and reappearing.
-      teaserOpacity.value = withTiming(0, { duration: TEASER_FADE_OUT_MS }, finished => {
-        if (finished) runOnJS(showNextTeaser)();
+      // Fade out, swap the line while invisible, fade back in.
+      Animated.timing(teaserOpacity, {
+        toValue: 0,
+        duration: TEASER_FADE_OUT_MS,
+        useNativeDriver: true,
+      }).start(() => {
+        if (cancelled) return;
+        setTeaserIndex(prev => (prev + 1) % teasers.length);
+        Animated.timing(teaserOpacity, {
+          toValue: 1,
+          duration: TEASER_FADE_IN_MS,
+          useNativeDriver: true,
+        }).start();
       });
     }, TEASER_HOLD_MS);
 
-    return () => clearInterval(interval);
-  }, [isOpen, teaserShown, showNextTeaser, teaserOpacity]);
+    // Then tuck it away. Left up permanently it covered whatever sat under
+    // it — on a small phone, the Quick Fluid Log buttons and the end of the
+    // streak row — and a tap meant for those opened the chat instead.
+    const hide = setTimeout(() => {
+      Animated.timing(teaserOpacity, {
+        toValue: 0,
+        duration: TEASER_FADE_OUT_MS,
+        useNativeDriver: true,
+      }).start(() => {
+        if (!cancelled) setTeaserShown(false);
+      });
+    }, TEASER_VISIBLE_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      clearTimeout(hide);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, teaserShown, teaserOpacity]);
+
+  // Back to the app from elsewhere: offer help again.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') setTeaserShown(true);
+    });
+    return () => sub.remove();
+  }, []);
 
   // Server Discovery Logic
   /**
@@ -451,7 +494,8 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
     // may have been interrupted part-way through a fade.
     if (isOpen) {
       setTeaserIndex(prev => (prev + 1) % teasers.length);
-      teaserOpacity.value = 1;
+      teaserOpacity.setValue(0);
+      setTeaserShown(true);
     }
     setIsOpen(!isOpen);
   };
@@ -848,61 +892,54 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
           the button sits beside the dashboard rather than on top of it. */}
       <View style={{ position: 'absolute', bottom: 124, right: 20, zIndex: 1000, alignItems: 'flex-end' }}>
         {!isOpen && teaserShown && (
-          <Animated.View
-            // No `exiting` and no key: the bubble is mounted once and holds its
-            // place. `layout` absorbs the small width differences between
-            // lines so its edges ease rather than snap.
-            entering={FadeIn.duration(500)}
-            layout={LinearTransition.duration(260)}
-            onTouchEnd={() => setTeaserShown(false)}
-            style={{
-              marginBottom: 14,
-              marginRight: 4,
-              minWidth: 172,
-              alignItems: 'center',
-              backgroundColor: '#002855',
-              paddingHorizontal: 18,
-              paddingVertical: 12,
-              borderRadius: 20,
-              borderWidth: 2,
-              borderColor: '#ffffff',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 8 },
-              shadowOpacity: 0.4,
-              shadowRadius: 10,
-              elevation: 10,
-            }}
-          >
-            <Animated.Text
-              numberOfLines={1}
-              style={[
-                {
+          <Animated.View style={{ opacity: teaserOpacity, marginBottom: 10, marginRight: 2 }}>
+            {/* Tapping the bubble opens the chat it is advertising. */}
+            <Pressable
+              onPress={toggleChat}
+              accessibilityRole="button"
+              accessibilityLabel="Open chat"
+              style={{
+                backgroundColor: '#002855',
+                paddingHorizontal: 12,
+                paddingVertical: 7,
+                borderRadius: 14,
+                borderWidth: 1.5,
+                borderColor: '#ffffff',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.35,
+                shadowRadius: 6,
+                elevation: 14,
+              }}
+            >
+              <Text
+                numberOfLines={1}
+                style={{
                   color: '#ffffff',
-                  fontSize: 13,
-                  fontWeight: '900',
+                  fontSize: 11,
+                  fontWeight: '800',
                   fontFamily: Platform.OS === 'android' ? 'monospace' : 'Menlo',
                   textAlign: 'center',
-                },
-                teaserTextStyle,
-              ]}
-            >
-              {teasers[teaserIndex]}
-            </Animated.Text>
-            {/* Bubble arrow */}
-            <View
-              style={{
-                position: 'absolute',
-                bottom: -10,
-                right: 24,
-                width: 16,
-                height: 16,
-                backgroundColor: '#002855',
-                borderRightWidth: 2,
-                borderBottomWidth: 2,
-                borderColor: '#ffffff',
-                transform: [{ rotate: '45deg' }]
-              }}
-            />
+                }}
+              >
+                {teasers[teaserIndex]}
+              </Text>
+              {/* Bubble arrow */}
+              <View
+                style={{
+                  position: 'absolute',
+                  bottom: -6,
+                  right: 18,
+                  width: 10,
+                  height: 10,
+                  backgroundColor: '#002855',
+                  borderRightWidth: 1.5,
+                  borderBottomWidth: 1.5,
+                  borderColor: '#ffffff',
+                  transform: [{ rotate: '45deg' }],
+                }}
+              />
+            </Pressable>
           </Animated.View>
         )}
 

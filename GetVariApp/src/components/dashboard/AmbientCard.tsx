@@ -3,6 +3,7 @@ import { Text, View } from 'react-native';
 import { Droplets, MapPin } from 'lucide-react-native';
 
 import GlassCard from '../GlassCard';
+import { cardStyle } from './cardTheme';
 
 interface AmbientCardProps {
   /** City from the onboarding profile; falls back when it was never set. */
@@ -16,7 +17,7 @@ interface AmbientCardProps {
  * it, not temperature alone, decides whether sweat can evaporate at all.
  */
 const AmbientCard: React.FC<AmbientCardProps> = ({ location, temperature, humidity }) => (
-  <GlassCard className="mb-4 bg-white/[0.01] rounded-[28px]" style={{ padding: 16 }}>
+  <GlassCard className="bg-white/[0.01]" style={cardStyle}>
     <View className="flex-row items-center justify-between border-b border-white/5 pb-2.5">
       <View className="flex-row items-center gap-2">
         <MapPin color="#00f2fe" size={15} />

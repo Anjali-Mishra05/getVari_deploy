@@ -3,6 +3,7 @@ import { Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Plus } from 'lucide-react-native';
 
 import GlassCard from '../GlassCard';
+import { cardStyle } from './cardTheme';
 import { MAX_SINGLE_ENTRY_ML } from '../../services/HydrationService';
 import { quickLogAmounts } from '../../utils/hydrationAmounts';
 import { ACCENT } from './riskTheme';
@@ -48,7 +49,7 @@ const QuickFluidLogStation: React.FC<QuickFluidLogStationProps> = ({ onSelectAmo
   };
 
   return (
-    <GlassCard className="mb-4 bg-cyan-950/10 rounded-[28px] border-white/5" style={{ padding: 16 }}>
+    <GlassCard className="bg-cyan-950/10 border-white/5" style={cardStyle}>
       <View className="flex-row items-center justify-between mb-3">
         <Text className="text-[10px] font-mono font-black tracking-wider uppercase text-neutral-300">
           Quick Fluid Log Station

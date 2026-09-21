@@ -3,6 +3,7 @@ import { Text, TouchableOpacity, View } from 'react-native';
 import { Cpu, Moon } from 'lucide-react-native';
 
 import GlassCard from '../GlassCard';
+import { cardStyle } from './cardTheme';
 import { ABSORBED_POOL_CAP_ML, STOMACH_CAPACITY_ML } from '../../hooks/useHydrationTelemetry';
 import { ACCENT } from './riskTheme';
 
@@ -142,7 +143,7 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
   const paceMlPerHour = finite(targetMlPerAwakeHour, 0);
 
   return (
-    <GlassCard className="mb-4 bg-cyan-950/5 rounded-[32px] border-cyan-500/10" style={{ padding: 20 }}>
+    <GlassCard className="bg-cyan-950/5 border-cyan-500/10" style={cardStyle}>
       <View className="flex-row items-center justify-between pb-3 mb-3.5 border-b border-white/5">
         <View className="flex-row items-center gap-2">
           <Cpu color={ACCENT} size={16} />

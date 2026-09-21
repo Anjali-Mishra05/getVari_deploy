@@ -4,6 +4,7 @@ import Svg, { Circle } from 'react-native-svg';
 import Animated, { useAnimatedProps, useSharedValue, withTiming } from 'react-native-reanimated';
 
 import GlassCard from '../GlassCard';
+import { cardStyle } from './cardTheme';
 import { HydrationRiskDetails } from '../../types';
 import type { SensorOverride } from '../../hooks/useHydrationTelemetry';
 import {
@@ -231,7 +232,7 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
   ).length;
 
   return (
-    <GlassCard className="my-3 bg-white/[0.01]" style={{ padding: 20 }}>
+    <GlassCard className="bg-white/[0.01]" style={cardStyle}>
       {/* Status header */}
       <View className="flex-row items-center justify-between mb-1">
         <Text className="text-[10px] uppercase tracking-[0.2em] text-cyan-400 font-mono font-black">
@@ -273,14 +274,24 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
             />
           </Svg>
           <View className="absolute items-center justify-center">
-            <Text className="text-[56px] font-black text-white" style={{ letterSpacing: -2 }}>
+            {/* Inside a fixed 192px ring, so these do not scale with the
+                system font size — at 130% the caption spilled over the arc. */}
+            <Text
+              className="text-[56px] font-black text-white"
+              style={{ letterSpacing: -2 }}
+              maxFontSizeMultiplier={1}
+            >
               {risk.score !== null ? Math.round(risk.score) : '--'}
             </Text>
-            <Text className="text-[9px] uppercase tracking-[0.25em] text-neutral-500 font-mono font-black mt-[-4px]">
+            <Text
+              className="text-[9px] uppercase tracking-[0.25em] text-neutral-500 font-mono font-black mt-[-4px]"
+              maxFontSizeMultiplier={1}
+              numberOfLines={1}
+            >
               {risk.score !== null ? 'Dehydration Risk' : 'Insufficient Data'}
             </Text>
             {!!updatedLabel && (
-              <Text className="text-[8px] text-neutral-600 font-mono mt-1.5">
+              <Text className="text-[8px] text-neutral-600 font-mono mt-1.5" maxFontSizeMultiplier={1}>
                 Updated {updatedLabel}
               </Text>
             )}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Droplets, TrendingUp } from 'lucide-react-native';
+import { ChartColumn, Droplets, TrendingUp } from 'lucide-react-native';
 
 import { ACCENT } from './riskTheme';
 
@@ -26,7 +26,8 @@ import { ACCENT } from './riskTheme';
  * belongs.
  */
 
-export type DashboardTab = 'dashboard';
+/** The two destinations: the live dashboard and the history/analytics view. */
+export type DashboardTab = 'dashboard' | 'analytics';
 
 interface DashboardNavProps {
   /** The current destination. One entry today; the shape holds for more. */
@@ -88,6 +89,13 @@ const styles = StyleSheet.create({
 
 const IDLE = '#64748b';
 
+/**
+ * The bar has a fixed height and four fixed slots, so its labels cannot grow
+ * with the system font size: at 130% "ANALYTICS" ran into "ACCOUNT". They
+ * stay on one line and shrink to fit instead.
+ */
+const LABEL_FIT = { numberOfLines: 1, adjustsFontSizeToFit: true, maxFontSizeMultiplier: 1 } as const;
+
 const DashboardNav: React.FC<DashboardNavProps> = ({
   active,
   onSelect,
@@ -96,6 +104,7 @@ const DashboardNav: React.FC<DashboardNavProps> = ({
   profileInitial,
 }) => {
   const dashboardSelected = active === 'dashboard';
+  const analyticsSelected = active === 'analytics';
 
   return (
     <View style={styles.bar}>
@@ -113,7 +122,7 @@ const DashboardNav: React.FC<DashboardNavProps> = ({
             strokeWidth={dashboardSelected ? 2.5 : 2}
           />
         </View>
-        <Text style={[styles.label, { color: dashboardSelected ? ACCENT : IDLE }]}>Dashboard</Text>
+        <Text {...LABEL_FIT} style={[styles.label, { color: dashboardSelected ? ACCENT : IDLE }]}>Dashboard</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -125,7 +134,24 @@ const DashboardNav: React.FC<DashboardNavProps> = ({
         <View style={styles.slot}>
           <Droplets color={IDLE} size={22} />
         </View>
-        <Text style={[styles.label, { color: IDLE }]}>Log</Text>
+        <Text {...LABEL_FIT} style={[styles.label, { color: IDLE }]}>Log</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.item}
+        onPress={() => onSelect('analytics')}
+        accessibilityRole="tab"
+        accessibilityState={{ selected: analyticsSelected }}
+        accessibilityLabel="Analytics"
+      >
+        <View style={[styles.slot, analyticsSelected && styles.selectedSlot]}>
+          <ChartColumn
+            color={analyticsSelected ? ACCENT : IDLE}
+            size={22}
+            strokeWidth={analyticsSelected ? 2.5 : 2}
+          />
+        </View>
+        <Text {...LABEL_FIT} style={[styles.label, { color: analyticsSelected ? ACCENT : IDLE }]}>Analytics</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -139,7 +165,7 @@ const DashboardNav: React.FC<DashboardNavProps> = ({
             <Text style={{ fontSize: 10, fontWeight: '900', color: IDLE }}>{profileInitial}</Text>
           </View>
         </View>
-        <Text style={[styles.label, { color: IDLE }]}>Account</Text>
+        <Text {...LABEL_FIT} style={[styles.label, { color: IDLE }]}>Account</Text>
       </TouchableOpacity>
     </View>
   );

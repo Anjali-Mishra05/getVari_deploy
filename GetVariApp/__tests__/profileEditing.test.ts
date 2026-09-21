@@ -137,12 +137,12 @@ describe('computeTargetDailyMl', () => {
     expect(computeTargetDailyMl({ ...base, selectedCity: 'Chennai' })).toBe(2946);
   });
 
-  it('refuses to compute a goal for a fluid-restricted condition', () => {
+  it('still computes a goal for a fluid-restricted condition with no limit (the limit is optional)', () => {
     // CKD, hypertension and heart disease are all `requiresPhysicianLimit`.
-    expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['ckd'] })).toBeNull();
+    expect(computeTargetDailyMl({ weightKg: 60, medicalConditions: ['ckd'] })).toEqual(expect.any(Number));
     expect(
       computeTargetDailyMl({ weightKg: 60, medicalConditions: ['diabetes', 'hypertension'] })
-    ).toBeNull();
+    ).toEqual(expect.any(Number));
   });
 
   it('ignores a condition it has no rule for', () => {

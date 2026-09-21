@@ -9,6 +9,23 @@ import {
   NOTIFICATION_COOLDOWNS,
   RISK_THRESHOLDS
 } from '../config/edgeCaseConfig';
+
+/**
+ * Triggers that may skip the gap between alerts. A high hydration risk is
+ * the one condition worth interrupting for even if another alert just landed.
+ */
+const GAP_EXEMPT_TRIGGERS: NotificationTrigger[] = ['high_risk'];
+
+/** The four focus/cognitive alerts, which share one cooldown and daily cap. */
+const FOCUS_COGNITIVE_TRIGGERS: NotificationTrigger[] = [
+  'focus_slipping',
+  'focus_lost',
+  'cognitive_decline',
+  'cognitive_impairment',
+  'focus_steady',
+  'cognitive_steady',
+];
+
 import {
   isAsleepAt
 } from '../utils/sleepWindow';
@@ -20,6 +37,11 @@ import {
   classifyCDI,
   classifyFDI,
 } from '../utils/focusCognitiveDrop';
+import {
+  buildDropNotice,
+  withRisk,
+  type RiskContext,
+} from '../utils/notificationCopy';
 
 const ALERT_STATE_KEY = 'getvari_notification_engine_state';
 
@@ -47,6 +69,8 @@ export type NotificationTrigger =
   | 'focus_lost'
   | 'cognitive_decline'
   | 'cognitive_impairment'
+  | 'focus_steady'
+  | 'cognitive_steady'
   | 'ai_reminder'
   | 'ai_insight'
   | 'ai_activity'
@@ -95,6 +119,49 @@ interface EnginePersistentState {
   lastDeliveredAt: number;
 }
 
+/**
+ * What `sendNotification` knows about the moment it is writing for.
+ *
+ * The engine already holds all of it while it is evaluating; passing it down
+ * is what lets the message state numbers instead of generalities. Every field
+ * is optional because every one of them can legitimately be missing — an
+ * "Insufficient Data" risk solve, a focus alert raised on a tick where the
+ * cognitive index never crossed anything.
+ */
+interface NotificationContext extends RiskContext {
+  /** The FDI/CDI readings behind a focus or cognitive trigger. */
+  indexScores?: { focus?: number; cognitive?: number };
+}
+
+/**
+ * The triggers whose text is a forecast built from an index, and which index.
+ *
+ * `severity` is the band, not the wording: 'early' is the first crossing
+ * ("Focus Slipping", "Cognitive Decline Risk") and 'severe' is the top one.
+ */
+const DROP_TRIGGERS: Partial<
+  Record<NotificationTrigger, { kind: 'focus' | 'cognitive'; severity: 'early' | 'severe' }>
+> = {
+  focus_slipping: { kind: 'focus', severity: 'early' },
+  focus_lost: { kind: 'focus', severity: 'severe' },
+  cognitive_decline: { kind: 'cognitive', severity: 'early' },
+  cognitive_impairment: { kind: 'cognitive', severity: 'severe' },
+};
+
+/**
+ * Notifications that do not carry the hydration risk score.
+ *
+ * The two device messages are about the wearable's battery and have nothing
+ * to do with the user's body; the weekly summary reports a week, and a
+ * reading taken this second would be the one number in it that is not about
+ * the period it covers.
+ */
+const RISK_FREE_TRIGGERS: NotificationTrigger[] = [
+  'low_battery',
+  'fully_charged',
+  'weekly_summary',
+];
+
 /** Alerts scoped to one activity session rather than to a cooldown window. */
 const ACTIVITY_SESSION_TRIGGERS: NotificationTrigger[] = ['post_activity', 'long_activity'];
 
@@ -132,16 +199,60 @@ class NotificationEngine {
    * Respects "Missing != Zero", per-type cooldowns, hysteresis, and sleep windows.
    */
   async evaluate(evalData: NotificationEvaluation): Promise<NotificationOutcome> {
+    // One evaluation at a time. The dashboard calls this on every telemetry
+    // tick, and at login several ticks land together: run concurrently, each
+    // would read the same saved state and deliver the same alerts before any
+    // of them saved, which is how a login produced a burst of notifications.
+    const run = this.evaluationQueue.then(() => this.evaluateNow(evalData));
+    this.evaluationQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Serialises `evaluate` calls; see there. */
+  private evaluationQueue: Promise<unknown> = Promise.resolve();
+
+  /** When the current signed-in session's dashboard opened; see `markSessionStart`. */
+  private sessionStartedAt = 0;
+
+  /**
+   * Called when the dashboard opens after login or a cold start. For the
+   * next LOGIN_QUIET_MS nothing but a high risk alert is delivered: the
+   * dashboard is on screen, and conditions that are still true are sent
+   * later, one at a time, instead of greeting the user with a burst.
+   */
+  markSessionStart(now: number = Date.now()): void {
+    this.sessionStartedAt = now;
+  }
+
+  private async evaluateNow(evalData: NotificationEvaluation): Promise<NotificationOutcome> {
     const { sensorData, profile, todayLogs, solvedRisk } = evalData;
     const now = Date.now();
     const state = await this.getPersistentState();
     const { lastAlerts } = state;
 
     // 1. Determine priority and quiet hours
-    const sleepSchedule = profile.sleepSchedule;
-    const asleep = sleepSchedule ? isAsleepAt(sleepSchedule, now) : false;
+    //
+    // Read through `NotificationService`, which owns the schedule the *rest*
+    // of the app is quiet by: the persisted copy, falling back to the default
+    // window when the user has never answered. Deciding it from
+    // `profile.sleepSchedule` alone — as this did — meant a profile that
+    // simply does not carry the field (an older row, a partial load) was read
+    // as "never asleep", and every condition below became deliverable at
+    // 3 AM. The two places that decide whether the app is quiet now cannot
+    // disagree, because there is only one of them.
+    const asleep = await this.isUserAsleep(profile, now);
 
     const triggers: NotificationTrigger[] = [];
+
+    /**
+     * The FDI and CDI readings behind whichever focus/cognitive triggers fired.
+     *
+     * Kept so the message can state the forecast those indices imply rather
+     * than the fixed sentence the table used to carry. Only written when the
+     * matching trigger is raised, so a score that crossed nothing is never
+     * used to time a warning the user is not being sent.
+     */
+    const indexScores: { focus?: number; cognitive?: number } = {};
 
     // --- Risk Notifications (Hysteresis + 30m Cooldown) ---
     // Rule: Critical alerts bypass quiet hours (per spec).
@@ -163,33 +274,43 @@ class NotificationEngine {
       }
     }
 
-    // --- Focus / Cognitive Drop Notifications ---
-    if (solvedRisk.score !== null) {
-      const hasValidMotionData = sensorData.lastSignificantMotionMinutesAgo !== null &&
-        sensorData.lastSignificantMotionMinutesAgo !== undefined &&
-        Number.isFinite(sensorData.lastSignificantMotionMinutesAgo);
+    // --- Focus / Cognitive check (one every 3 hours) ---
+    //
+    // Exactly one of the focus/cognitive notifications every
+    // FOCUS_COGNITIVE_ALERT (3 hours), chosen from the risk score: both
+    // indices are computed and the higher one speaks. In a warning band that
+    // is its alert; when both are low it is a short "steady" check-in, so the
+    // user still gets the regular read-out rather than silence.
+    if (solvedRisk.score !== null && this.focusCognitiveAllowed(now, state)) {
+      const motion = sensorData.lastSignificantMotionMinutesAgo;
+      const hasValidMotionData =
+        motion !== null && motion !== undefined && Number.isFinite(motion);
 
-      if (hasValidMotionData) {
-        const fdiScore = calculateFDI(solvedRisk.score, sensorData.lastSignificantMotionMinutesAgo);
-        const fdiClassification = classifyFDI(fdiScore);
-        if (fdiClassification === 'Focus Slipping' && this.canSend(now, lastAlerts, 'focus_slipping')) {
-          triggers.push('focus_slipping');
-        } else if (fdiClassification === 'Focus Lost' && this.canSend(now, lastAlerts, 'focus_lost')) {
-          triggers.push('focus_lost');
-        }
-      }
-
+      const fdiScore = hasValidMotionData ? calculateFDI(solvedRisk.score, motion as number) : null;
       const cdiScore = calculateCDI(
         solvedRisk.score,
         solvedRisk.temperatureLoad ?? sensorData.temperature,
         solvedRisk.humidityLoad ?? sensorData.humidity,
         new Date(now)
       );
-      const cdiClassification = classifyCDI(cdiScore);
-      if (cdiClassification === 'Cognitive Decline Risk' && this.canSend(now, lastAlerts, 'cognitive_decline')) {
-        triggers.push('cognitive_decline');
-      } else if (cdiClassification === 'Cognitive Impairment Risk' && this.canSend(now, lastAlerts, 'cognitive_impairment')) {
-        triggers.push('cognitive_impairment');
+
+      const useFocus = fdiScore !== null && fdiScore > cdiScore;
+      if (useFocus) {
+        const band = classifyFDI(fdiScore as number);
+        triggers.push(
+          band === 'Focus Lost' ? 'focus_lost' : band === 'Focus Slipping' ? 'focus_slipping' : 'focus_steady'
+        );
+        indexScores.focus = fdiScore as number;
+      } else {
+        const band = classifyCDI(cdiScore);
+        triggers.push(
+          band === 'Cognitive Impairment Risk'
+            ? 'cognitive_impairment'
+            : band === 'Cognitive Decline Risk'
+            ? 'cognitive_decline'
+            : 'cognitive_steady'
+        );
+        indexScores.cognitive = cdiScore;
       }
     }
 
@@ -322,14 +443,10 @@ class NotificationEngine {
       // in `NotificationService.scheduleDailyNotifications` and arrive whether
       // or not the app is open — which is the whole point of a 7 AM greeting.
 
-      // --- Weekly Summary (Monday, from 8 AM) ---
+      // --- Weekly Summary ---
       //
-      // Stays in the engine because its body is computed from the week's data
-      // at delivery time, which a pre-queued notification cannot do. From 08:00
-      // rather than at 08:00, so it survives the app being shut at that hour.
-      if (date.getDay() === 1 && hour >= 8 && !this.wasSentToday(lastAlerts, 'weekly_summary')) {
-         triggers.push('weekly_summary');
-      }
+      // Switched off: the weekly progress notification is no longer shown.
+      // The trigger and its message builder are kept so it can be re-enabled.
 
       // --- AI Triggers (Patterns and deviations) ---
       // Spam Protection: One AI nudge every 12 hours max
@@ -376,17 +493,31 @@ class NotificationEngine {
 
     // Process triggers
     //
-    // All eligible triggers are delivered in the same evaluation, subject to
-    // their per-trigger cooldowns. The sleep window is an absolute block: if
-    // the user is asleep, nothing is delivered and cooldown state is not updated.
+    // At most one notification per evaluation, and none within
+    // MIN_GAP_BETWEEN_ALERTS of the last one (a high risk alert excepted).
+    // Triggers are raised in priority order, so the first is the one sent;
+    // conditions that stay true are raised again on a later tick. The sleep
+    // window is an absolute block: if the user is asleep, nothing is
+    // delivered and cooldown state is not updated.
     const hasPermission = await NotificationService.requestPermission();
     const delivered: NotificationTrigger[] = [];
 
+    const withinGap =
+      now - (state.lastDeliveredAt || 0) < NOTIFICATION_COOLDOWNS.MIN_GAP_BETWEEN_ALERTS ||
+      now - this.sessionStartedAt < NOTIFICATION_COOLDOWNS.LOGIN_QUIET_MS;
+    const toDeliver = triggers
+      .filter(trigger => !withinGap || GAP_EXEMPT_TRIGGERS.includes(trigger))
+      .slice(0, 1);
+
     if (!asleep) {
-      for (const trigger of triggers) {
+      for (const trigger of toDeliver) {
         // Only actually deliver if permission is granted
         if (hasPermission) {
-          await this.sendNotification(trigger, profile);
+          await this.sendNotification(trigger, profile, {
+            riskScore: solvedRisk.score,
+            riskStatus: solvedRisk.status,
+            indexScores,
+          });
           delivered.push(trigger);
 
           // Update state ONLY if actually delivered
@@ -442,6 +573,15 @@ class NotificationEngine {
 
     if (!trigger) return;
 
+    // The quiet window applies to AI nudges too. `displayNotification` would
+    // drop it anyway, but silently — and the 12-hour budget below would still
+    // be spent, so a nudge nobody saw used up the one the user was owed for
+    // the rest of the day.
+    if (await this.isUserAsleep(profile, now)) {
+      console.log(`[AI] Suppressing ${type} — the user is asleep.`);
+      return;
+    }
+
     const hasPermission = await NotificationService.requestPermission();
     if (hasPermission) {
       await this.sendNotification(trigger, profile);
@@ -473,6 +613,15 @@ class NotificationEngine {
     return now - lastSent >= cooldown;
   }
 
+  /**
+   * Whether the 3-hourly focus/cognitive check is due: none of those
+   * notifications in the last FOCUS_COGNITIVE_ALERT window.
+   */
+  private focusCognitiveAllowed(now: number, state: EnginePersistentState): boolean {
+    const lastAny = Math.max(0, ...FOCUS_COGNITIVE_TRIGGERS.map(t => state.lastAlerts[t] || 0));
+    return now - lastAny >= NOTIFICATION_COOLDOWNS.FOCUS_COGNITIVE_ALERT;
+  }
+
   private wasSentToday(lastAlerts: Record<string, number>, trigger: NotificationTrigger): boolean {
     const lastSent = lastAlerts[trigger] || 0;
     const startOfToday = new Date().setHours(0, 0, 0, 0);
@@ -502,7 +651,35 @@ class NotificationEngine {
     }
   }
 
-  private async sendNotification(trigger: NotificationTrigger, profile: UserProfile): Promise<void> {
+  /**
+   * Whether the app is in its quiet window right now.
+   *
+   * Two sources, and either one saying "asleep" wins. `NotificationService`
+   * holds the schedule the scheduler and the display path are already quiet
+   * by — persisted on the device, defaulting to 23:00-07:00 when the user has
+   * never answered — while the profile carries whatever the last load read.
+   * They normally agree; when they do not, one of them is stale, and a missed
+   * nudge costs the user far less than one that wakes them at 3 AM.
+   */
+  private async isUserAsleep(profile: UserProfile, now: number): Promise<boolean> {
+    const schedule = profile.sleepSchedule;
+    if (schedule && isAsleepAt(schedule, now)) return true;
+
+    try {
+      return await NotificationService.isSleeping(now);
+    } catch (error) {
+      console.error('[NotificationEngine] Could not read the sleep window:', error);
+      // Unreadable, and the profile did not say asleep. Staying audible is the
+      // only option that does not silence the app indefinitely on a bad read.
+      return false;
+    }
+  }
+
+  private async sendNotification(
+    trigger: NotificationTrigger,
+    profile: UserProfile,
+    context: NotificationContext = {}
+  ): Promise<void> {
     const messages: Record<string, { title: string; body: string }> = {
       regular_reminder: { title: '💧 Hydration', body: 'Time to hydrate! Please drink some water to stay hydrated.' },
       low_intake_12pm: { title: '⚠️ Low Intake', body: 'Your water intake is below 50% of your daily goal. Please drink 250-300 mL of water now.' },
@@ -518,10 +695,16 @@ class NotificationEngine {
       inactivity: { title: '🚶 Inactivity', body: 'You’ve been inactive for 3 hours. Take a short break, move around, and drink some water.' },
       post_activity: { title: '💪 Post-Activity', body: 'You’ve completed 30+ minutes of activity. Please drink 250–500 mL of water to replenish fluids.' },
       long_activity: { title: '🏃 Long Activity', body: 'You’ve completed a long activity session. Your body may need extra water, so please increase your water intake.' },
-      focus_slipping: { title: '🧭 Focus Slipping', body: 'Take a quick posture break and have a sip of water to reset your focus.' },
-      focus_lost: { title: '🚨 Focus Alert', body: 'Your focus has dropped significantly. Take a posture break, reduce distractions, and hydrate now.' },
-      cognitive_decline: { title: '💧 Cognitive Decline Risk', body: 'Cognitive load is rising. Prioritize fluid intake and cooling to maintain alertness.' },
-      cognitive_impairment: { title: '⚠️ Priority Alert', body: 'Cognitive impairment risk is elevated. Prioritize recovery, hydration, and cooling immediately.' },
+      // Used only when the index that raised the alert could not be read back
+      // — without a score there is no lead time to state, and inventing one
+      // would be the exact overclaim the hedged wording exists to prevent.
+      focus_slipping: { title: '🧭 Focus Slipping', body: 'Your focus may be slipping. Sip water and fix your posture.' },
+      focus_lost: { title: '🚨 Focus Alert', body: 'Your focus could be dropping sharply. Drink 250–500 ml now.' },
+      cognitive_decline: { title: '💧 Cognitive Decline Risk', body: 'Your sharpness may be dipping. Drink fluids and find somewhere cooler.' },
+      cognitive_impairment: { title: '⚠️ Priority Alert', body: 'Your thinking could be affected. Hydrate and cool down now.' },
+      // The 3-hourly check when both indices are low.
+      focus_steady: { title: '🧭 Focus Check', body: 'Your focus looks steady. Keep sipping water to stay sharp.' },
+      cognitive_steady: { title: '🧠 Cognitive Check', body: 'Your thinking looks sharp. Regular sips may help keep it that way.' },
       low_battery: { title: '🔋 Low Battery', body: 'Your battery is low. Please charge your device to keep hydration tracking and reminders active.' },
       fully_charged: { title: '⚡ Fully Charged', body: 'Your device is fully charged. You’re all set to continue your hydration tracking.' },
       // morning_msg / night_msg live in NotificationService.DAILY_MESSAGES —
@@ -536,10 +719,47 @@ class NotificationEngine {
     let body = messages[trigger]?.body;
     let title = messages[trigger]?.title;
 
-    if (trigger === 'weekly_summary') {
+    /*
+      The focus and cognitive alerts are written here, not looked up.
+
+      They used to be four fixed sentences — "Take a quick posture break",
+      "Cognitive load is rising" — which said the same thing whether the index
+      had just crossed 25 or was sitting at 95, and never said when any of it
+      might happen. FDI and CDI are the only part of this engine that can
+      speak about the *next* half hour rather than the last one, so the
+      message is built from the score that raised it: how long until the next
+      stage could be reached, and the hydration risk the forecast rests on.
+    */
+    const drop = DROP_TRIGGERS[trigger];
+    const indexScore = drop ? context.indexScores?.[drop.kind] : undefined;
+
+    if (drop && typeof indexScore === 'number' && Number.isFinite(indexScore)) {
+      const notice = buildDropNotice(drop.kind, drop.severity, indexScore, context);
+      title = notice.title;
+      body = notice.body;
+    } else if (trigger === 'weekly_summary') {
        const report = await this.calculateWeeklyReport(profile);
        title = '📊 Weekly Progress';
        body = report;
+    } else if (
+      (drop || trigger === 'focus_steady' || trigger === 'cognitive_steady') &&
+      body &&
+      typeof context.riskScore === 'number' &&
+      Number.isFinite(context.riskScore)
+    ) {
+      // Focus/cognitive fallback: the short risk form keeps it under 15 words.
+      body = `${body} Risk ${Math.round(context.riskScore)}.`;
+    } else if (
+      body &&
+      !drop &&
+      trigger !== 'focus_steady' &&
+      trigger !== 'cognitive_steady' &&
+      !RISK_FREE_TRIGGERS.includes(trigger)
+    ) {
+      // Every hydration message carries the score it was raised over. Without
+      // it a nudge is indistinguishable from the routine two-hourly one, and
+      // the user has no way to tell which of them is worth acting on now.
+      body = withRisk(body, context);
     }
 
     if (title && body) {

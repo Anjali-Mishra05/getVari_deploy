@@ -3,6 +3,7 @@ import { Text, View } from 'react-native';
 import { Clock } from 'lucide-react-native';
 
 import GlassCard from '../GlassCard';
+import { cardStyle } from './cardTheme';
 import { HydrationLog, HydrationSource } from '../../types';
 import { ACCENT } from './riskTheme';
 
@@ -28,7 +29,7 @@ const FluidLoggingFeed: React.FC<FluidLoggingFeedProps> = ({ logs, limit = 4 }) 
   const hidden = ordered.length - shown.length;
 
   return (
-    <GlassCard className="mb-4 bg-white/[0.01] rounded-[28px]" style={{ padding: 20 }}>
+    <GlassCard className="bg-white/[0.01]" style={cardStyle}>
       <View className="flex-row items-center gap-2 mb-4">
         <Clock color={ACCENT} size={15} />
         <Text className="text-[10px] font-mono font-black tracking-wider uppercase text-neutral-300">

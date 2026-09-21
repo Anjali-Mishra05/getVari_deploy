@@ -8,7 +8,6 @@ import type {
 import { WATER_LOG_LIMITS } from '../config/edgeCaseConfig';
 import TelemetryHistoryService from './TelemetryHistoryService';
 import { supabase } from './SupabaseClient';
-import { profileNeedsPhysicianLimit } from '../utils/hydrationTarget';
 import { AuthService } from './AuthService';
 import NotificationService from './NotificationService';
 import ChatBus from './ChatBus';
@@ -104,14 +103,8 @@ const rememberProcessed = async (rowId: string): Promise<void> => {
 };
 
 /**
- * The stored daily goal, or `null` when the app must not state one.
- *
- * `DEFAULT_TARGET_ML` stands in for a profile that has not loaded or has no
- * goal yet — but it must not stand in for a *fluid-restricted* profile whose
- * physician limit is missing. That case had the worst outcome of all: the
- * goal came back as the 2500 ml default, which is higher than anything the
- * formula would have produced for a CKD patient, and the chat then reported
- * progress against it.
+ * The stored daily goal. `DEFAULT_TARGET_ML` stands in for a profile that has
+ * not loaded or has no goal yet.
  */
 const fetchTargetMl = async (userId: string): Promise<number | null> => {
   try {
@@ -124,10 +117,6 @@ const fetchTargetMl = async (userId: string): Promise<number | null> => {
     if (error) return DEFAULT_TARGET_ML;
 
     const profile = data?.profile;
-    // Read from the diagnosis rather than from the absent number, so a row
-    // written before the goal became nullable is judged the same way.
-    if (profileNeedsPhysicianLimit(profile)) return null;
-
     const target = Number(profile?.targetDailyMl);
     return Number.isFinite(target) && target > 0 ? target : DEFAULT_TARGET_ML;
   } catch {
@@ -146,23 +135,83 @@ const mapRow = (row: any): HydrationLog => ({
   verificationSource: row.verification_source ?? undefined,
 });
 
-/** Today's entries, newest first. */
-export const fetchTodayLogs = async (userId?: string | null): Promise<HydrationLog[]> => {
+/**
+ * Today's entries, newest first, with the reason an empty list is empty.
+ *
+ * A day with nothing logged and a day that could not be read look identical
+ * once the rows are gone, and the dashboard has to treat them differently:
+ * one is a fact to show, the other is a read to retry. `fetchTodayLogs` keeps
+ * degrading silently for every caller that only wants the entries.
+ */
+export interface TodayLogsResult {
+  logs: HydrationLog[];
+  /** True when the backend could not be read — offline, timed out, rejected. */
+  failed: boolean;
+}
+
+export const fetchTodayLogsResult = async (
+  userId?: string | null
+): Promise<TodayLogsResult> => {
   const id = userId ?? (await AuthService.getCurrentUserId());
-  if (!id) return [];
+  if (!id) return { logs: [], failed: false };
 
-  const { data, error } = await supabase
-    .from(LOGS_TABLE)
-    .select('*')
-    .eq('user_id', id)
-    .gte('timestamp', startOfTodayIso())
-    .order('timestamp', { ascending: false });
+  try {
+    const { data, error } = await supabase
+      .from(LOGS_TABLE)
+      .select('*')
+      .eq('user_id', id)
+      .gte('timestamp', startOfTodayIso())
+      .order('timestamp', { ascending: false });
 
-  if (error) {
-    console.error('[Hydration] Failed to fetch today logs:', error.message);
-    return [];
+    if (error) {
+      console.error('[Hydration] Failed to fetch today logs:', error.message);
+      return { logs: [], failed: true };
+    }
+    return { logs: (data ?? []).map(mapRow), failed: false };
+  } catch (error) {
+    // A timed-out or aborted request rejects instead of returning an error.
+    console.error('[Hydration] Today logs fetch threw:', error);
+    return { logs: [], failed: true };
   }
-  return (data ?? []).map(mapRow);
+};
+
+/** Today's entries, newest first. An unreadable backend reads as an empty day. */
+export const fetchTodayLogs = async (userId?: string | null): Promise<HydrationLog[]> =>
+  (await fetchTodayLogsResult(userId)).logs;
+
+/**
+ * Every entry from the start of the day `days - 1` days ago until now, newest
+ * first. Backs the Analytics tab. `failed` separates "nothing logged" from
+ * "could not read", as `fetchTodayLogsResult` does.
+ */
+export const fetchLogsForDays = async (
+  days: number,
+  userId?: string | null
+): Promise<TodayLogsResult> => {
+  const id = userId ?? (await AuthService.getCurrentUserId());
+  if (!id) return { logs: [], failed: false };
+
+  const since = new Date();
+  since.setHours(0, 0, 0, 0);
+  since.setDate(since.getDate() - (days - 1));
+
+  try {
+    const { data, error } = await supabase
+      .from(LOGS_TABLE)
+      .select('*')
+      .eq('user_id', id)
+      .gte('timestamp', since.toISOString())
+      .order('timestamp', { ascending: false });
+
+    if (error) {
+      console.error('[Hydration] Failed to fetch history:', error.message);
+      return { logs: [], failed: true };
+    }
+    return { logs: (data ?? []).map(mapRow), failed: false };
+  } catch (error) {
+    console.error('[Hydration] History fetch threw:', error);
+    return { logs: [], failed: true };
+  }
 };
 
 /**
@@ -467,6 +516,8 @@ export const HydrationService = {
   adjustIntake,
   getTodayTotals,
   fetchTodayLogs,
+  fetchTodayLogsResult,
+  fetchLogsForDays,
   getRolling7DayIntakeAvg,
   generateRequestId,
   DEFAULT_TARGET_ML,

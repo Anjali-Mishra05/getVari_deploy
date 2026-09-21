@@ -539,12 +539,14 @@ describe('EC-12: phone formatted — the profile is restored from the backend', 
     expect(restored!.targetDailyMl).toBe(1000);
   });
 
-  test('a restricted row with no limit on file comes back with no goal', async () => {
+  test('a restricted row with no limit on file comes back with a recomputed goal', async () => {
+    // The physician limit is optional: the stored goal is recomputed from the
+    // formula rather than dropped.
     mockStore.clear();
     mockDb.profile = { ...profile, medicalConditions: ['ckd'], targetDailyMl: 3250 };
 
     const restored = await ProfileService.fetchProfile('test-user-123');
-    expect(restored!.targetDailyMl).toBeNull();
+    expect(restored!.targetDailyMl).toEqual(expect.any(Number));
   });
 
   test('a user with no stored row resolves to null rather than a fabricated profile', async () => {
@@ -576,7 +578,21 @@ describe('EC-13: app deleted and reinstalled — cloud state parity', () => {
 });
 
 describe('EC-14: AI credits exhausted — fall back to rule-based notifications', () => {
+  /**
+   * A waking Tuesday afternoon, pinned.
+   *
+   * An AI nudge respects the quiet window like every other notification, and
+   * this profile sleeps 23:00-07:00 — so running the suite late in the evening
+   * used to fail these four on a rule they are not about. The clock is the
+   * input here, so it is stated rather than inherited from whoever ran it.
+   */
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 8, 1, 14, 0, 0));
+  });
+
   afterEach(() => {
+    jest.useRealTimers();
     NotificationEngine.setAiQuotaExhausted(false);
   });
 

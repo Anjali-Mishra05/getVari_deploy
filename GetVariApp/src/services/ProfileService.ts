@@ -50,24 +50,49 @@ export type ProfileSaveResult =
   | { status: 'unauthenticated' }
   | { status: 'error'; error: string };
 
-/** The stored profile blob, or null when the user has not onboarded yet. */
-export const fetchProfile = async (userId?: string | null): Promise<UserProfile | null> => {
+/**
+ * A read, with the reason it came back empty.
+ *
+ * `fetchProfile` cannot tell a caller why it has no profile, and the two
+ * reasons are opposites: a user who has not onboarded has nothing to show, a
+ * user whose phone was offline has everything to show and could not reach it.
+ * The dashboard has to retry one of those and not the other, so it reads
+ * through here; everything that only wants the blob still calls `fetchProfile`.
+ */
+export interface ProfileReadResult {
+  profile: UserProfile | null;
+  /** True when the backend could not be read — offline, timed out, rejected. */
+  failed: boolean;
+}
+
+export const fetchProfileResult = async (
+  userId?: string | null
+): Promise<ProfileReadResult> => {
   const id = userId ?? (await AuthService.getCurrentUserId());
-  if (!id) return null;
+  if (!id) return { profile: null, failed: false };
 
-  const { data, error } = await supabase
-    .from(PROFILES_TABLE)
-    .select('profile')
-    .eq('id', id)
-    .maybeSingle();
+  let data: { profile?: unknown } | null = null;
+  try {
+    const response = await supabase
+      .from(PROFILES_TABLE)
+      .select('profile')
+      .eq('id', id)
+      .maybeSingle();
 
-  if (error) {
-    console.error('[Profile] Failed to fetch:', error.message);
-    return null;
+    if (response.error) {
+      console.error('[Profile] Failed to fetch:', response.error.message);
+      return { profile: null, failed: true };
+    }
+    data = response.data;
+  } catch (error) {
+    // A timed-out or aborted request rejects rather than returning an error
+    // row; both mean the same thing here.
+    console.error('[Profile] Fetch threw:', error);
+    return { profile: null, failed: true };
   }
 
   const stored = (data?.profile as UserProfile) ?? null;
-  if (!stored) return null;
+  if (!stored) return { profile: null, failed: false };
 
   /**
    * The goal is recomputed on read, not trusted as stored.
@@ -85,8 +110,12 @@ export const fetchProfile = async (userId?: string | null): Promise<UserProfile 
    * every read would move the PBWR calibration window's start date each time
    * the profile loaded, so the calibration period would never end.
    */
-  return { ...stored, targetDailyMl: targetFromProfile(stored) };
+  return { profile: { ...stored, targetDailyMl: targetFromProfile(stored) }, failed: false };
 };
+
+/** The stored profile blob, or null when the user has not onboarded yet. */
+export const fetchProfile = async (userId?: string | null): Promise<UserProfile | null> =>
+  (await fetchProfileResult(userId)).profile;
 
 /**
  * Recompute everything that follows from the answers, so no caller has to
@@ -174,6 +203,7 @@ export const updateProfile = async (patch: ProfilePatch): Promise<ProfileSaveRes
 
 export const ProfileService = {
   fetchProfile,
+  fetchProfileResult,
   updateProfile,
   withDerivedFields,
 };

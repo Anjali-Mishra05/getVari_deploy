@@ -39,6 +39,15 @@ export const NOTIFICATION_COOLDOWNS = {
    * a later tick, so spacing costs nothing but the clump.
    */
   MIN_GAP_BETWEEN_ALERTS: 15 * 60 * 1000, // 15 minutes
+  /**
+   * Focus and cognitive alerts share one cooldown: any of the four blocks the
+   * others for this long. They are forecasts, not emergencies, and hearing
+   * about your focus every half hour is exactly the nagging that gets the
+   * app's notifications turned off.
+   */
+  FOCUS_COGNITIVE_ALERT: 3 * 60 * 60 * 1000, // one check every 3 hours, shared
+  /** After login, only a high risk alert may be delivered for this long. */
+  LOGIN_QUIET_MS: 5 * 60 * 1000, // 5 minutes
 };
 
 export const RISK_THRESHOLDS = {

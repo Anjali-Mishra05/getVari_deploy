@@ -3,6 +3,7 @@ import { Text, TouchableOpacity, View } from 'react-native';
 import { Activity, Droplets, Heart, RefreshCw, Sparkles, Thermometer } from 'lucide-react-native';
 
 import GlassCard from '../GlassCard';
+import { cardStyle } from './cardTheme';
 import { AIInsight } from '../../types';
 import { ACCENT } from './riskTheme';
 
@@ -47,7 +48,7 @@ const CATEGORY_STYLE: Record<
  * reads "Adaptive rule" unless a run actually came back from the model.
  */
 const CoreAIInsights: React.FC<CoreAIInsightsProps> = ({ insights, onRefresh, refreshing }) => (
-  <GlassCard className="mb-4 bg-white/[0.01] rounded-[32px]" style={{ padding: 20 }}>
+  <GlassCard className="bg-white/[0.01]" style={cardStyle}>
     <View className="flex-row items-center justify-between mb-4">
       <View className="flex-row items-center gap-2">
         <Sparkles color={ACCENT} size={17} />

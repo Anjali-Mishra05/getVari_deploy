@@ -13,7 +13,6 @@ import { AIInsight, HydrationLog, UserProfile } from '../types';
 import AquaSageChat from '../chatbot/AquaSageChat';
 import NotificationService from '../services/NotificationService';
 import ActiveReminder, { ActiveReminderRecord } from '../services/ActiveReminder';
-import { profileNeedsPhysicianLimit } from '../utils/hydrationTarget';
 import NotificationHistory from '../services/NotificationHistory';
 import NotificationCenter from '../components/NotificationCenter';
 import QuickLogSheet from '../components/QuickLogSheet';
@@ -30,7 +29,9 @@ import nextHydrationTip from '../utils/hydrationTips';
 import { normaliseSleepSchedule } from '../utils/sleepWindow';
 
 import DashboardNav, { DashboardTab } from '../components/dashboard/DashboardNav';
+import AnalyticsView from '../components/analytics/AnalyticsView';
 import DashboardSkeleton from '../components/dashboard/DashboardSkeleton';
+import { CARD_GAP, cardStyle } from '../components/dashboard/cardTheme';
 import RiskScoreCard from '../components/dashboard/RiskScoreCard';
 import VitalsRow from '../components/dashboard/VitalsRow';
 import AmbientCard from '../components/dashboard/AmbientCard';
@@ -81,6 +82,9 @@ const HomeScreen = ({ navigation }: any) => {
   const [successMessage, setSuccessMessage] = useState('');
 
   const [insights, setInsights] = useState<AIInsight[]>([]);
+  /** Which pair of insights is showing; each "Refresh Core" tap moves on. */
+  const insightVariant = useRef(0);
+  const [insightsRefreshing, setInsightsRefreshing] = useState(false);
   const [pbwrBreakdown, setPbwrBreakdown] = useState<PBWRBreakdown | null>(null);
 
   /**
@@ -94,6 +98,51 @@ const HomeScreen = ({ navigation }: any) => {
    * derived from the profile now waits, visibly, for the profile.
    */
   const [loadingUserData, setLoadingUserData] = useState(true);
+
+  /**
+   * True when that first read *failed* rather than simply not having finished.
+   *
+   * The two are different screens. A slow read is a skeleton; a failed one has
+   * to say so and offer a way out, because nothing else is coming — this is
+   * the state a phone lands in when a reminder opens the app with the network
+   * off, and without it the skeleton just runs forever.
+   */
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  /** A retry is in flight, so the button cannot be pressed a second time. */
+  const [retrying, setRetrying] = useState(false);
+
+  /** Seconds until the automatic retry, for the line under the message. */
+  const [retryInSeconds, setRetryInSeconds] = useState<number | null>(null);
+
+  /** How many attempts have failed in a row, which sets the backoff. */
+  const failedAttempts = useRef(0);
+
+  /** Guards against two reads running at once — a retry racing a foreground. */
+  const loadInFlight = useRef(false);
+
+  /**
+   * `loadFailed` and "the first read has landed", for the listeners that are
+   * registered once on mount and so cannot read the state itself.
+   */
+  const loadFailedRef = useRef(false);
+  const hasLoadedRef = useRef(false);
+
+  /**
+   * Bumped by every failed attempt, so the backoff effect below re-arms.
+   *
+   * `loadFailed` alone cannot do it: it is already true on the second failure,
+   * and an effect keyed on a value that did not change does not run again —
+   * which would leave the screen offline forever after one retry.
+   */
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  /**
+   * The current `fetchUserData`, for the callers that must not close over the
+   * first render's copy — the backoff timer, the retry button and the
+   * foreground listener, all of which are set up once.
+   */
+  const fetchUserDataRef = useRef<() => Promise<void>>(async () => {});
 
   // One screen, so one destination. See `DashboardNav` for why this is not the
   // four-item bar it used to be.
@@ -109,13 +158,10 @@ const HomeScreen = ({ navigation }: any) => {
    * way to read. They used to be two different formulas, so the tile and the
    * card below it disagreed by several hundred millilitres.
    *
-   * The physician gate still overrides it. A fluid-restricted diagnosis with
-   * no doctor's limit on file has no goal at all, and the personalized target
-   * always produces *some* number — falling back to it here would quietly
-   * reinstate the guess the gate exists to refuse.
+   * The physician limit is optional: without one, the pipeline caps the goal
+   * at the healthy ceiling instead.
    */
   const targetMl = (() => {
-    if (profileNeedsPhysicianLimit(userProfile)) return null;
     if (pbwrBreakdown && Number.isFinite(pbwrBreakdown.finalTarget)) {
       return pbwrBreakdown.finalTarget;
     }
@@ -272,6 +318,10 @@ const HomeScreen = ({ navigation }: any) => {
     // Everything shown while the app is foregrounded goes into the bell menu's
     // delivery log; background deliveries are recorded from index.js.
     const unsubscribeHistory = NotificationService.startHistoryTracking();
+    // A quiet start: no burst of alerts the moment the dashboard opens.
+    NotificationEngine.markSessionStart();
+    // The welcome owed from login, now that the user has reached the landing page.
+    void NotificationService.showPendingWelcome();
 
     const refreshUnseen = async () => {
       try {
@@ -338,6 +388,11 @@ const HomeScreen = ({ navigation }: any) => {
       replayPendingPrompts();
       // A reminder delivered, snoozed or answered while the app was away.
       syncActiveReminder();
+      // Coming back to the app is the most likely moment for the network to
+      // have returned — a user who saw the offline card typically leaves to
+      // turn data on and comes straight back. Only retried when the last read
+      // failed; a successful one is topped up by `refreshTodayLogs` below.
+      if (loadFailedRef.current) void fetchUserDataRef.current();
       refreshTodayLogs();
       refreshUnseen();
       ConfigService.refresh().catch(() => undefined);
@@ -380,8 +435,23 @@ const HomeScreen = ({ navigation }: any) => {
     }
   };
 
+  /**
+   * The dashboard's first read, and every retry of it.
+   *
+   * Reads through the `*Result` variants rather than the plain fetchers
+   * because those degrade an unreachable backend to "no profile, no entries",
+   * which on this screen is indistinguishable from a new user who has drunk
+   * nothing today — and is the one case that has to be retried rather than
+   * rendered.
+   */
   const fetchUserData = async () => {
-    setLoadingUserData(true);
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
+    // The skeleton stands in for data that is not there yet. Once a read has
+    // landed there is a real dashboard on screen, and a retry behind it must
+    // not replace it with placeholders.
+    if (!hasLoadedRef.current) setLoadingUserData(true);
+    let failed = false;
     try {
       const uId = await AuthService.getCurrentUserId();
       console.log('[Supabase] Fetching data for user:', uId);
@@ -394,7 +464,8 @@ const HomeScreen = ({ navigation }: any) => {
       //
       // A user who has not finished onboarding simply has no row yet, which
       // the service reports as `null` rather than as an error.
-      const profile = await ProfileService.fetchProfile(uId);
+      const { profile, failed: profileFailed } = await ProfileService.fetchProfileResult(uId);
+      failed = profileFailed;
       if (profile) {
         console.log('[Supabase] Profile data loaded:', profile);
         setUserProfile(profile);
@@ -414,17 +485,78 @@ const HomeScreen = ({ navigation }: any) => {
 
       // Today's hydration logs — the widget reports a *daily* total, so
       // yesterday's entries must not be counted in it.
-      const logs = await HydrationService.fetchTodayLogs(uId);
+      const { logs, failed: logsFailed } = await HydrationService.fetchTodayLogsResult(uId);
       console.log('[Supabase] Logs data loaded:', logs.length, "of today's entries");
-      setWaterLogs(logs);
+      failed = failed || logsFailed;
+      // An unreadable day is not an empty day. Overwriting the list with
+      // nothing would wipe entries the user can see and has already logged.
+      if (!logsFailed) setWaterLogs(logs);
     } catch (error) {
       console.error('[Supabase] Fatal error fetching data:', error);
+      failed = true;
     } finally {
-      // Cleared whether the read succeeded or failed: a screen stuck on a
-      // spinner after a failed fetch is worse than one showing what it has.
+      loadInFlight.current = false;
+      setRetrying(false);
+      setLoadFailed(failed);
+      failedAttempts.current = failed ? failedAttempts.current + 1 : 0;
+      loadFailedRef.current = failed;
+      if (failed) setRetryNonce(nonce => nonce + 1);
+      else hasLoadedRef.current = true;
+      // Cleared whether the read succeeded or failed: the failure has its own
+      // state now, and a screen stuck on a spinner after a failed fetch is
+      // worse than one saying what went wrong.
       setLoadingUserData(false);
     }
   };
+
+  /**
+   * Retry the read now, from the button on the offline card.
+   *
+   * Resets the backoff as well as firing the attempt: a user who presses this
+   * is telling the app the network is back, and the next automatic try should
+   * not be half a minute away because four earlier ones failed.
+   */
+  const retryLoad = useCallback(() => {
+    failedAttempts.current = 0;
+    setRetrying(true);
+    setRetryInSeconds(null);
+    void fetchUserDataRef.current();
+  }, []);
+
+  fetchUserDataRef.current = fetchUserData;
+
+  /**
+   * While the read is failing, try it again on a backoff — and say when.
+   *
+   * There is no connectivity listener in this build, and the read is its own
+   * probe: if it succeeds the network is back, and if it does not there was
+   * nothing to show anyway. The delay doubles so a phone left in a lift is not
+   * retrying every three seconds, and is capped at half a minute so one that
+   * comes back never waits long. A foreground and the Retry button both
+   * short-circuit it, which covers the case the user notices first — they
+   * turned the data on themselves and are watching the screen.
+   */
+  useEffect(() => {
+    if (!loadFailed) {
+      setRetryInSeconds(null);
+      return;
+    }
+
+    const seconds = Math.min(30, 3 * 2 ** Math.max(0, failedAttempts.current - 1));
+    setRetryInSeconds(seconds);
+
+    const countdown = setInterval(() => {
+      setRetryInSeconds(prev => (prev === null ? null : Math.max(0, prev - 1)));
+    }, 1000);
+    const timer = setTimeout(() => {
+      void fetchUserDataRef.current();
+    }, seconds * 1000);
+
+    return () => {
+      clearInterval(countdown);
+      clearTimeout(timer);
+    };
+  }, [loadFailed, retryNonce]);
 
   /**
    * Re-reads today's entries from Supabase (after a foreground, or a write).
@@ -602,15 +734,27 @@ const HomeScreen = ({ navigation }: any) => {
   // itself twice a second would be unreadable.
   const refreshInsights = useCallback(() => {
     setInsights(
-      generateInsights({
-        sensorData: telemetry.sensorData,
-        risk: telemetry.solvedRisk,
-        hoursSinceDrink: telemetry.effectiveHoursSinceDrink,
-        totalMl: totalWaterConsumed,
-        targetMl,
-      })
+      generateInsights(
+        {
+          sensorData: telemetry.sensorData,
+          risk: telemetry.solvedRisk,
+          hoursSinceDrink: telemetry.effectiveHoursSinceDrink,
+          totalMl: totalWaterConsumed,
+          targetMl,
+        },
+        insightVariant.current
+      )
     );
   }, [telemetry, totalWaterConsumed, targetMl]);
+
+  /** "Refresh Core": show the next two insights from the pool. */
+  const showNextInsights = useCallback(() => {
+    insightVariant.current += 1;
+    setInsightsRefreshing(true);
+    refreshInsights();
+    // A brief "Syncing" so the tap visibly registered.
+    setTimeout(() => setInsightsRefreshing(false), 400);
+  }, [refreshInsights]);
 
   useEffect(() => {
     refreshInsights();
@@ -677,7 +821,10 @@ const HomeScreen = ({ navigation }: any) => {
         >
 
           {/* Header */}
-          <View className="flex-row justify-between items-center mb-3 gap-3">
+          <View
+            className="flex-row justify-between items-center gap-3"
+            style={{ marginBottom: CARD_GAP }}
+          >
             {/* The strapline is the widest thing in this row. Left unbounded it
                 sized the column past the screen and pushed the action buttons
                 off the right edge, clipping the "+". It now shrinks with the
@@ -748,117 +895,156 @@ const HomeScreen = ({ navigation }: any) => {
               nothing once reminders work as intended. */}
           <FullScreenReminderBanner />
 
-          {loadingUserData ? (
-            <DashboardSkeleton />
-          ) : (
-            <RiskScoreCard
-              risk={telemetry.solvedRisk}
-              totalMl={totalWaterConsumed}
-              targetMl={targetMl}
-              hoursSinceDrink={hoursSinceLastLog}
-              lastIntakeMl={newestLog?.amountMl ?? null}
-              absorbing={telemetry.stomachVolume > 0}
-              updatedAt={telemetry.riskUpdatedAt}
-              // The five readings the engine is solved over, and the seam that
-              // pins them. Handing these in is what makes the load breakdown
-              // editable; the card falls back to read-only without them.
-              inputs={{
-                heartRate: telemetry.sensorData.heartRate,
-                activityLoad: telemetry.sensorData.activityLoad,
-                temperature: telemetry.sensorData.temperature,
-                humidity: telemetry.sensorData.humidity,
-                gapHours: telemetry.effectiveHoursSinceDrink,
-              }}
-              override={telemetry.sensorOverride}
-              onOverrideChange={telemetry.setSensorOverride}
-            />
-          )}
-
-          {/* `connected` is what puts `--` in the tiles until a reading has
-              actually arrived, instead of the plausible-looking placeholder
-              values the stream used to open with. */}
-          <VitalsRow sensorData={telemetry.sensorData} connected={telemetry.streaming} />
-
+          {/*
+            Above the fold and outside the loading branch, because it is the
+            one thing on this screen the user has to act on rather than read:
+            with the grant missing, no reminder this app schedules will ever
+            reach them. It used to sit below the vitals — off screen on a
+            phone — and to be replaced by the skeleton for as long as the
+            dashboard was loading, which is exactly when a launch from a
+            reminder lands here.
+          */}
           {!notificationsEnabled && (
-            <GlassCard className="mb-4 bg-amber-500/10 border-amber-500/20 rounded-2xl p-4 flex-row items-center gap-3">
+            <GlassCard
+              className="bg-amber-500/10 border-amber-500/25 flex-row items-center gap-3"
+              style={cardStyle}
+            >
               <BellOff color="#f59e0b" size={20} />
               <View className="flex-1">
                 <Text className="text-amber-500 font-bold text-xs">Notifications are disabled</Text>
-                <Text className="text-amber-500/70 text-[10px] mt-0.5">You won't receive hydration reminders or risk alerts.</Text>
+                <Text className="text-amber-500/70 text-[10px] mt-0.5">
+                  You won't receive hydration reminders or risk alerts.
+                </Text>
               </View>
               <TouchableOpacity
                 onPress={() => NotificationService.requestPermission().then(setNotificationsEnabled)}
-                className="bg-amber-500/20 px-3 py-1.5 rounded-lg border border-amber-500/30"
+                accessibilityRole="button"
+                accessibilityLabel="Enable notifications"
+                className="shrink-0 bg-amber-500/20 px-3.5 py-2 rounded-xl border border-amber-500/40"
               >
-                <Text className="text-amber-500 font-bold text-[10px]">ENABLE</Text>
+                <Text className="text-amber-500 font-black text-[10px] tracking-wider">ENABLE</Text>
               </TouchableOpacity>
             </GlassCard>
           )}
 
-          <AmbientCard
-            location={userProfile?.location}
-            temperature={telemetry.sensorData.temperature}
-            humidity={telemetry.sensorData.humidity}
-          />
+          {/*
+            Loading is the whole column, not one card in it.
 
-          {pbwrBreakdown && (
-            <PBWRBreakdownCard
-              breakdown={pbwrBreakdown}
-              hasPhysicianLimit={!!userProfile?.physicianLimitMl}
-              isPhysicianGated={isPhysicianGated}
+            The skeleton used to stand in for the risk card alone, while every
+            card under it rendered against a profile that had not arrived — so
+            the first thing on screen was a spinner on a field of empty black
+            panels reporting "--" and a goal nobody had. They are placeholders
+            now, shaped like what replaces them, and the real cards mount in
+            one go when there is something in them.
+          */}
+          {activeTab === 'analytics' ? (
+            <AnalyticsView userId={userId} targetMl={targetMl} todayLogs={waterLogs} />
+          ) : loadingUserData || loadFailed ? (
+            <DashboardSkeleton
+              offline={loadFailed}
+              retrying={retrying}
+              onRetry={retryLoad}
+              retryInSeconds={retryInSeconds}
             />
-          )}
+          ) : (
+            <>
+              <RiskScoreCard
+                risk={telemetry.solvedRisk}
+                totalMl={totalWaterConsumed}
+                targetMl={targetMl}
+                hoursSinceDrink={hoursSinceLastLog}
+                lastIntakeMl={newestLog?.amountMl ?? null}
+                absorbing={telemetry.stomachVolume > 0}
+                updatedAt={telemetry.riskUpdatedAt}
+                // The five readings the engine is solved over, and the seam that
+                // pins them. Handing these in is what makes the load breakdown
+                // editable; the card falls back to read-only without them.
+                inputs={{
+                  heartRate: telemetry.sensorData.heartRate,
+                  activityLoad: telemetry.sensorData.activityLoad,
+                  temperature: telemetry.sensorData.temperature,
+                  humidity: telemetry.sensorData.humidity,
+                  gapHours: telemetry.effectiveHoursSinceDrink,
+                }}
+                override={telemetry.sensorOverride}
+                onOverrideChange={telemetry.setSensorOverride}
+              />
 
-          <QuickFluidLogStation onSelectAmount={openConfirmation} disabled={savingLog} />
+            {/* `connected` is what puts `--` in the tiles until a reading has
+                actually arrived, instead of the plausible-looking placeholder
+                values the stream used to open with. */}
+            <VitalsRow sensorData={telemetry.sensorData} connected={telemetry.streaming} />
 
-          <CoreAIInsights insights={insights} onRefresh={refreshInsights} />
+            <AmbientCard
+              location={userProfile?.location}
+              temperature={telemetry.sensorData.temperature}
+              humidity={telemetry.sensorData.humidity}
+            />
 
-          <FluidLoggingFeed logs={waterLogs} />
+            <QuickFluidLogStation onSelectAmount={openConfirmation} disabled={savingLog} />
 
-          <WhyThisScoreCard risk={telemetry.solvedRisk} />
+            {pbwrBreakdown && (
+              <PBWRBreakdownCard
+                breakdown={pbwrBreakdown}
+                hasPhysicianLimit={!!userProfile?.physicianLimitMl}
+                isPhysicianGated={isPhysicianGated}
+              />
+            )}
 
-          <RecoveryTelemetryPanel
-            stomachVolume={telemetry.stomachVolume}
-            absorbedHydration={telemetry.absorbedHydration}
-            absorptionRate={telemetry.absorptionRate}
-            sweatLossRate={telemetry.sweatLossRate}
-            targetMlPerAwakeHour={telemetry.targetMlPerAwakeHour}
-            awakeHoursPerDay={telemetry.awakeHoursPerDay}
-            isSleeping={telemetry.isSleeping}
-            totalMl={totalWaterConsumed}
-            targetMl={targetMl}
-            expanded={telemetryExpanded}
-            onToggle={() => setTelemetryExpanded(prev => !prev)}
-          />
+            <CoreAIInsights
+              insights={insights}
+              onRefresh={showNextInsights}
+              refreshing={insightsRefreshing}
+            />
 
-          {/* Hardware Status */}
-          <GlassCard
-            className="flex-row items-center justify-between mb-4 border-white/5 bg-black/60 rounded-[28px]"
-            style={{ padding: 16 }}
-          >
-            <View className="flex-row items-center gap-3.5">
-              <View className="p-2.5 bg-neutral-900 rounded-2xl border border-white/5">
-                <Cpu color="#00f2fe" size={17} />
-              </View>
-              <View>
-                <Text className="text-[10px] font-black text-white uppercase tracking-widest font-mono">
-                  ESP32 Core Link
-                </Text>
-                <View className="flex-row items-center gap-1.5 mt-1">
-                  <View className={`w-1.5 h-1.5 rounded-full ${TelemetryHistoryService.isFresh(telemetry.sensorData.lastUpdated) ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                  <Text className="text-[9px] text-neutral-500 font-mono font-bold uppercase tracking-widest">
-                    {TelemetryHistoryService.isFresh(telemetry.sensorData.lastUpdated) ? 'Streaming encrypted' : 'Offline / Status Unknown'}
+            <FluidLoggingFeed logs={waterLogs} />
+
+            <WhyThisScoreCard risk={telemetry.solvedRisk} />
+
+            <RecoveryTelemetryPanel
+              stomachVolume={telemetry.stomachVolume}
+              absorbedHydration={telemetry.absorbedHydration}
+              absorptionRate={telemetry.absorptionRate}
+              sweatLossRate={telemetry.sweatLossRate}
+              targetMlPerAwakeHour={telemetry.targetMlPerAwakeHour}
+              awakeHoursPerDay={telemetry.awakeHoursPerDay}
+              isSleeping={telemetry.isSleeping}
+              totalMl={totalWaterConsumed}
+              targetMl={targetMl}
+              expanded={telemetryExpanded}
+              onToggle={() => setTelemetryExpanded(prev => !prev)}
+            />
+
+            {/* Hardware Status */}
+            <GlassCard
+              className="flex-row items-center justify-between border-white/5 bg-black/60"
+              style={cardStyle}
+            >
+              <View className="flex-row items-center gap-3.5">
+                <View className="p-2.5 bg-neutral-900 rounded-2xl border border-white/5">
+                  <Cpu color="#00f2fe" size={17} />
+                </View>
+                <View>
+                  <Text className="text-[10px] font-black text-white uppercase tracking-widest font-mono">
+                    ESP32 Core Link
                   </Text>
+                  <View className="flex-row items-center gap-1.5 mt-1">
+                    <View className={`w-1.5 h-1.5 rounded-full ${TelemetryHistoryService.isFresh(telemetry.sensorData.lastUpdated) ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                    <Text className="text-[9px] text-neutral-500 font-mono font-bold uppercase tracking-widest">
+                      {TelemetryHistoryService.isFresh(telemetry.sensorData.lastUpdated) ? 'Streaming encrypted' : 'Offline / Status Unknown'}
+                    </Text>
+                  </View>
                 </View>
               </View>
-            </View>
-            <View className="flex-row items-center gap-2.5 bg-white/[0.03] px-3 py-1.5 rounded-xl">
-              <Battery color={telemetry.sensorData.batteryLevel && telemetry.sensorData.batteryLevel <= 20 ? '#ef4444' : '#10b981'} size={16} />
-              <Text className={`text-[11px] font-black font-mono ${telemetry.sensorData.batteryLevel && telemetry.sensorData.batteryLevel <= 20 ? 'text-red-500' : 'text-emerald-500'}`}>
-                {telemetry.sensorData.batteryLevel !== null ? `${telemetry.sensorData.batteryLevel}%` : '--%'}
-              </Text>
-            </View>
-          </GlassCard>
+              <View className="flex-row items-center gap-2.5 bg-white/[0.03] px-3 py-1.5 rounded-xl">
+                <Battery color={telemetry.sensorData.batteryLevel && telemetry.sensorData.batteryLevel <= 20 ? '#ef4444' : '#10b981'} size={16} />
+                <Text className={`text-[11px] font-black font-mono ${telemetry.sensorData.batteryLevel && telemetry.sensorData.batteryLevel <= 20 ? 'text-red-500' : 'text-emerald-500'}`}>
+                  {telemetry.sensorData.batteryLevel !== null ? `${telemetry.sensorData.batteryLevel}%` : '--%'}
+                </Text>
+              </View>
+            </GlassCard>
+            </>
+          )}
 
         </ScrollView>
 

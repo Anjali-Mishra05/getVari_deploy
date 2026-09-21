@@ -3,6 +3,7 @@ import { Text, View } from 'react-native';
 import { Layers } from 'lucide-react-native';
 
 import GlassCard from '../GlassCard';
+import { cardStyle } from './cardTheme';
 import { HydrationRiskDetails } from '../../types';
 import { ACCENT, loadColor } from './riskTheme';
 
@@ -38,7 +39,7 @@ const WhyThisScoreCard: React.FC<WhyThisScoreCardProps> = ({ risk }) => {
   const reweighted = scored && Math.abs(baseTotal - (risk.score as number)) > 1;
 
   return (
-    <GlassCard className="mb-4 bg-white/[0.01] rounded-[28px]" style={{ padding: 20 }}>
+    <GlassCard className="bg-white/[0.01]" style={cardStyle}>
       <View className="flex-row items-center gap-2 mb-4">
         <Layers color={ACCENT} size={15} />
         <Text className="text-[10px] font-black tracking-wider uppercase text-neutral-200">

@@ -227,35 +227,37 @@ describe('Focus / Cognitive Drop Engine', () => {
     expect(classifyCDI(edgeImpairment)).toBe('Cognitive Impairment Risk');
   });
 
-  test('FDI and CDI notifications are raised for the correct threshold and suppressed for the lowest category', async () => {
-    const missingMotion = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 9, 0),
-      score: 50,
-      sensor: { lastSignificantMotionMinutesAgo: undefined },
-    });
-    expect(missingMotion.raised).not.toContain('focus_slipping');
-    expect(missingMotion.raised).not.toContain('focus_lost');
-    expect(missingMotion.delivered).not.toContain('focus_slipping');
-    expect(missingMotion.delivered).not.toContain('focus_lost');
+  test('one focus/cognitive check per evaluation, from whichever index is higher', async () => {
+    const BRAIN = [
+      'focus_slipping',
+      'focus_lost',
+      'focus_steady',
+      'cognitive_decline',
+      'cognitive_impairment',
+      'cognitive_steady',
+    ];
+    const brainOf = (raised: string[]) => raised.filter(t => BRAIN.includes(t));
 
-    const missingMotionNull = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 9, 0),
-      score: 50,
-      sensor: { lastSignificantMotionMinutesAgo: null },
-    });
-    expect(missingMotionNull.raised).not.toContain('focus_slipping');
-    expect(missingMotionNull.raised).not.toContain('focus_lost');
-    expect(missingMotionNull.delivered).not.toContain('focus_slipping');
-    expect(missingMotionNull.delivered).not.toContain('focus_lost');
+    // No motion reading: FDI cannot be computed, so the cognitive index speaks.
+    for (const motion of [undefined, null]) {
+      const out = await evaluateFocusIntake({
+        at: new Date(2026, 0, 1, 9, 0),
+        score: 50,
+        sensor: { lastSignificantMotionMinutesAgo: motion },
+      });
+      expect(brainOf(out.raised)).toHaveLength(1);
+      expect(brainOf(out.raised)[0]).toMatch(/^cognitive_/);
+    }
 
-    const slipping = await evaluateFocusIntake({
+    const withMotion = await evaluateFocusIntake({
       at: new Date(2026, 0, 1, 9, 0),
       score: 50,
       sensor: { lastSignificantMotionMinutesAgo: 30 },
     });
-    expect(slipping.raised).toContain('focus_slipping');
-    expect(slipping.delivered).toContain('focus_slipping');
+    expect(brainOf(withMotion.raised)).toHaveLength(1);
+    expect(withMotion.delivered).toEqual(brainOf(withMotion.raised));
 
+    // FDI = 0.6·80 + 0.4·80 = 80 beats the CDI here, so focus speaks.
     const lost = await evaluateFocusIntake({
       at: new Date(2026, 0, 1, 9, 0),
       score: 80,
@@ -263,8 +265,8 @@ describe('Focus / Cognitive Drop Engine', () => {
     });
     expect(lost.raised).toContain('focus_lost');
     expect(lost.raised).toContain('high_risk');
-    expect(lost.delivered).toContain('focus_lost');
-    expect(lost.delivered).toContain('high_risk');
+    // One notification per evaluation: the high risk alert outranks it.
+    expect(lost.delivered).toEqual(['high_risk']);
 
     const cognitiveDecline = await evaluateFocusIntake({
       at: new Date(2026, 0, 1, 14, 0),
@@ -280,19 +282,16 @@ describe('Focus / Cognitive Drop Engine', () => {
       sensor: { temperature: 35, humidity: 80 },
     });
     expect(impairment.raised).toContain('cognitive_impairment');
-    expect(impairment.raised).toContain('high_risk');
-    expect(impairment.delivered).toContain('cognitive_impairment');
-    expect(impairment.delivered).toContain('high_risk');
+    expect(impairment.delivered).toEqual(['high_risk']);
 
+    // Both indices low: still one check, the "steady" read-out.
     const sharp = await evaluateFocusIntake({
       at: new Date(2026, 0, 1, 10, 30),
       score: 0,
       sensor: { lastSignificantMotionMinutesAgo: 5, temperature: 0, humidity: 0 },
     });
-    expect(sharp.raised).not.toContain('focus_slipping');
-    expect(sharp.raised).not.toContain('focus_lost');
-    expect(sharp.raised).not.toContain('cognitive_decline');
-    expect(sharp.raised).not.toContain('cognitive_impairment');
+    expect(brainOf(sharp.raised)).toHaveLength(1);
+    expect(brainOf(sharp.raised)[0]).toMatch(/_steady$/);
   });
 
   test('FDI full chain from MockTelemetryService', async () => {
@@ -345,37 +344,62 @@ describe('Focus / Cognitive Drop Engine', () => {
     expect(impairment.raised).toContain('cognitive_impairment');
   });
 
-  test('CDI/FDI respect 30-minute RISK_ALERT cooldown independently', async () => {
+  test('focus and cognitive alerts share one 3-hour cooldown', async () => {
     const now = new Date(2026, 0, 1, 10, 0).getTime();
+    const MIN = 60 * 1000;
 
-    // 1. Trigger focus_slipping only (DL=25 ensures FDI=25 while CDI=16.75 stays low)
+    // 1. focus_slipping only (DL=25 ensures FDI=25 while CDI=16.75 stays low)
     const first = await evaluateFocusIntake({
       at: new Date(now),
       score: 25,
       sensor: { lastSignificantMotionMinutesAgo: 30 },
       clearState: true,
     });
-    expect(first.delivered).toContain('focus_slipping');
-    expect(first.delivered).not.toContain('cognitive_decline');
+    expect(first.delivered).toEqual(['focus_slipping']);
 
-    // 2. Trigger cognitive_decline in next evaluation (should pass, independent cooldown)
+    // 2. An hour later cognitive_decline is true, but the shared cooldown
+    //    holds it: the user just heard about their focus.
     const second = await evaluateFocusIntake({
-      at: new Date(now + 1000), // 1 second later
-      score: 50,
-      sensor: { lastSignificantMotionMinutesAgo: 30 }, // Still slipping, but should be on cooldown
-      clearState: false,
-    });
-    expect(second.delivered).toContain('cognitive_decline');
-    expect(second.delivered).not.toContain('focus_slipping'); // Still on cooldown
-
-    // 3. Immediate follow-up for cognitive_decline (suppressed)
-    const third = await evaluateFocusIntake({
-      at: new Date(now + 2000),
+      at: new Date(now + 60 * MIN),
       score: 50,
       sensor: { lastSignificantMotionMinutesAgo: 30 },
       clearState: false,
     });
-    expect(third.delivered).toHaveLength(0);
+    expect(second.raised).not.toContain('cognitive_decline');
+    expect(second.raised).not.toContain('focus_slipping');
+
+    // 3. Past three hours, one of them may go out again.
+    const third = await evaluateFocusIntake({
+      at: new Date(now + 181 * MIN),
+      score: 50,
+      sensor: { lastSignificantMotionMinutesAgo: 30 },
+      clearState: false,
+    });
+    expect(third.delivered).toHaveLength(1);
+    expect(['focus_slipping', 'cognitive_decline']).toContain(third.delivered[0]);
+  });
+
+  test('one focus/cognitive check every 3 hours, whatever the risk', async () => {
+    const start = new Date(2026, 0, 1, 8, 0).getTime();
+    const HOUR = 60 * 60 * 1000;
+    const brain = /^(focus|cognitive)_/;
+    const deliveredAt: number[] = [];
+    // Checked every 30 minutes from 08:00 to 20:00, risk moving about.
+    for (let i = 0; i <= 24; i++) {
+      const at = start + i * 30 * 60 * 1000;
+      const out = await evaluateFocusIntake({
+        at: new Date(at),
+        score: [10, 35, 55][i % 3],
+        sensor: { lastSignificantMotionMinutesAgo: 30 },
+        clearState: i === 0,
+      });
+      if (out.delivered.some(t => brain.test(t))) deliveredAt.push(at);
+    }
+    // 08:00, 11:00, 14:00, 17:00, 20:00.
+    expect(deliveredAt).toHaveLength(5);
+    for (let i = 1; i < deliveredAt.length; i++) {
+      expect(deliveredAt[i] - deliveredAt[i - 1]).toBe(3 * HOUR);
+    }
   });
 
   test('CDI/FDI and High Risk are absolutely suppressed during sleep', async () => {
@@ -397,8 +421,8 @@ describe('Focus / Cognitive Drop Engine', () => {
 
     // All should be raised for diagnostics/tests
     expect(evaluation.raised).toContain('high_risk');
+    // One focus/cognitive check per evaluation — here the focus index is higher.
     expect(evaluation.raised).toContain('focus_lost');
-    expect(evaluation.raised).toContain('cognitive_impairment');
 
     // BUT nothing should be delivered
     expect(evaluation.delivered).toHaveLength(0);
