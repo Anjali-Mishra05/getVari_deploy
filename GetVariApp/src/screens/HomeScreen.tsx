@@ -6,7 +6,6 @@ import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-s
 
 import BrandLogo from '../components/BrandLogo';
 import SensorTestPanel from '../components/SensorTestPanel';
-import FullScreenReminderBanner from '../components/FullScreenReminderBanner';
 import GlassCard from '../components/GlassCard';
 import { AuthService } from '../services/AuthService';
 import { AIInsight, HydrationLog, UserProfile } from '../types';
@@ -43,7 +42,8 @@ import RecoveryTelemetryPanel from '../components/dashboard/RecoveryTelemetryPan
 import FluidLogConfirmModal from '../components/dashboard/FluidLogConfirmModal';
 import FluidLogSuccessModal from '../components/dashboard/FluidLogSuccessModal';
 import PBWRBreakdownCard from '../components/dashboard/PBWRBreakdownCard';
-import PBWRService, { PBWRBreakdown } from '../services/PBWRService';
+import { PBWRBreakdown } from '../services/PBWRService';
+import DailyTargetService from '../services/DailyTargetService';
 import TelemetryHistoryService from '../services/TelemetryHistoryService';
 import NotificationEngine from '../services/NotificationEngine';
 import ConfigService from '../services/ConfigService';
@@ -56,6 +56,12 @@ const HomeScreen = ({ navigation }: any) => {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [quickLogOpen, setQuickLogOpen] = useState(false);
+  /**
+   * The amount the quick-log sheet should open on, when it was opened from a
+   * suggestion rather than from the "+" or the Log tab. Null for every other
+   * route in, which is what leaves the sheet on its usual default.
+   */
+  const [quickLogPrefillMl, setQuickLogPrefillMl] = useState<number | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [unseenNotifications, setUnseenNotifications] = useState(0);
@@ -704,7 +710,18 @@ const HomeScreen = ({ navigation }: any) => {
   // The sensor stream re-renders this screen every couple of seconds, and the
   // quick-log sheet closes itself on a timer keyed to its `onClose` prop — an
   // inline arrow would restart that timer on every tick. These stay stable.
-  const closeQuickLog = useCallback(() => setQuickLogOpen(false), []);
+  const closeQuickLog = useCallback(() => {
+    setQuickLogOpen(false);
+    // Cleared on close so the next "+" opens on the usual default rather than
+    // on whatever the risk card happened to be suggesting an hour ago.
+    setQuickLogPrefillMl(null);
+  }, []);
+
+  /** The risk card's water-requirement pill: open the sheet on that amount. */
+  const openQuickLogFor = useCallback((suggestedMl: number) => {
+    setQuickLogPrefillMl(suggestedMl);
+    setQuickLogOpen(true);
+  }, []);
   const closeNotifications = useCallback(() => setNotificationsOpen(false), []);
   const closeProfile = useCallback(() => setProfileOpen(false), []);
 
@@ -759,7 +776,14 @@ const HomeScreen = ({ navigation }: any) => {
   useEffect(() => {
     refreshInsights();
     if (userProfile && userId) {
-      PBWRService.calculatePBWR(userProfile, totalWaterConsumed, userId).then(setPbwrBreakdown);
+      // Through `DailyTargetService`, not `PBWRService` directly: this effect
+      // re-runs on every telemetry tick, and the live pipeline returns a
+      // different goal each time an observed average crosses a band edge. The
+      // goal is locked for the local day so it holds still while the user is
+      // drinking against it.
+      DailyTargetService.getTodayBreakdown(userProfile, totalWaterConsumed, userId).then(
+        setPbwrBreakdown
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [telemetry.solvedRisk.status, totalWaterConsumed, userProfile, userId]);
@@ -891,10 +915,6 @@ const HomeScreen = ({ navigation }: any) => {
             </View>
           </View>
 
-          {/* Only visible while the grant is actually missing, so it costs
-              nothing once reminders work as intended. */}
-          <FullScreenReminderBanner />
-
           {/*
             Above the fold and outside the loading branch, because it is the
             one thing on this screen the user has to act on rather than read:
@@ -968,6 +988,7 @@ const HomeScreen = ({ navigation }: any) => {
                 }}
                 override={telemetry.sensorOverride}
                 onOverrideChange={telemetry.setSensorOverride}
+                onRequirementPress={openQuickLogFor}
               />
 
             {/* `connected` is what puts `--` in the tiles until a reading has
@@ -1098,6 +1119,7 @@ const HomeScreen = ({ navigation }: any) => {
           onLog={logDrink}
           totalMl={totalWaterConsumed}
           targetMl={targetMl}
+          prefillMl={quickLogPrefillMl}
         />
 
         <FluidLogConfirmModal

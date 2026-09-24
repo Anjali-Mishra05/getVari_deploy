@@ -43,6 +43,10 @@ module.exports = {
 '<rootDir>/__tests__/riskPublication.test.ts',
 '<rootDir>/__tests__/timeBuckets.test.ts',
 '<rootDir>/__tests__/focusCognitiveDrop.test.ts',
+'<rootDir>/__tests__/dailyTarget.test.ts',
+'<rootDir>/__tests__/quickAmountSnapping.test.ts',
+'<rootDir>/__tests__/dailyMessageSpacing.test.ts',
+'<rootDir>/__tests__/permissionRequirements.test.ts',
 
   ],
 };

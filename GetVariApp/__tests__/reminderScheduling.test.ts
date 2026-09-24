@@ -115,6 +115,7 @@ jest.mock('../src/services/NotificationHistory', () => ({
 }));
 
 import { DEFAULT_SLEEP_SCHEDULE, isAsleepAt } from '../src/utils/sleepWindow';
+import { GENERIC_REMINDER_BODIES } from '../src/utils/reminderContent';
 import NotificationService, {
   DAILY_HORIZON_DAYS,
   DAILY_MESSAGE_TYPE,
@@ -180,9 +181,11 @@ describe('N1: recurring hydration reminder', () => {
       // "Log your water / still nothing logged" variations were a testing
       // nudge and are gone with the 2-minute cadence.
       expect(notification.title).toBe('💧 Hydration');
-      expect(notification.body).toBe(
-        'Time to hydrate! Please drink some water to stay hydrated.'
-      );
+      // The queued line is the generic fallback — the real numbers are
+      // written at delivery — but it is varied per slot so a day of
+      // reminders that never get refreshed does not repeat one sentence
+      // twelve times over.
+      expect(GENERIC_REMINDER_BODIES).toContain(notification.body);
       expect(notification.android.channelId).toBe(REMINDER_CHANNEL_ID);
       eventIds.add(notification.data.eventId);
     }
@@ -243,22 +246,25 @@ describe('N1: recurring hydration reminder', () => {
 describe('N17/N18: fixed-time daily messages', () => {
   const dailyQueue = () => mockQueued.filter(q => q.notification.id.startsWith('getvari-daily-'));
 
-  test('the morning and night messages are queued at 07:00 and 22:00', async () => {
+  test('the messages are placed an hour inside each end of the sleep window', async () => {
     jest.useFakeTimers();
     const now = new Date(2026, 8, 1, 10, 0, 0).getTime();
     jest.setSystemTime(now);
 
+    // The default window is 23:00–07:00, so the greeting lands an hour after
+    // waking (08:00) and the wind-down an hour before bed (22:00). Neither is
+    // a fixed time any more: both follow whatever window the user chose.
     await NotificationService.scheduleDailyNotifications(now);
     const queued = dailyQueue();
 
-    // Today's 07:00 has already passed, so the first slot is tonight's 22:00.
+    // Today's 08:00 has already passed, so the first slot is tonight's 22:00.
     expect(queued.length).toBeGreaterThan(0);
     expect(new Date(queued[0].trigger.timestamp).getHours()).toBe(22);
 
     for (const { notification, trigger } of queued) {
       const at = new Date(trigger.timestamp);
       expect(at.getMinutes()).toBe(0);
-      expect([7, 22]).toContain(at.getHours());
+      expect([8, 22]).toContain(at.getHours());
       expect(at.getTime()).toBeGreaterThan(now);
       expect(notification.data.type).toBe(DAILY_MESSAGE_TYPE);
       expect(notification.android.channelId).toBe(REMINDER_CHANNEL_ID);
@@ -268,13 +274,33 @@ describe('N17/N18: fixed-time daily messages', () => {
     expect(queued).toHaveLength(DAILY_HORIZON_DAYS * 2 - 1);
   });
 
+  test('a shifted window moves both messages with it', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 10, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    // A night-shift nurse: asleep 09:00–17:00. Under the old fixed times the
+    // greeting arrived at 7 AM as they got into bed.
+    await NotificationService.setSleepSchedule({ sleepStart: '09:00', wakeUp: '17:00' });
+    mockQueued.length = 0;
+    await NotificationService.scheduleDailyNotifications(now);
+
+    const hours = dailyQueue().map(q => new Date(q.trigger.timestamp).getHours());
+    expect(hours.length).toBeGreaterThan(0);
+    // 17:00 + 1h = 18:00, and 09:00 − 1h = 08:00.
+    for (const hour of hours) expect([18, 8]).toContain(hour);
+  });
+
   test('a message that would land inside the sleep window is dropped, not shifted', async () => {
     jest.useFakeTimers();
     const now = new Date(2026, 8, 1, 10, 0, 0).getTime();
     jest.setSystemTime(now);
 
-    // A late sleeper: 21:00-09:00 swallows both fixed times.
-    await NotificationService.setSleepSchedule({ sleepStart: '21:00', wakeUp: '09:00' });
+    // Derived times sit outside the window by construction, so the only way
+    // to fold one back inside is an awake stretch shorter than the offsets:
+    // up 08:00–08:30 puts the greeting at 09:00 and the wind-down at 07:30,
+    // both of them inside the sleep window.
+    await NotificationService.setSleepSchedule({ sleepStart: '08:30', wakeUp: '08:00' });
     mockQueued.length = 0;
     await NotificationService.scheduleDailyNotifications(now);
 

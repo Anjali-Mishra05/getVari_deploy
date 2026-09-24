@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 import Animated, { useAnimatedProps, useSharedValue, withTiming } from 'react-native-reanimated';
 
@@ -48,6 +48,16 @@ interface RiskScoreCardProps {
   override?: SensorOverride | null;
   /** Pins the typed readings. Passing null hands the stream back. */
   onOverrideChange?: (override: SensorOverride | null) => void;
+  /**
+   * Opens the quick-log sheet on the suggested amount.
+   *
+   * The water requirement is the one line on this card that names an action
+   * the user can take right now, and it was the only one they could not act
+   * on — the amount was stated and then had to be found again in the log
+   * sheet. Omit the handler and the pill stays a read-only statement, which
+   * is what the surfaces with nowhere to log want.
+   */
+  onRequirementPress?: (suggestedMl: number) => void;
 }
 
 /** "just now" / "12m ago" / "1h ago", for the freshness line under the ring. */
@@ -112,6 +122,7 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
   inputs,
   override,
   onOverrideChange,
+  onRequirementPress,
 }) => {
   const accent = statusColor(risk.status);
   const updatedLabel = sinceLabel(updatedAt);
@@ -231,6 +242,16 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
     channel => touched[channel.key] || pinnedElsewhere(channel.key)
   ).length;
 
+  /**
+   * The prescription, resolved once.
+   *
+   * Read out here rather than off `risk` at each use: the press handler is a
+   * closure, so narrowing `risk.glassesRequired` at the JSX guard does not
+   * reach inside it, and the multiplication belongs in one place regardless.
+   */
+  const glassesRequired = risk.glassesRequired ?? 0;
+  const suggestedMl = glassesRequired * 250;
+
   return (
     <GlassCard className="bg-white/[0.01]" style={cardStyle}>
       {/* Status header */}
@@ -314,26 +335,86 @@ const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
           <Text className="text-[13px] font-black text-white mt-1">{risk.suggestedAction}</Text>
         </View>
 
-        {!!risk.glassesRequired && (
-          <View className="flex-row items-center justify-between gap-2 mt-3 p-2.5 rounded-2xl bg-cyan-950/30 border border-cyan-500/15">
-            <View className="flex-row items-center gap-2.5">
+        {!!glassesRequired && (
+          /* The prescription, and the one thing on this card the user can act
+             on.
+
+             It is an amount to *drink*, so tapping it is a claim about the
+             past — "I have had this" — not a request for the app to do
+             something. The prompt says so outright: "Drank it? Tap to log."
+             Left as a bare "tap to log" it read as though the pill were a
+             shortcut that would log 500 ml on the spot, which invites a tap
+             from someone who has not drunk anything and then quietly credits
+             them for it.
+
+             That is also why the tap opens the quick-log sheet rather than
+             writing the entry: the card sits under the thumb while scrolling,
+             and a stray tap silently adding half a litre to the day would be
+             worse than one extra confirm. `hitSlop` gives the row a
+             comfortable target without growing its visual box. */
+          <Pressable
+            onPress={
+              onRequirementPress
+                ? () => onRequirementPress(suggestedMl)
+                : undefined
+            }
+            disabled={!onRequirementPress}
+            hitSlop={8}
+            accessibilityRole={onRequirementPress ? 'button' : undefined}
+            accessibilityLabel={
+              onRequirementPress
+                ? `Suggested: ${glassesRequired} glasses of 250 millilitres, ${suggestedMl} millilitres total. Tap to log it once you have drunk it.`
+                : undefined
+            }
+            style={({ pressed }) => ({ opacity: pressed && onRequirementPress ? 0.65 : 1 })}
+            className="flex-row items-center justify-between gap-2 mt-3 p-2.5 rounded-2xl bg-cyan-950/30 border border-cyan-500/15"
+          >
+            {/* `flex-1` belongs on this row, not on the column inside it.
+                Without it the row sizes to its content and the amount beside
+                it is pushed outside the pill — which is exactly what the third
+                line of text did when it was added. */}
+            <View className="flex-row items-center gap-2.5 flex-1">
               <View
                 className="w-7 h-7 rounded-xl items-center justify-center"
                 style={{ backgroundColor: ACCENT }}
               >
-                <Text className="text-[13px] font-black text-[#020617]">{risk.glassesRequired}</Text>
+                <Text className="text-[13px] font-black text-[#020617]">{glassesRequired}</Text>
               </View>
-              <View>
+              <View className="flex-1">
                 <Text className="text-[9px] font-black text-cyan-300 uppercase font-mono tracking-wider">
                   Water Requirement
                 </Text>
                 <Text className="text-[9px] text-neutral-400 mt-0.5">glasses of 250ml each</Text>
+                {/* The call to action is its own line, in the accent, because
+                    it is the part that has to survive a glance. */}
+                {!!onRequirementPress && (
+                  <Text className="text-[9px] font-black text-[#00f2fe] mt-1">
+                    Drank it? Tap to log.
+                  </Text>
+                )}
               </View>
             </View>
-            <Text className="text-[11px] font-mono font-black text-cyan-400">
-              +{risk.glassesRequired * 250} ml
-            </Text>
-          </View>
+            {/* The amount, as a chip rather than loose text at the edge.
+
+                Bare text sitting hard against the pill's right border read as
+                though it were outside the control — and for one build it
+                genuinely was, when the row beside it had no `flex-1` and
+                overflowed. Giving it a filled background of its own makes it
+                visibly part of the button whatever the text beside it does,
+                and `flexShrink: 0` keeps that true: the label wraps before the
+                amount gives up a pixel. */}
+            <View
+              className="rounded-xl px-2.5 py-1.5"
+              style={{ backgroundColor: 'rgba(0,242,254,0.12)', flexShrink: 0 }}
+            >
+              <Text
+                className="text-[11px] font-mono font-black text-cyan-300"
+                numberOfLines={1}
+              >
+                +{suggestedMl} ml
+              </Text>
+            </View>
+          </Pressable>
         )}
       </View>
 

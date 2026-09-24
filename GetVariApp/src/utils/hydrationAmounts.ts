@@ -69,6 +69,29 @@ export const primaryQuickAmount = (): QuickAmount => {
 };
 
 /**
+ * The offered amount closest to `ml`, for opening the sheet on a suggestion.
+ *
+ * The dashboard's water-requirement pill suggests a multiple of 250 ml, which
+ * is not guaranteed to be one of the amounts the admin config offers — a
+ * three-glass day asks for 750 ml against a 250/500/1000 list. Snapping keeps
+ * the sheet's grid as the single source of what can be logged: the suggestion
+ * decides which row opens selected, it does not add a row of its own. Ties go
+ * to the smaller amount, so a suggestion never opens on more water than it
+ * asked for.
+ */
+export const nearestQuickAmount = (ml: number): QuickAmount => {
+  const amounts = quickLogAmounts();
+  if (!Number.isFinite(ml) || ml <= 0 || amounts.length === 0) return primaryQuickAmount();
+
+  return amounts.reduce((closest, amount) => {
+    const delta = Math.abs(amount.ml - ml);
+    const bestDelta = Math.abs(closest.ml - ml);
+    if (delta < bestDelta) return amount;
+    return delta === bestDelta && amount.ml < closest.ml ? amount : closest;
+  });
+};
+
+/**
  * The shipped amounts, for the handful of call sites that need a value rather
  * than a call. Prefer `quickLogAmounts()`, which follows the admin config.
  */

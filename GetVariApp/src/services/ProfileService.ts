@@ -1,6 +1,7 @@
 import { supabase } from './SupabaseClient';
 import { AuthService } from './AuthService';
 import NotificationService from './NotificationService';
+import DailyTargetService from './DailyTargetService';
 import { targetFromProfile } from '../utils/hydrationTarget';
 import { awakeHoursPerDay, normaliseSleepSchedule } from '../utils/sleepWindow';
 import type { UserProfile } from '../types';
@@ -192,6 +193,22 @@ export const updateProfile = async (patch: ProfilePatch): Promise<ProfileSaveRes
       await NotificationService.setSleepSchedule(normaliseSleepSchedule(merged));
     } catch (sleepError) {
       console.error('[Profile] Failed to apply sleep window:', sleepError);
+    }
+
+    /**
+     * The day's goal is locked, and an edit is the one thing that should move
+     * it before tomorrow.
+     *
+     * Correcting a weight or adding a diagnosis changes the inputs the goal
+     * was computed from, and a user who has just done that and sees the same
+     * number reads it as the edit not having saved. Dropping the lock makes
+     * the next read recompute; every other read today still gets one stable
+     * answer.
+     */
+    try {
+      await DailyTargetService.clearLockedTarget();
+    } catch (targetError) {
+      console.error('[Profile] Failed to unlock the daily target:', targetError);
     }
 
     return { status: 'saved', profile: merged as UserProfile };

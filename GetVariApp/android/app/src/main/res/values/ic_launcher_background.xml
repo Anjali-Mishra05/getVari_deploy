@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Background behind the adaptive app icon's logo. -->
-    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- Background behind the adaptive app icon's logo.
+
+         The navy the logo is drawn on, not white: the mark is a white V, so a
+         white field left the adaptive icon blank on every launcher that uses
+         the two layers (which is every launcher since Android 8). Sampled
+         from the supplied artwork. -->
+    <color name="ic_launcher_background">#021C35</color>
     <!-- Tint for the notification icon. -->
     <color name="notification_accent">#012060</color>
 </resources>

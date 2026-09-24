@@ -26,6 +26,8 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 const mockDisplayNotification = jest.fn((..._args: any[]) => Promise.resolve());
 const mockRequestPermission = jest.fn((..._args: any[]) => Promise.resolve(true));
 
+const mockMsSinceLastNotification = jest.fn(() => Promise.resolve(Infinity));
+
 jest.mock('../src/services/NotificationService', () => ({
   __esModule: true,
   default: {
@@ -33,6 +35,12 @@ jest.mock('../src/services/NotificationService', () => ({
     displayNotification: (...args: any[]) => mockDisplayNotification.apply(null, args as []),
     scheduleHydrationReminders: () => Promise.resolve(),
     isSleeping: () => Promise.resolve(false),
+    // The gap between alerts now spans both delivery paths — the engine's own
+    // and the scheduled reminder's — so it reads this shared stamp rather than
+    // only its own state. Infinity is "nothing has been shown yet".
+    msSinceLastNotification: (...args: any[]) => mockMsSinceLastNotification.apply(null, args as []),
+    noteNotificationShown: () => Promise.resolve(),
+    noteIntakeLogged: () => Promise.resolve(),
   },
 }));
 

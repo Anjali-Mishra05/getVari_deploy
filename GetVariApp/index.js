@@ -36,7 +36,23 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
     // one place a 2 AM delivery can still be caught.
     if (await NotificationService.suppressIfAsleep(detail.notification)) return;
 
+    // And the same for a reminder that lands right after a drink. Logging an
+    // entry re-queues the cadence from that moment, but the re-queue is not
+    // awaited and an alarm already lodged with AlarmManager fires anyway — so
+    // a reminder can still arrive asking for water the user has just had.
+    // Caught here for the same reason as the sleep window: this is the only
+    // point where the delivery itself is observable, before it is recorded or
+    // turned into a full-screen prompt.
+    if (await NotificationService.suppressIfRecentlyHydrated(detail.notification)) return;
+
     await NotificationHistory.recordDelivery(detail.notification);
+
+    // Anything that survives the two gates above has reached the user, so it
+    // starts the gap the notification engine spaces its own alerts by. Stamped
+    // here rather than per-type because the engine's question is "has the user
+    // just been interrupted?", and a "Good Morning" message interrupts exactly
+    // as much as a reminder does.
+    await NotificationService.noteNotificationShown();
   } else if (type === EventType.PRESS || type === EventType.ACTION_PRESS) {
     await NotificationHistory.recordPress(detail.notification);
   }

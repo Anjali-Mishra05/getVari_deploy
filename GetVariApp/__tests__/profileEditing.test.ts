@@ -13,12 +13,29 @@ var mockUpserted: any[] = [];
 var mockSleepScheduleCalls: any[] = [];
 var mockUserId: string | null = 'user-1';
 
+let mockClearedTargetCount = 0;
+
 jest.mock('../src/services/NotificationService', () => ({
   __esModule: true,
   default: {
     setSleepSchedule: jest.fn(async (schedule: any) => {
       mockSleepScheduleCalls.push(schedule);
     }),
+  },
+}));
+
+/**
+ * A save unlocks the day's hydration goal so the edited inputs take effect
+ * today. Stubbed here because the real module reaches for AsyncStorage, which
+ * these node-environment suites deliberately never load.
+ */
+jest.mock('../src/services/DailyTargetService', () => ({
+  __esModule: true,
+  default: {
+    clearLockedTarget: jest.fn(async () => {
+      mockClearedTargetCount += 1;
+    }),
+    peekTodayTargetMl: jest.fn(async () => null),
   },
 }));
 

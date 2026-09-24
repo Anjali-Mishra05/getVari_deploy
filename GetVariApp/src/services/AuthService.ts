@@ -352,6 +352,29 @@ export class AuthService {
   }
 
   /**
+   * Whether the onboarding wizard has been completed on this device.
+   *
+   * Read by the permission gate, which must not appear until it has. Asking
+   * for notification permissions over the login or the wizard demands a
+   * decision from someone who has not yet been shown what the app does, and
+   * it covered the BLE pairing step — the one screen where the user is
+   * already being asked to grant Bluetooth. The gate belongs immediately
+   * after that step and before the dashboard.
+   */
+  static async hasCompletedOnboarding(): Promise<boolean> {
+    try {
+      const stored = await AuthService.getStoredSession();
+      return Boolean(stored?.onboardedAt);
+    } catch (error) {
+      console.warn('[Auth] Could not read the onboarding stamp:', error);
+      // Unknown is treated as "not yet": a gate that fails open costs a user
+      // one launch without reminders, and one that fails closed can wall an
+      // unonboarded user out of the app entirely.
+      return false;
+    }
+  }
+
+  /**
    * Starts phone verification.
    *
    * Firebase phone auth is attempted first. When it is unavailable — no SMS

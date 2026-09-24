@@ -11,6 +11,7 @@ import { supabase } from './SupabaseClient';
 import { AuthService } from './AuthService';
 import NotificationService from './NotificationService';
 import ChatBus from './ChatBus';
+import DailyTargetService from './DailyTargetService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /**
@@ -108,6 +109,21 @@ const rememberProcessed = async (rowId: string): Promise<void> => {
  */
 const fetchTargetMl = async (userId: string): Promise<number | null> => {
   try {
+    /**
+     * Today's locked goal first, and the profile's stored figure only as a
+     * fallback.
+     *
+     * These are two runs of the same pipeline — one with the observed
+     * telemetry bands, one without — and reading the stored one here is what
+     * put "250 / 4552 ml" in a reminder while the dashboard above it read
+     * 5,000. `peekTodayTargetMl` never computes: this is called from the
+     * background delivery handler, which has no profile to hand and no
+     * business fetching one, so it takes the number the dashboard locked in
+     * and falls back when the app has not run yet today.
+     */
+    const locked = await DailyTargetService.peekTodayTargetMl();
+    if (locked !== null) return locked;
+
     const { data, error } = await supabase
       .from(PROFILES_TABLE)
       .select('profile')
@@ -348,7 +364,14 @@ const performWrite = async (
     // back off the day, so it must not settle a reminder asking for more.
     // The amount goes through so the bell menu can say what was actually
     // logged against the reminder, rather than only that it was opened.
-    if (amountMl > 0) await NotificationService.resolveActiveReminder(amountMl);
+    if (amountMl > 0) {
+      // Stamped before anything that can stall: the re-queue below is the
+      // slow, OS-bound half, and a reminder firing while it is still in
+      // flight is exactly the case the stamp exists to catch. See
+      // `NotificationService.suppressIfRecentlyHydrated`.
+      await NotificationService.noteIntakeLogged();
+      await NotificationService.resolveActiveReminder(amountMl);
+    }
     await NotificationService.scheduleHydrationReminders();
   };
 

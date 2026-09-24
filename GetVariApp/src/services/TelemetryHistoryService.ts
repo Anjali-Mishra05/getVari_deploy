@@ -36,7 +36,34 @@ export interface TelemetrySnapshot {
   totalSteps: number | null;
   avgHeartRate: number | null;
   isMock?: boolean;
+  /**
+   * How many readings the averages on this row were computed from.
+   *
+   * Local-only: the Supabase row carries the resulting mean, not the count,
+   * so the running average is folded here and the result is what is upserted.
+   * A cleared local store restarts the day's mean, which is a worse average
+   * for the rest of that day and nothing beyond it.
+   */
+  samples?: number;
 }
+
+/**
+ * Folds one reading into a running mean.
+ *
+ * "Missing != Zero" applies in both directions: a null reading leaves the
+ * mean alone rather than dragging it toward zero, and a first reading over a
+ * null mean becomes the mean outright rather than being averaged against
+ * nothing.
+ */
+const foldMean = (
+  previous: number | null | undefined,
+  next: number | null,
+  priorSamples: number
+): number | null => {
+  if (next === null) return previous ?? null;
+  if (previous === null || previous === undefined || priorSamples <= 0) return next;
+  return (previous * priorSamples + next) / (priorSamples + 1);
+};
 
 class TelemetryHistoryService {
   /**
@@ -52,18 +79,44 @@ class TelemetryHistoryService {
       const validSteps = validateSensorReading(data.steps, SENSOR_LIMITS.STEPS_DAILY);
       const validHR = validateSensorReading(data.heartRate, SENSOR_LIMITS.HEART_RATE);
 
-      const newSnapshot: TelemetrySnapshot = {
-        date: today,
-        avgTemp: validTemp,
-        avgHumidity: validHumid,
-        totalSteps: validSteps,
-        avgHeartRate: validHR,
-      };
-
       // 1. Update Local Storage (App Speed/Offline)
       const historyStr = await storage.getItem(STORAGE_KEY);
       let history: TelemetrySnapshot[] = historyStr ? JSON.parse(historyStr) : [];
       const existingIndex = history.findIndex(s => s.date === today);
+      // A mock-filled row is a placeholder, not a reading: the first real
+      // sample of the day replaces it outright instead of being averaged
+      // against invented numbers.
+      const previous =
+        existingIndex > -1 && !history[existingIndex].isMock ? history[existingIndex] : null;
+      const priorSamples = previous?.samples ?? (previous ? 1 : 0);
+
+      /**
+       * The day's row, folded rather than overwritten.
+       *
+       * This used to store whatever the sensor happened to be reading at the
+       * moment of the call, under column names that promise an aggregate.
+       * For `totalSteps` that was the bug the user felt: steps is a
+       * cumulative daily counter, so the row climbed all day, the 7-day mean
+       * climbed with it, and `activityAdj` walked up its bands
+       * (+0 → +300 → +500 → +900 → +1300) — a daily water goal that rose
+       * through the afternoon and ratcheted further each day as real rows
+       * displaced low mock ones.
+       *
+       * Steps therefore take the high-water mark, which is what a daily
+       * counter's total *is*, and the other three take a running mean, which
+       * is what "avg" on their names has always claimed.
+       */
+      const newSnapshot: TelemetrySnapshot = {
+        date: today,
+        avgTemp: foldMean(previous?.avgTemp, validTemp, priorSamples),
+        avgHumidity: foldMean(previous?.avgHumidity, validHumid, priorSamples),
+        totalSteps:
+          validSteps === null
+            ? previous?.totalSteps ?? null
+            : Math.max(validSteps, previous?.totalSteps ?? 0),
+        avgHeartRate: foldMean(previous?.avgHeartRate, validHR, priorSamples),
+        samples: priorSamples + 1,
+      };
 
       if (existingIndex > -1) {
         history[existingIndex] = newSnapshot;
@@ -78,13 +131,17 @@ class TelemetryHistoryService {
 
       // 2. Sync to Supabase if userId is provided
       if (userId) {
+        // The folded row, not the raw reading — the cloud copy is what
+        // `getHistory` reads back as the source of truth, so writing the
+        // instantaneous value here would reintroduce the drift on every
+        // device that syncs.
         await supabase.from(TABLE_NAME).upsert({
           user_id: userId,
           date: today,
-          avg_temp: validTemp,
-          avg_humidity: validHumid,
-          total_steps: validSteps,
-          avg_heart_rate: validHR,
+          avg_temp: newSnapshot.avgTemp,
+          avg_humidity: newSnapshot.avgHumidity,
+          total_steps: newSnapshot.totalSteps,
+          avg_heart_rate: newSnapshot.avgHeartRate,
         });
       }
     } catch (e) {

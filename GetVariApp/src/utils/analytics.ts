@@ -80,36 +80,54 @@ export const dailyTotals = (
 };
 
 export interface StreakInfo {
-  /** Consecutive goal days ending today (or yesterday, if today is not done yet). */
+  /** Consecutive logged days ending today (or yesterday, if today is empty). */
   current: number;
   /** The longest run inside the days given. */
   best: number;
-  /** Whether today's goal is already met. */
-  todayMet: boolean;
+  /** Whether anything has been logged today. */
+  todayLogged: boolean;
 }
 
 /**
- * The goal streak over `days` (oldest first, today last).
+ * The logging streak over `days` (oldest first, today last).
  *
- * Today only extends the streak once it is met; until then the streak
- * counts back from yesterday, so a user checking in at 9 AM does not see
- * their streak reset to zero for a day that is not over.
+ * ## Why this counts days logged, not days the goal was met
+ *
+ * It used to count `goalMet`, and `goalMet` is decided by comparing every
+ * historical day against *today's* target — the only one the app has. Once
+ * the daily goal settled around 4.5 L that retroactively marked almost every
+ * past day a failure, and a user with weeks of diligent logging was shown a
+ * streak of 0. The comparison was never sound: a day on which someone met a
+ * 3,000 ml goal did not stop being a success because the goal later rose.
+ *
+ * Counting days with at least one entry is a smaller claim and an honest one.
+ * It measures the habit the app can actually observe and actually wants —
+ * that the user keeps logging — and it does not silently re-judge the past
+ * every time the goal moves. The goal-versus-actual comparison still exists,
+ * on the weekly stats and the chart's goal line, where it is shown against
+ * the day it belongs to rather than rolled into a single number.
+ *
+ * Today only extends the streak once something is logged; until then the
+ * count runs back from yesterday, so a user opening the app at 9 AM does not
+ * see their streak reset for a day that is not over.
  */
 export const computeStreak = (days: DayTotal[]): StreakInfo => {
+  const logged = (day: DayTotal): boolean => day.entries > 0;
+
   let best = 0;
   let run = 0;
   for (const day of days) {
-    run = day.goalMet ? run + 1 : 0;
+    run = logged(day) ? run + 1 : 0;
     best = Math.max(best, run);
   }
 
-  const todayMet = days.length > 0 && days[days.length - 1].goalMet;
+  const todayLogged = days.length > 0 && logged(days[days.length - 1]);
   let current = 0;
-  for (let i = days.length - (todayMet ? 1 : 2); i >= 0; i--) {
-    if (!days[i].goalMet) break;
+  for (let i = days.length - (todayLogged ? 1 : 2); i >= 0; i--) {
+    if (!logged(days[i])) break;
     current += 1;
   }
-  return { current, best, todayMet };
+  return { current, best, todayLogged };
 };
 
 export interface WeekSummary {

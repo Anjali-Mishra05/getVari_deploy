@@ -522,14 +522,18 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
               {streak.current}
               <Text className="text-[13px] text-neutral-400"> {streak.current === 1 ? 'day' : 'days'}</Text>
             </Text>
+            {/* The streak counts days logged, not days the goal was met — see
+                `computeStreak`. The copy has to say so, or a user reading
+                "streak extended" after one 250 ml glass will take it as having
+                hit their target. */}
             <Text className="text-[11px] text-neutral-400 mt-1">
-              {targetMl === null
-                ? 'Set up your goal to start a streak.'
-                : streak.todayMet
-                ? 'Goal met today — streak extended!'
+              {streak.todayLogged
+                ? streak.current === 1
+                  ? 'Logged today — that’s day one.'
+                  : `Logged today — ${streak.current} days running.`
                 : streak.current > 0
-                ? `Hit today's goal to make it ${streak.current + 1}.`
-                : "Reach today's goal to start a streak."}
+                ? `Log a drink today to make it ${streak.current + 1}.`
+                : 'Log a drink to start a streak.'}
             </Text>
             <View className="flex-row items-center gap-1.5 mt-2">
               <Trophy color="#fbbf24" size={12} />

@@ -36,6 +36,9 @@ jest.mock('../src/services/NotificationService', () => ({
     // cadence; both have to be here or the side-effect chain in `performWrite`
     // throws on the first call and never reaches the second.
     resolveActiveReminder: jest.fn(async () => {}),
+    // Stamped on every entry so a reminder arriving moments later can be
+    // withdrawn instead of asking for water the user has just had.
+    noteIntakeLogged: jest.fn(async () => {}),
   },
   HYDRATION_REMINDER_TYPE: 'hydration_reminder',
 }));

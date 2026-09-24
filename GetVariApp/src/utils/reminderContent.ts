@@ -51,9 +51,54 @@ export interface ReminderContent {
   body: string;
 }
 
-/** The line used when nothing specific is known — the old fixed reminder. */
+/**
+ * The line used when nothing specific is known.
+ *
+ * Kept as a single exported constant because it is also a *sentinel*:
+ * `refreshReminderContent` compares against it to decide whether a delivered
+ * reminder still needs rewriting with real numbers. Anything that varies per
+ * delivery would break that check, so the variety lives in
+ * `GENERIC_REMINDER_BODIES` below and this stays the one fixed fallback.
+ */
 export const GENERIC_REMINDER_BODY =
   'Time to hydrate! Please drink some water to stay hydrated.';
+
+/**
+ * The lines a reminder with nothing to say rotates through.
+ *
+ * The user saw "Time to hydrate! Please drink some water to stay hydrated."
+ * twice in one notification history, and it is the line every reminder falls
+ * back to whenever the facts cannot be read — a killed app, a failed Supabase
+ * call, a fresh install. Identical copy arriving repeatedly is what turns a
+ * reminder into something swiped away unread.
+ *
+ * These say the same thing in different words rather than adding claims:
+ * nothing here states a number, because the whole reason this pool is in play
+ * is that no number could be read.
+ */
+export const GENERIC_REMINDER_BODIES: string[] = [
+  GENERIC_REMINDER_BODY,
+  'Time for some water.',
+  'A glass of water now would help.',
+  'Quick hydration check — have a drink.',
+  'Worth a few sips about now.',
+  'Hydration nudge: grab a glass.',
+];
+
+/**
+ * A generic line chosen by the slot it is for.
+ *
+ * Indexed rather than random so a reminder's text is decided by *which*
+ * reminder it is, not by when the queue happened to be rebuilt. The queue is
+ * torn down and rebuilt every time the app opens or a drink is logged, and a
+ * random pick would rewrite the same pending reminder repeatedly — including,
+ * on Android, after it had already been shown.
+ */
+export const genericReminderBody = (slot: number): string => {
+  if (!Number.isFinite(slot)) return GENERIC_REMINDER_BODY;
+  const index = Math.abs(Math.trunc(slot)) % GENERIC_REMINDER_BODIES.length;
+  return GENERIC_REMINDER_BODIES[index];
+};
 
 export const REMINDER_TITLE = '💧 Hydration';
 

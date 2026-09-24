@@ -30,6 +30,7 @@ import NotificationHistory from './NotificationHistory';
 import { primaryQuickAmount } from '../utils/hydrationAmounts';
 import {
   GENERIC_REMINDER_BODY,
+  genericReminderBody,
   REMINDER_TITLE,
   buildReminderContent,
   type ReminderFacts,
@@ -41,6 +42,7 @@ import {
   nextAwakeAt,
   normaliseSleepSchedule,
   describeSleepWindow,
+  parseClock,
 } from '../utils/sleepWindow';
 import type { NotificationKind } from '../types';
 
@@ -141,6 +143,24 @@ const REMINDER_SLOTS = Math.floor(REMINDER_COVERAGE_MS / REMINDER_INTERVAL_MS);
 const REMINDER_RESUME_OFFSET_MS = 30 * 60 * 1000;
 
 /**
+ * How far a reminder slot must stay from a fixed-time daily message.
+ *
+ * `REMINDER_RESUME_OFFSET_MS` was written for this problem but only solves
+ * half of it: it applies to slots *shifted out of the sleep window*, so it
+ * keeps the cadence clear of the 07:00 greeting only when 07:00 happens to be
+ * the wake-up time. A user who wakes at 06:00 has a cadence that lands on the
+ * hour naturally, and the 07:00 slot and the 07:00 "Good Morning" were queued
+ * for the same second — the reported pair of notifications, and the same
+ * clumping the engine's gap prevents for its own alerts.
+ *
+ * Enforced when the queue is built rather than when a reminder is delivered,
+ * because both are one-shot AlarmManager triggers: by the time either arrives
+ * the other is already on its way, and withdrawing one at that point costs
+ * the user a reminder rather than moving it.
+ */
+const DAILY_MESSAGE_GUARD_MS = 30 * 60 * 1000;
+
+/**
  * Ceiling on one queue rebuild.
  *
  * Every notifee call here is a native round trip, and a native promise that
@@ -154,38 +174,158 @@ const RESCHEDULE_TIMEOUT_MS = 20 * 1000;
 /** Marks a notification as the "you haven't logged water" nudge. */
 export const HYDRATION_REMINDER_TYPE = 'hydration_reminder';
 
-/** Marks one of the fixed-time daily messages (N22 in the spec). */
+/** Marks one of the daily messages (N22 in the spec). */
 export const DAILY_MESSAGE_TYPE = 'daily_message';
 const DAILY_ID_PREFIX = 'getvari-daily-';
 
 /**
- * The notifications the spec pins to a wall-clock time rather than to a
- * condition: "Morning: 7 AM / Night: 10 PM".
+ * How far the daily messages sit from the edges of the user's sleep window.
  *
- * These are queued with the OS, not raised by `NotificationEngine`. The engine
- * only runs while the dashboard is mounted, so a greeting it owned arrived
- * whenever the app was next opened — which is exactly how every notification
- * ended up landing in one clump on launch.
+ * The greeting lands an hour *after* wake-up and the wind-down an hour
+ * *before* bedtime, so neither is the first or last thing that happens to the
+ * user — a "good morning" at the moment the alarm goes off is noise, and a
+ * "keep up your hydration" as someone is falling asleep is worse.
  */
-const DAILY_MESSAGES = [
+const DAILY_MESSAGE_OFFSET_MIN = 60;
+
+/**
+ * The daily messages, and when they sit relative to the sleep window.
+ *
+ * ## Why these are no longer fixed at 07:00 and 22:00
+ *
+ * The spec pinned them to wall-clock times, and for a user who sleeps
+ * 23:00–07:00 that happens to be right. For a nurse on nights it was absurd:
+ * "Good morning! Start your day with a glass of water" arriving at 7 AM as
+ * they got into bed, and the wind-down at 10 PM as their day began. The times
+ * are now derived from whatever window the user actually chose, so the
+ * greeting always follows their wake-up and the wind-down always precedes
+ * their bedtime.
+ *
+ * ## Why each has a pool of lines rather than one
+ *
+ * The same sentence every morning for a week stops being read. These rotate
+ * by date — see `dailyMessageFor` — so the message is stable for any given
+ * day but different from the day before.
+ */
+export const DAILY_MESSAGES = [
   {
     key: 'morning',
-    hour: 7,
-    minute: 0,
+    /** Offset from wake-up, in minutes. Positive is after. */
+    anchor: 'wake' as const,
     title: '🌅 Good Morning',
-    body: 'Good morning! Start your day with a glass of water and stay hydrated throughout the day.',
+    bodies: [
+      'Good morning! Start your day with a glass of water and stay hydrated throughout the day.',
+      'Morning. A glass of water now is the easiest win of your day.',
+      'You woke up a little dehydrated — everyone does. First glass sets the tone.',
+      'Good morning. Water before coffee, if you can manage it.',
+      'New day. Start it with a glass and let the rest follow.',
+    ],
   },
   {
     key: 'night',
-    hour: 22,
-    minute: 0,
+    /** Offset from bedtime, in minutes. Positive is before. */
+    anchor: 'sleep' as const,
     title: '🌙 Bedtime',
-    body: 'It’s almost bedtime. Keep up your hydration.',
+    bodies: [
+      'It’s almost bedtime. Keep up your hydration.',
+      'Winding down. A small glass now, not a large one — you want to sleep through.',
+      'Nearly bedtime. Top up gently if you are short today.',
+      'Last call for water before bed. Keep it light.',
+      'Almost done for the day. A few sips now is plenty.',
+    ],
   },
 ] as const;
 
-/** How many days of fixed-time messages are queued ahead. */
+type DailyMessage = (typeof DAILY_MESSAGES)[number];
+
+/**
+ * The line to use for a message on a given day.
+ *
+ * Keyed off the local date so it is stable: the queue is rebuilt whenever the
+ * app is opened or a drink is logged, and a random pick would rewrite
+ * tomorrow's greeting several times a day. The day number is a plain count of
+ * local days since the epoch, which steps by exactly one at local midnight.
+ */
+export const dailyMessageBody = (message: DailyMessage, at: number): string => {
+  const d = new Date(at);
+  const localDayIndex = Math.floor(
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 86_400_000
+  );
+  return message.bodies[
+    ((localDayIndex % message.bodies.length) + message.bodies.length) % message.bodies.length
+  ];
+};
+
+/**
+ * The local minute-of-day a daily message should fire, from the sleep window.
+ *
+ * Wrapped into the day rather than clamped: a bedtime of 00:30 puts the
+ * wind-down at 23:30 the evening before, which is the right message at the
+ * right moment, where clamping to 00:00 would have queued it after the user
+ * was already asleep.
+ */
+export const dailyMessageMinute = (message: DailyMessage, schedule: SleepSchedule): number => {
+  const anchor = parseClock(message.anchor === 'wake' ? schedule.wakeUp : schedule.sleepStart);
+  // An unparseable window falls back to the shipped default rather than to
+  // midnight, which is the one time of day nothing should ever be sent.
+  const base =
+    anchor ??
+    parseClock(
+      message.anchor === 'wake' ? DEFAULT_SLEEP_SCHEDULE.wakeUp : DEFAULT_SLEEP_SCHEDULE.sleepStart
+    )!;
+  const shifted = message.anchor === 'wake' ? base + DAILY_MESSAGE_OFFSET_MIN : base - DAILY_MESSAGE_OFFSET_MIN;
+  return ((shifted % 1440) + 1440) % 1440;
+};
+
+/** How many days of daily messages are queued ahead. */
 export const DAILY_HORIZON_DAYS = 7;
+
+/**
+ * `at`, moved clear of any fixed-time daily message it would collide with.
+ *
+ * Exported for the scheduling tests, which is the only way to observe it —
+ * the queue it shapes lives in the OS. See `DAILY_MESSAGE_GUARD_MS`.
+ *
+ * The loop runs once per message rather than once: pushing clear of the
+ * morning greeting can in principle land inside another message's guard, and
+ * re-checking costs two comparisons. It cannot spin, because every push moves
+ * strictly forward and there are finitely many messages in a day.
+ */
+export const clearOfDailyMessages = (
+  at: number,
+  schedule: SleepSchedule = DEFAULT_SLEEP_SCHEDULE
+): number => {
+  let moved = at;
+
+  for (let pass = 0; pass < DAILY_MESSAGES.length; pass++) {
+    let pushed = false;
+
+    for (const message of DAILY_MESSAGES) {
+      // The message's time on the same local day as the slot, derived from the
+      // user's own sleep window rather than a fixed hour — the guard has to
+      // track wherever `dailyMessageMinute` actually puts the message, or it
+      // protects a time nothing is scheduled at. Built with the local setters,
+      // so it follows the user's clock, and their DST, the way the queued
+      // message itself does.
+      const minute = dailyMessageMinute(message, schedule);
+      const messageAt = new Date(moved);
+      messageAt.setHours(Math.floor(minute / 60), minute % 60, 0, 0);
+      const messageMs = messageAt.getTime();
+
+      if (Math.abs(moved - messageMs) < DAILY_MESSAGE_GUARD_MS) {
+        // Always forward. Pulling the reminder earlier would let the greeting
+        // land on a user who has just been reminded, which is the same clump
+        // seen from the other side.
+        moved = messageMs + DAILY_MESSAGE_GUARD_MS;
+        pushed = true;
+      }
+    }
+
+    if (!pushed) break;
+  }
+
+  return moved;
+};
 
 /**
  * N1's title and message, verbatim from the notification spec.
@@ -220,6 +360,29 @@ const DUPLICATE_WINDOW_MS = 30 * 60 * 1000;
 const RECENT_SHOWN_KEY = 'getvari_recently_shown_notifications';
 /** Set at login; the welcome notification is shown when the dashboard opens. */
 const PENDING_WELCOME_KEY = 'getvari_pending_welcome';
+
+/**
+ * When the user last logged a drink, epoch ms.
+ *
+ * A stamp rather than a read of the hydration log, because the one caller that
+ * needs it most is the background delivery handler: no network, no session,
+ * and no room to import `HydrationService` — the profile, the log and the
+ * telemetry history all import this module already, and reading them from
+ * inside it closes the cycle `ReminderFactsService` exists to avoid.
+ */
+const LAST_INTAKE_KEY = 'getvari_last_intake_at';
+
+/**
+ * When the app last put *any* notification on screen, epoch ms.
+ *
+ * The engine keeps its own `lastDeliveredAt` and spaces its alerts by it, but
+ * that clock only ever saw the engine's own deliveries. Scheduled reminders
+ * come from AlarmManager on a path the engine never runs, so the two could
+ * — and did — land in the same minute: an "Elevated Risk" alert and a
+ * "Hydration" reminder, one notification apart in the shade. This is the one
+ * stamp both paths write and both read, which is what makes the gap real.
+ */
+const LAST_NOTIFICATION_KEY = 'getvari_last_notification_at';
 
 /** FCM listeners are registered once per app run; see `setupFCM`. */
 let fcmListenersRegistered = false;
@@ -569,6 +732,109 @@ class NotificationService {
     return true;
   }
 
+  /* ------------------------------------------------------------------ *
+   * Cross-path gates: recent intake, and the gap between any two alerts
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Records that the user just drank. Called from `HydrationService` on every
+   * entry, alongside resolving the outstanding reminder and re-queueing.
+   */
+  async noteIntakeLogged(atMs: number = Date.now()): Promise<void> {
+    try {
+      await AsyncStorage.setItem(LAST_INTAKE_KEY, String(atMs));
+    } catch (error) {
+      console.error('[Notifications] Could not record the intake time:', error);
+    }
+  }
+
+  /** When the user last logged a drink, or null if nothing is on record. */
+  async lastIntakeAt(): Promise<number | null> {
+    try {
+      const raw = await AsyncStorage.getItem(LAST_INTAKE_KEY);
+      const at = raw ? Number(raw) : NaN;
+      return Number.isFinite(at) && at > 0 ? at : null;
+    } catch (error) {
+      console.error('[Notifications] Could not read the intake time:', error);
+      return null;
+    }
+  }
+
+  /**
+   * The second last gate: a reminder that arrives on the heels of a drink is
+   * pulled back off the screen. Returns whether it was.
+   *
+   * The rule this enforces is the one the scheduler already states — "a
+   * reminder only ever fires when nothing has been logged for one full
+   * interval" — which logging a drink tries to guarantee by re-queueing from
+   * that moment. It cannot quite: the re-queue is deliberately not awaited so
+   * the user's confirmation never waits on the OS, notifee's scheduling can
+   * stall behind other native work, and an alarm already handed to
+   * AlarmManager fires exactly when it was told to regardless. So a drink and
+   * a reminder land together, and the user is asked for water a moment after
+   * providing it — the reported "Just logged a drink · 250 / 4552 ml" nudge.
+   *
+   * Withdrawing here rather than widening the re-queue is deliberate: this is
+   * the only point at which the *delivery* is observable, and the check is a
+   * single local read with no network, which is all a background handler can
+   * be relied on to complete.
+   */
+  async suppressIfRecentlyHydrated(notification?: Notification | null): Promise<boolean> {
+    const lastAt = await this.lastIntakeAt();
+    if (lastAt === null) return false;
+
+    const sinceMs = Date.now() - lastAt;
+    // A stamp from the future is a clock change, not a drink; ignore it rather
+    // than silencing reminders until the device catches up.
+    if (sinceMs < 0 || sinceMs >= REMINDER_INTERVAL_MS) return false;
+
+    const id = notification?.id;
+    console.log(
+      `[Notifications] Withdrawing a reminder ${Math.round(sinceMs / 60000)} min after a drink:`,
+      id
+    );
+
+    try {
+      if (id) await notifee.cancelDisplayedNotifications([id]);
+    } catch (error) {
+      console.error('[Notifications] Could not withdraw the delivery:', error);
+    }
+
+    return true;
+  }
+
+  /**
+   * Records that something was just shown, whatever path showed it.
+   *
+   * Written by `displayNotification` and by every scheduled reminder that
+   * survives its gates, so `msSinceLastNotification` sees one timeline.
+   */
+  async noteNotificationShown(atMs: number = Date.now()): Promise<void> {
+    try {
+      await AsyncStorage.setItem(LAST_NOTIFICATION_KEY, String(atMs));
+    } catch (error) {
+      console.error('[Notifications] Could not record the delivery time:', error);
+    }
+  }
+
+  /**
+   * How long since anything was last shown, or `Infinity` when nothing has
+   * been — which is what lets a caller compare against a gap unconditionally.
+   */
+  async msSinceLastNotification(): Promise<number> {
+    try {
+      const raw = await AsyncStorage.getItem(LAST_NOTIFICATION_KEY);
+      const at = raw ? Number(raw) : NaN;
+      if (!Number.isFinite(at) || at <= 0) return Infinity;
+      const since = Date.now() - at;
+      // A backwards clock must open the gate, never wedge it shut.
+      return since < 0 ? Infinity : since;
+    } catch (error) {
+      console.error('[Notifications] Could not read the delivery time:', error);
+      return Infinity;
+    }
+  }
+
   /** Forgets the window — used on sign-out, alongside the rest of the state. */
   async clearSleepSchedule(): Promise<void> {
     this.sleepSchedule = null;
@@ -609,6 +875,54 @@ class NotificationService {
 
     const settings = await notifee.requestPermission();
     return settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+  }
+
+  /**
+   * Whether notifications are allowed, without ever showing the dialog.
+   *
+   * `requestPermission` prompts, and prompts exactly once per session, so it
+   * cannot answer "is this still granted?" — which is the question the
+   * permission gate asks on every resume, including after the user revoked
+   * the permission from App info and came back.
+   */
+  async hasNotificationPermission(): Promise<boolean> {
+    try {
+      const current = await notifee.getNotificationSettings();
+      return current.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+    } catch (error) {
+      console.warn('[Notifications] Could not read permission state:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Shows the system permission dialog, however many times it is called.
+   *
+   * The session-once rule in `requestPermission` exists to stop a per-tick
+   * caller re-prompting; on the gate the prompt is the user pressing a button
+   * that says "Allow", and swallowing it would leave the button doing nothing.
+   * Android still only shows the dialog while it is willing to — after two
+   * refusals it returns immediately, which is why the gate always offers the
+   * settings page as well.
+   */
+  async promptForNotificationPermission(): Promise<boolean> {
+    try {
+      const settings = await notifee.requestPermission();
+      this.permissionAsked = true;
+      return settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+    } catch (error) {
+      console.error('[Notifications] Permission request failed:', error);
+      return false;
+    }
+  }
+
+  /** Opens this app's notification settings, for a user Android will not re-prompt. */
+  async openNotificationSettings(): Promise<void> {
+    try {
+      await notifee.openNotificationSettings();
+    } catch (error) {
+      console.error('[Notifications] Could not open notification settings:', error);
+    }
   }
 
   /**
@@ -752,6 +1066,10 @@ class NotificationService {
       },
       android: androidOptions(channelId, body),
     });
+
+    // Recorded after the display call rather than before it, so a throw does
+    // not start a gap for a notification the user never saw.
+    await this.noteNotificationShown();
   }
 
   /**
@@ -883,6 +1201,27 @@ class NotificationService {
         } else {
           cursor = awakeAt;
         }
+
+        /**
+         * Keep the cadence off the fixed-time messages.
+         *
+         * Applied after the sleep shift and re-checked against the window
+         * afterwards, because the push is forward in time and could in
+         * principle walk a slot into the evening quiet hours — at which point
+         * the shift has to run again to move it to morning. Two passes settle
+         * it: the second shift lands at wake-up, and wake-up is already clear
+         * of a message by `REMINDER_RESUME_OFFSET_MS`.
+         */
+        const clearOfMessages = clearOfDailyMessages(cursor, schedule);
+        if (clearOfMessages !== cursor) {
+          cursor = clearOfMessages;
+          const reAwakeAt = nextAwakeAt(schedule, cursor);
+          if (reAwakeAt !== cursor) {
+            sleepShifted = true;
+            cursor = reAwakeAt + REMINDER_RESUME_OFFSET_MS;
+          }
+        }
+
         const timestamp = cursor;
         if (timestamp <= Date.now()) continue;
 
@@ -907,6 +1246,12 @@ class NotificationService {
             // The scheduled timestamp makes the id unique per reminder while
             // staying identical across every delivery of the same press.
             eventId: `${REMINDER_ID_PREFIX}${slot}@${timestamp}`,
+            // Varied by slot, so a day of reminders that all fall back to the
+            // generic line does not repeat one sentence twelve times. Indexed
+            // by slot rather than picked at random because this queue is
+            // rebuilt on every app open and every logged drink — a random pick
+            // would rewrite a pending reminder's text repeatedly.
+            body: genericReminderBody(slot),
           }),
           trigger
         );
@@ -1011,7 +1356,13 @@ class NotificationService {
       // A reminder that reaches the user inside the quiet window is taken back
       // rather than answered. See `suppressIfAsleep`.
       if (await this.suppressIfAsleep(notification)) return 'none';
+      // Nor is a reminder an honest question when the user has just drunk.
+      // Withdrawn before `noteReminderDelivered`, so a reminder nobody should
+      // have seen never becomes an outstanding one the bell menu reports.
+      if (await this.suppressIfRecentlyHydrated(notification)) return 'none';
       await this.noteReminderDelivered(notification);
+      // This is the delivery the engine's gap has to be able to see.
+      await this.noteNotificationShown();
       return 'none';
     }
 
@@ -1503,29 +1854,39 @@ class NotificationService {
 
       for (let day = 0; day < DAILY_HORIZON_DAYS; day++) {
         for (const message of DAILY_MESSAGES) {
+          // Derived from the user's own window — an hour after their wake-up,
+          // an hour before their bedtime — not from a fixed 07:00/22:00. For
+          // anyone who does not keep office hours the fixed times inverted the
+          // meaning of both messages.
+          const minute = dailyMessageMinute(message, schedule);
           const at = new Date(fromMs);
           at.setDate(at.getDate() + day);
-          at.setHours(message.hour, message.minute, 0, 0);
+          at.setHours(Math.floor(minute / 60), minute % 60, 0, 0);
           const timestamp = at.getTime();
 
           if (timestamp <= Date.now()) continue;
           // N14: routine notifications stay silent inside the quiet window.
           // These are dropped rather than shifted — a "good morning" delivered
-          // at bedtime is worse than no greeting at all.
+          // at bedtime is worse than no greeting at all. With the times now
+          // derived from the window itself this should not trigger, but a
+          // window narrower than the two offsets can still fold one inside.
           if (isAsleepAt(schedule, timestamp)) continue;
+
+          // Rotates by date, so a week does not repeat one sentence.
+          const body = dailyMessageBody(message, timestamp);
 
           const id = `${DAILY_ID_PREFIX}${message.key}-${day}`;
           await notifee.createTriggerNotification(
             {
               id,
               title: message.title,
-              body: message.body,
+              body,
               data: {
                 type: DAILY_MESSAGE_TYPE,
                 key: message.key,
                 eventId: `${id}@${timestamp}`,
               },
-              android: androidOptions(REMINDER_CHANNEL_ID, message.body, {
+              android: androidOptions(REMINDER_CHANNEL_ID, body, {
                 importance: AndroidImportance.DEFAULT,
                 summary: message.title,
               }),

@@ -4,7 +4,7 @@ import { Check, Droplets } from 'lucide-react-native';
 
 import Button from './ui/Button';
 import Sheet from './ui/Sheet';
-import { primaryQuickAmount, quickLogAmounts } from '../utils/hydrationAmounts';
+import { nearestQuickAmount, primaryQuickAmount, quickLogAmounts } from '../utils/hydrationAmounts';
 import { formatMl } from '../utils/hydrationFormat';
 
 interface QuickLogSheetProps {
@@ -15,6 +15,15 @@ interface QuickLogSheetProps {
   totalMl: number;
   /** The daily goal, or null while the profile is still loading. */
   targetMl: number | null;
+  /**
+   * An amount to open selected instead of the usual default, in ml.
+   *
+   * Set when the sheet is opened from a suggestion — the risk card's water
+   * requirement pill — so the user confirms the amount they were just shown
+   * rather than having to find it. Snapped to the nearest offered amount, and
+   * ignored when null, which is every other way the sheet opens.
+   */
+  prefillMl?: number | null;
 }
 
 const ACCENT = '#00f2fe';
@@ -39,6 +48,7 @@ const QuickLogSheet: React.FC<QuickLogSheetProps> = ({
   onLog,
   totalMl,
   targetMl,
+  prefillMl = null,
 }) => {
   /**
    * The amount the user has picked but not yet committed.
@@ -57,10 +67,27 @@ const QuickLogSheet: React.FC<QuickLogSheetProps> = ({
   /** When the sheet last opened; see `commit`. */
   const openedAt = React.useRef(0);
 
+  /**
+   * The suggestion to open on, read at open rather than tracked.
+   *
+   * Kept in a ref so the reset below can depend on `visible` alone. The parent
+   * clears the prefill as it closes the sheet, and with the prefill in the
+   * dependency list that clear would re-run the reset — throwing away the
+   * amount the user had just picked, mid-close, for no reason the user could
+   * see.
+   */
+  const prefillRef = React.useRef(prefillMl);
+  prefillRef.current = prefillMl;
+
   useEffect(() => {
     if (!visible) return;
     openedAt.current = Date.now();
-    setSelectedMl(primaryQuickAmount().ml);
+    const suggested = prefillRef.current;
+    setSelectedMl(
+      typeof suggested === 'number' && suggested > 0
+        ? nearestQuickAmount(suggested).ml
+        : primaryQuickAmount().ml
+    );
     setSavingMl(null);
     setLoggedMl(null);
     setFailed(false);

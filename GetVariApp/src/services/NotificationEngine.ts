@@ -502,8 +502,25 @@ class NotificationEngine {
     const hasPermission = await NotificationService.requestPermission();
     const delivered: NotificationTrigger[] = [];
 
+    /**
+     * How long since the user last saw *anything* from the app.
+     *
+     * `state.lastDeliveredAt` only ever recorded this engine's own alerts, so
+     * the gap was blind to the 2-hourly hydration reminder — that fires from
+     * AlarmManager on a path the engine never runs. The two clocks let an
+     * "Elevated Risk" alert and a "Hydration" reminder land in the same
+     * minute, stacked one above the other in the shade, which is precisely
+     * what the gap exists to prevent. `NotificationService` keeps the stamp
+     * both paths write, and the engine's own record stays as the fallback for
+     * a first run where the shared stamp has not been written yet.
+     */
+    const sinceAnyNotification = Math.min(
+      await NotificationService.msSinceLastNotification(),
+      now - (state.lastDeliveredAt || 0)
+    );
+
     const withinGap =
-      now - (state.lastDeliveredAt || 0) < NOTIFICATION_COOLDOWNS.MIN_GAP_BETWEEN_ALERTS ||
+      sinceAnyNotification < NOTIFICATION_COOLDOWNS.MIN_GAP_BETWEEN_ALERTS ||
       now - this.sessionStartedAt < NOTIFICATION_COOLDOWNS.LOGIN_QUIET_MS;
     const toDeliver = triggers
       .filter(trigger => !withinGap || GAP_EXEMPT_TRIGGERS.includes(trigger))

@@ -51,26 +51,31 @@ describe('dailyTotals', () => {
 });
 
 describe('computeStreak', () => {
-  const daysFrom = (met: boolean[]) =>
+  /**
+   * `logged[i]` is whether that day has an entry at all. The amount is small
+   * on purpose: the streak counts days logged, not days the goal was met, so
+   * 250 ml against a 2,000 ml goal still has to extend it.
+   */
+  const daysFrom = (logged: boolean[]) =>
     dailyTotals(
-      met.flatMap((m, i) => (m ? [log(met.length - 1 - i, 2000)] : [])),
-      met.length,
+      logged.flatMap((l, i) => (l ? [log(logged.length - 1 - i, 250)] : [])),
+      logged.length,
       2000,
       NOW
     );
 
-  test('counts back from today once today is met', () => {
+  test('counts back from today once something is logged', () => {
     const s = computeStreak(daysFrom([false, true, true, true]));
-    expect(s).toEqual({ current: 3, best: 3, todayMet: true });
+    expect(s).toEqual({ current: 3, best: 3, todayLogged: true });
   });
 
-  test('an unfinished today does not reset the streak', () => {
+  test('an empty today does not reset the streak', () => {
     const s = computeStreak(daysFrom([true, true, true, false]));
     expect(s.current).toBe(3);
-    expect(s.todayMet).toBe(false);
+    expect(s.todayLogged).toBe(false);
   });
 
-  test('a missed yesterday ends it', () => {
+  test('a skipped yesterday ends it', () => {
     expect(computeStreak(daysFrom([true, true, false, false])).current).toBe(0);
   });
 
@@ -78,6 +83,29 @@ describe('computeStreak', () => {
     const s = computeStreak(daysFrom([true, true, true, true, false, true, false]));
     expect(s.best).toBe(4);
     expect(s.current).toBe(1);
+  });
+
+  test('a day under the goal still counts — this is the reported defect', () => {
+    // Every day logged, none anywhere near the 4,500 ml goal. Judged on
+    // `goalMet` this returned 0 and told a diligent user they had no streak.
+    const days = dailyTotals(
+      [log(3, 2000), log(2, 2200), log(1, 1800), log(0, 2500)],
+      4,
+      4500,
+      NOW
+    );
+    expect(days.every(d => !d.goalMet)).toBe(true);
+    expect(computeStreak(days).current).toBe(4);
+  });
+
+  test('a day with no entries breaks it however high the goal-day totals are', () => {
+    const days = dailyTotals([log(3, 9000), log(1, 9000), log(0, 9000)], 4, 2000, NOW);
+    // Day index 2 is empty, so the run back from today is today + yesterday.
+    expect(computeStreak(days).current).toBe(2);
+  });
+
+  test('no history at all is a streak of zero, not a crash', () => {
+    expect(computeStreak([])).toEqual({ current: 0, best: 0, todayLogged: false });
   });
 });
 
