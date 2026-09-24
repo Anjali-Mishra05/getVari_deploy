@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -160,9 +160,19 @@ const OnboardingScreen = ({ navigation }: any) => {
   const sleepHours = sleepDurationMinutes(sleepSchedule) / 60;
   const awakeHours = awakeHoursPerDay(sleepSchedule);
 
+  /**
+   * The scan's timers, held so a new scan — or leaving the screen — cancels
+   * the previous one. Left running, the old ten-second timeout would fire
+   * into a scan that had already been restarted and stop it early.
+   */
+  const scanFlushRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     return () => {
       manager.stopDeviceScan();
+      if (scanFlushRef.current) clearInterval(scanFlushRef.current);
+      if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
     };
   }, []);
 
@@ -430,57 +440,99 @@ const OnboardingScreen = ({ navigation }: any) => {
     setBleState('scanning');
     setErrorMsg('');
 
-    // Track if any device is found to avoid stale closure issues with 'devices' state
-    let foundAny = false;
+    /**
+     * The scan used to run its full ten seconds every time and re-render this
+     * screen on every advertisement packet. Three separate costs:
+     *
+     *  - it never stopped early, so finding the wearable in one second still
+     *    meant waiting nine more;
+     *  - `setDevices` was called per packet, and the RSSI branch fired a fresh
+     *    render whenever any nearby device's signal moved 5 dBm. With a dozen
+     *    BLE devices in range that is several full re-renders a second of a
+     *    screen carrying SVG gradients and entering animations;
+     *  - every device in range went into the list, so the user's own wearable
+     *    arrived somewhere in a pile of headphones and TVs.
+     *
+     * Results are now collected into a ref and flushed on an interval, the
+     * scan stops the moment a GetVari device appears, and GetVari devices sort
+     * to the top. The ten seconds is now only the ceiling for *not* finding it.
+     */
+    const found = new Map<string, Device>();
+    let dirty = false;
+
+    const isGetVariDevice = (device: Device): boolean =>
+      Boolean(
+        (device.serviceUUIDs && device.serviceUUIDs.includes(GETVARI_SERVICE_UUID)) ||
+          (device.name && device.name.toLowerCase().includes('getvari'))
+      );
+
+    /** The wearable first, then everything else strongest-signal first. */
+    const flush = () => {
+      if (!dirty) return;
+      dirty = false;
+      setDevices(
+        [...found.values()].sort((a, b) => {
+          const byKind = Number((b as any).isGetVari) - Number((a as any).isGetVari);
+          return byKind !== 0 ? byKind : (b.rssi ?? -999) - (a.rssi ?? -999);
+        })
+      );
+    };
+
+    const stop = (next: (current: string) => string) => {
+      manager.stopDeviceScan();
+      if (scanFlushRef.current) clearInterval(scanFlushRef.current);
+      if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
+      scanFlushRef.current = null;
+      scanTimeoutRef.current = null;
+      dirty = true;
+      flush();
+      setBleState(current => next(current) as typeof current);
+    };
 
     manager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
       if (error) {
         if (error.message.includes('powered off')) {
-          setBleState('bluetoothOff');
+          stop(() => 'bluetoothOff');
         } else {
           console.log('[Onboarding] BLE Scan Error:', error.message);
-          setBleState('error');
           setErrorMsg(error.message);
+          stop(() => 'error');
         }
-        manager.stopDeviceScan();
         return;
       }
 
-      if (device) {
-        foundAny = true;
-        setDevices((prevDevices) => {
-          const index = prevDevices.findIndex((d) => d.id === device.id);
-          if (index === -1) {
-            console.log('[Onboarding] Found new device:', device.name || 'Unnamed', device.id);
-            // Identify if this is a GetVari device based on UUID or Name
-            const isGetVari = (device.serviceUUIDs && device.serviceUUIDs.includes(GETVARI_SERVICE_UUID)) ||
-                             (device.name && device.name.toLowerCase().includes('getvari'));
+      if (!device) return;
 
-            (device as any).isGetVari = isGetVari;
-            return [...prevDevices, device];
-          } else {
-            // Update RSSI for existing device if it changed significantly
-            const oldDevice = prevDevices[index];
-            if (Math.abs((oldDevice.rssi || 0) - (device.rssi || 0)) > 5) {
-               const newDevices = [...prevDevices];
-               newDevices[index] = device;
-               return newDevices;
-            }
-          }
-          return prevDevices;
-        });
+      const known = found.get(device.id);
+      if (!known) {
+        (device as any).isGetVari = isGetVariDevice(device);
+        found.set(device.id, device);
+        dirty = true;
+        console.log('[Onboarding] Found new device:', device.name || 'Unnamed', device.id);
+
+        // The wearable is the whole point of this screen. Once it is in the
+        // list there is nothing left to wait for.
+        if ((device as any).isGetVari) {
+          stop(current => (current === 'scanning' ? 'devicesFound' : current));
+          return;
+        }
+      } else if (Math.abs((known.rssi || 0) - (device.rssi || 0)) > 5) {
+        (device as any).isGetVari = (known as any).isGetVari;
+        found.set(device.id, device);
+        dirty = true;
       }
     });
 
-    // Stop scanning after 10 seconds
-    setTimeout(() => {
-      manager.stopDeviceScan();
-      setBleState((current) => {
-        if (current === 'scanning') {
-          return foundAny ? 'idle' : 'noDevicesFound';
-        }
-        return current;
-      });
+    // Batched rather than per packet: the list only has to look live, and four
+    // updates a second is well past what anyone can read.
+    scanFlushRef.current = setInterval(flush, 250);
+
+    // The ceiling, not the duration — a scan that finds the wearable stops as
+    // soon as it does.
+    scanTimeoutRef.current = setTimeout(() => {
+      stop(current =>
+        current === 'scanning' ? (found.size > 0 ? 'devicesFound' : 'noDevicesFound') : current
+      );
     }, 10000);
   };
 
