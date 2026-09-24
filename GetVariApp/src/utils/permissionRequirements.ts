@@ -109,10 +109,10 @@ export const PERMISSION_REQUIREMENTS: PermissionRequirement[] = [
     hint: 'Turn on “Display over other apps” for GetVari.',
     stepsIntro: 'Seeing “App was denied access”? Android restricts this for apps installed outside the Play Store. To allow it:',
     steps: [
-      'Open Settings › Apps › GetVari.',
+      'Settings › Apps › App management › GetVari.',
       'Tap ⋮ (top right) › Allow restricted settings.',
       'Confirm with your PIN or fingerprint.',
-      'Come back here and tap Open settings again.',
+      'Return here and tap “Open settings”.',
       'Turn on “Display over other apps”.',
     ],
   },
