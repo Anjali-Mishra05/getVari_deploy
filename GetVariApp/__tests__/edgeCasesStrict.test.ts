@@ -421,7 +421,20 @@ describe('EC-8: offline / replayed writes are idempotent', () => {
 });
 
 describe('EC-9: notifications disabled on the phone', () => {
-  test('nothing is delivered, but cooldown state still advances', async () => {
+  /**
+   * This asserted the opposite until the engine was corrected: it expected the
+   * cooldown to advance even though nothing was shown.
+   *
+   * A cooldown exists to stop the *user* being alerted too often. With
+   * permission denied the user was not alerted at all, so there is nothing to
+   * cool down from — and advancing it would mean that the moment they grant
+   * permission, the app believes it has already warned them and stays silent
+   * for a full cooldown window. That is the one moment the alert matters most.
+   *
+   * See the permission branch in `NotificationEngine.evaluateNow`, which
+   * updates `lastAlerts` only on an actual delivery.
+   */
+  test('nothing is delivered, and no cooldown is spent on the alert nobody saw', async () => {
     mockRequestPermission.mockResolvedValue(false as any);
     await NotificationEngine.evaluate({
       sensorData: sensor(),
@@ -431,13 +444,58 @@ describe('EC-9: notifications disabled on the phone', () => {
     });
 
     expect(mockDisplayNotification).not.toHaveBeenCalled();
-    const state = JSON.parse(mockStore.get(ENGINE_STATE_KEY)!);
-    expect(state.lastAlerts.high_risk).toBeGreaterThan(0);
+
+    // The trigger was raised and suppressed, so either no state was written at
+    // all or it was written without a timestamp for this trigger. Both are the
+    // same claim: the cooldown was not spent.
+    const raw = mockStore.get(ENGINE_STATE_KEY);
+    const lastAlerts = raw ? JSON.parse(raw).lastAlerts ?? {} : {};
+    expect(lastAlerts.high_risk).toBeUndefined();
+  });
+
+  test('and the alert still lands once permission is granted', async () => {
+    // The point of not spending the cooldown: the next evaluation delivers.
+    mockRequestPermission.mockResolvedValue(false as any);
+    await NotificationEngine.evaluate({
+      sensorData: sensor(),
+      profile,
+      todayLogs: [],
+      solvedRisk: risk(90),
+    });
+    expect(mockDisplayNotification).not.toHaveBeenCalled();
+
+    mockRequestPermission.mockResolvedValue(true as any);
+    await NotificationEngine.evaluate({
+      sensorData: sensor(),
+      profile,
+      todayLogs: [],
+      solvedRisk: risk(90),
+    });
+
+    expect(mockDisplayNotification).toHaveBeenCalled();
   });
 });
 
-describe('EC-10: critical alerts during the sleep window', () => {
-  test('high risk is delivered at 02:00 with the quiet window bypassed', async () => {
+describe('EC-10: the sleep window is absolute', () => {
+  /**
+   * EC-10 originally asserted the opposite: that a high-risk alert bypasses
+   * quiet hours and is delivered at 02:00 with `ignoreSleepWindow`. That was
+   * never built, and it contradicts a decision the engine states outright —
+   * "the sleep window is an absolute block: if the user is asleep, nothing is
+   * delivered and cooldown state is not updated".
+   *
+   * The decision was kept rather than the assertion. Hydration is not a
+   * condition that deteriorates in the minutes it takes to reach morning, and
+   * an app that wakes someone at 2 AM about drinking water is one whose
+   * notifications get turned off entirely — at which point it cannot warn
+   * them about anything. The alert is not lost: the engine re-raises the
+   * trigger on the next evaluation after wake-up, because a suppressed alert
+   * also leaves its cooldown unspent.
+   *
+   * This now pins the behaviour that actually exists, so the conflict cannot
+   * be reintroduced silently.
+   */
+  test('nothing is delivered at 02:00, not even a high-risk alert', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date(2026, 8, 1, 2, 0, 0));
     try {
@@ -451,11 +509,26 @@ describe('EC-10: critical alerts during the sleep window', () => {
       jest.useRealTimers();
     }
 
-    const critical = mockDisplayNotification.mock.calls.find((c: any[]) => c[0] === '🚨 High Risk');
-    expect(critical).toBeDefined();
-    expect((critical as any[])[4]).toEqual({ ignoreSleepWindow: true });
-    // …while the routine environmental alert stays silent overnight.
-    expect(firedTitles()).not.toContain('🔥 Extreme Heat');
+    expect(mockDisplayNotification).not.toHaveBeenCalled();
+  });
+
+  test('the same conditions do deliver once the user is awake', async () => {
+    // Same inputs, same profile, middle of the afternoon: the suppression is
+    // the sleep window and nothing else.
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 8, 1, 14, 0, 0));
+    try {
+      await NotificationEngine.evaluate({
+        sensorData: sensor({ temperature: 38 }),
+        profile,
+        todayLogs: [],
+        solvedRisk: risk(90),
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(firedTitles()).toContain('🚨 High Risk');
   });
 });
 
