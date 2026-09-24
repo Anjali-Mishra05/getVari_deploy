@@ -66,7 +66,7 @@ describe('computeStreak', () => {
 
   test('counts back from today once something is logged', () => {
     const s = computeStreak(daysFrom([false, true, true, true]));
-    expect(s).toEqual({ current: 3, best: 3, todayLogged: true });
+    expect(s).toMatchObject({ current: 3, best: 3, todayLogged: true });
   });
 
   test('an empty today does not reset the streak', () => {
@@ -105,7 +105,71 @@ describe('computeStreak', () => {
   });
 
   test('no history at all is a streak of zero, not a crash', () => {
-    expect(computeStreak([])).toEqual({ current: 0, best: 0, todayLogged: false });
+    expect(computeStreak([])).toEqual({
+      current: 0,
+      best: 0,
+      todayLogged: false,
+      bestStart: null,
+      bestEnd: null,
+    });
+  });
+});
+
+describe('the best run names its days', () => {
+  const daysFrom = (logged: boolean[]) =>
+    dailyTotals(
+      logged.flatMap((l, i) => (l ? [log(logged.length - 1 - i, 250)] : [])),
+      logged.length,
+      2000,
+      NOW
+    );
+
+  test('the window spans exactly the best run', () => {
+    // 6 days: gap, then a 3-day run, then a gap, then today.
+    const days = daysFrom([false, true, true, true, false, true]);
+    const s = computeStreak(days);
+    expect(s.best).toBe(3);
+    expect(s.bestStart).toBe(days[1].start);
+    expect(s.bestEnd).toBe(days[3].start);
+  });
+
+  test('a one-day best starts and ends on the same day', () => {
+    const days = daysFrom([false, true, false]);
+    const s = computeStreak(days);
+    expect(s.best).toBe(1);
+    expect(s.bestStart).toBe(days[1].start);
+    expect(s.bestEnd).toBe(days[1].start);
+  });
+
+  test('the earliest of two equally long runs keeps the title', () => {
+    // Otherwise the dates under "Best" would move on their own, as a later
+    // run drew level with one the user had already been shown.
+    const days = daysFrom([true, true, false, true, true]);
+    const s = computeStreak(days);
+    expect(s.best).toBe(2);
+    expect(s.bestStart).toBe(days[0].start);
+    expect(s.bestEnd).toBe(days[1].start);
+  });
+
+  test('a run reaching today is still reported', () => {
+    const days = daysFrom([false, true, true]);
+    const s = computeStreak(days);
+    expect(s.bestEnd).toBe(days[2].start);
+  });
+
+  test('no logged day anywhere leaves the window empty', () => {
+    const s = computeStreak(daysFrom([false, false, false]));
+    expect(s.best).toBe(0);
+    expect(s.bestStart).toBeNull();
+    expect(s.bestEnd).toBeNull();
+  });
+
+  test('the window is always start <= end and spans `best` days', () => {
+    const days = daysFrom([true, false, true, true, true, true, false, true]);
+    const s = computeStreak(days);
+    expect(s.bestStart!).toBeLessThanOrEqual(s.bestEnd!);
+    const spanDays = Math.round((s.bestEnd! - s.bestStart!) / 86_400_000) + 1;
+    expect(spanDays).toBe(s.best);
   });
 });
 

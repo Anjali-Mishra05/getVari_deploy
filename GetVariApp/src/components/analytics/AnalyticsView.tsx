@@ -49,6 +49,27 @@ const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 /** Enough for the streak, the 30-day chart, the heatmap and last week's comparison. */
 const HISTORY_DAYS = 35;
 
+/**
+ * "12–16 May", or "16 May" for a single day.
+ *
+ * The month is dropped from the first date when both fall in the same one,
+ * because "12 May – 16 May" is two thirds punctuation. Years are never shown:
+ * the history is 35 days deep, so there is nothing to disambiguate.
+ */
+const describeRun = (startMs: number, endMs: number): string => {
+  const start = new Date(startMs);
+  const end = new Date(endMs);
+  const endLabel = end.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  if (startMs === endMs) return endLabel;
+
+  const sameMonth = start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
+  const startLabel = start.toLocaleDateString(
+    undefined,
+    sameMonth ? { day: 'numeric' } : { day: 'numeric', month: 'short' }
+  );
+  return `${startLabel}–${endLabel}`;
+};
+
 const MUTED = '#64748b';
 const FLAME = '#fb923c';
 const MET = '#34d399';
@@ -433,6 +454,8 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
   const [selectedBar, setSelectedBar] = useState<number | null>(null);
   const [selectedHour, setSelectedHour] = useState<number | null>(null);
   const [selectedCell, setSelectedCell] = useState<number | null>(null);
+  /** Local midnight of the streak day being inspected, or null for none. */
+  const [selectedStreakDay, setSelectedStreakDay] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     if (!userId) return;
@@ -468,6 +491,28 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
   const shownHour = selectedHour ?? (rhythm[peakHour] > 0 ? peakHour : null);
   const cellDay = selectedCell !== null ? heatDays[selectedCell] : null;
   const last7 = allDays.slice(-7);
+  const streakDay = selectedStreakDay === null
+    ? null
+    : allDays.find(day => day.start === selectedStreakDay) ?? null;
+
+  /**
+   * Tapping a day in the chain opens it, and points the intake chart at the
+   * same day.
+   *
+   * Two surfaces showing a different "selected day" at once is the confusing
+   * part of having both, so the chart follows. The detail itself is rendered
+   * here rather than by scrolling to the chart: this view returns a plain
+   * `View` into the dashboard's ScrollView, so it has nothing to scroll, and
+   * answering where the user tapped beats moving the screen under them.
+   */
+  const toggleStreakDay = useCallback(
+    (start: number) => {
+      setSelectedStreakDay(prev => (prev === start ? null : start));
+      const inRange = rangeDays.findIndex(day => day.start === start);
+      if (inRange !== -1) setSelectedBar(inRange);
+    },
+    [rangeDays]
+  );
 
   if (history === null) {
     return (
@@ -539,17 +584,43 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
               <Trophy color="#fbbf24" size={12} />
               <Text className="text-[10px] font-bold text-amber-300">
                 Best: {streak.best} {streak.best === 1 ? 'day' : 'days'}
+                {/* Named, not just counted: "Best: 5 days" is a number the
+                    user cannot place — they have no way to tell which five,
+                    or whether it was last week or in March. */}
+                {streak.bestStart !== null && streak.bestEnd !== null && (
+                  <Text className="text-[10px] font-bold text-amber-300/70">
+                    {'  ·  '}
+                    {describeRun(streak.bestStart, streak.bestEnd)}
+                  </Text>
+                )}
               </Text>
             </View>
           </View>
         </View>
 
-        {/* The last seven days as a chain of links. */}
+        {/* The last seven days as a chain of links. Each one opens that day.
+
+            The flame marks a day that was *logged*, not one that met the
+            goal: the streak counts logged days now, and a chain of empty
+            circles under a "4 days running" headline would simply look
+            broken. */}
         <View className="flex-row justify-between mt-5">
           {last7.map((day, i) => {
             const isToday = i === last7.length - 1;
+            const isLogged = day.entries > 0;
+            const isOpen = selectedStreakDay === day.start;
             return (
-              <View key={day.start} className="items-center">
+              <TouchableOpacity
+                key={day.start}
+                onPress={() => toggleStreakDay(day.start)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityState={{ selected: isOpen }}
+                accessibilityLabel={`${dayName(day, i, last7.length)}, ${formatVolume(day.totalMl)}${
+                  isLogged ? '' : ', nothing logged'
+                }`}
+                className="items-center"
+              >
                 <View
                   style={{
                     width: 30,
@@ -557,24 +628,75 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
                     borderRadius: 15,
                     alignItems: 'center',
                     justifyContent: 'center',
-                    backgroundColor: day.goalMet ? 'rgba(52,211,153,0.2)' : 'rgba(255,255,255,0.04)',
-                    borderWidth: isToday ? 1.5 : 1,
-                    borderColor: day.goalMet ? MET : isToday ? ACCENT : 'rgba(255,255,255,0.08)',
+                    backgroundColor: isOpen
+                      ? 'rgba(0,242,254,0.18)'
+                      : isLogged
+                      ? 'rgba(52,211,153,0.2)'
+                      : 'rgba(255,255,255,0.04)',
+                    borderWidth: isOpen || isToday ? 1.5 : 1,
+                    borderColor: isOpen
+                      ? ACCENT
+                      : isLogged
+                      ? MET
+                      : isToday
+                      ? ACCENT
+                      : 'rgba(255,255,255,0.08)',
                   }}
                 >
-                  {day.goalMet ? (
+                  {isLogged ? (
                     <Flame color={FLAME} size={14} fill={FLAME} fillOpacity={0.4} />
                   ) : (
                     <Text className="text-[9px] font-black text-neutral-500">{day.dayOfMonth}</Text>
                   )}
                 </View>
-                <Text className="text-[8px] font-black mt-1" style={{ color: isToday ? ACCENT : MUTED }}>
+                <Text
+                  className="text-[8px] font-black mt-1"
+                  style={{ color: isOpen ? ACCENT : isToday ? ACCENT : MUTED }}
+                >
                   {isToday ? 'TODAY' : day.label.toUpperCase()}
                 </Text>
-              </View>
+              </TouchableOpacity>
             );
           })}
         </View>
+
+        {/* The tapped day, opened where it was tapped. */}
+        {streakDay ? (
+          <View className="flex-row items-center mt-4 bg-white/[0.02] border border-white/5 rounded-2xl p-3">
+            <GoalRing
+              size={78}
+              progress={targetMl ? streakDay.totalMl / targetMl : 0}
+              label={targetMl ? `${Math.round((streakDay.totalMl / targetMl) * 100)}%` : '--'}
+              sub="of goal"
+            />
+            <View className="flex-1 ml-4">
+              <Text className="text-[10px] uppercase tracking-widest font-black text-neutral-500">
+                {dayName(streakDay, last7.findIndex(d => d.start === streakDay.start), last7.length)}
+              </Text>
+              <Text className="text-[20px] font-black text-white mt-0.5">
+                {formatVolume(streakDay.totalMl)}
+              </Text>
+              <Text className="text-[10px] text-neutral-400 mt-0.5">
+                {streakDay.entries} {streakDay.entries === 1 ? 'entry' : 'entries'}
+                {targetMl ? ` · goal ${formatVolume(targetMl)}` : ''}
+              </Text>
+              <Text
+                className="text-[10px] font-bold mt-1.5"
+                style={{ color: streakDay.goalMet ? MET : MUTED }}
+              >
+                {streakDay.entries === 0
+                  ? 'Nothing logged — this day breaks the streak'
+                  : streakDay.goalMet
+                  ? '✓ Goal reached'
+                  : targetMl
+                  ? `${formatVolume(Math.max(0, targetMl - streakDay.totalMl))} short of goal`
+                  : ''}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <Text className="text-[9px] text-neutral-500 text-center mt-3">Tap a day to see it</Text>
+        )}
       </GlassCard>
 
       {/* ---------------------------------------------------- This week */}

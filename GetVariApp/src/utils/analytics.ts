@@ -86,6 +86,20 @@ export interface StreakInfo {
   best: number;
   /** Whether anything has been logged today. */
   todayLogged: boolean;
+  /**
+   * Local midnight of the best run's first and last day, or null when there
+   * is no run at all.
+   *
+   * "Best: 5 days" on its own is a number the user cannot check or place —
+   * they have no way to tell *which* five, or whether it was last week or in
+   * March. The window is carried so the card can name the dates.
+   *
+   * The *earliest* longest run wins a tie, so the answer does not change as
+   * later days are added: a second equally long run should not silently
+   * relabel the record.
+   */
+  bestStart: number | null;
+  bestEnd: number | null;
 }
 
 /**
@@ -116,9 +130,19 @@ export const computeStreak = (days: DayTotal[]): StreakInfo => {
 
   let best = 0;
   let run = 0;
-  for (const day of days) {
-    run = logged(day) ? run + 1 : 0;
-    best = Math.max(best, run);
+  let bestStart: number | null = null;
+  let bestEnd: number | null = null;
+
+  for (let i = 0; i < days.length; i++) {
+    run = logged(days[i]) ? run + 1 : 0;
+    // Strictly greater, so the *earliest* longest run is kept. With `>=` a
+    // later run of equal length would take the title and the dates shown
+    // under "Best" would move for no reason the user did anything to cause.
+    if (run > best) {
+      best = run;
+      bestEnd = days[i].start;
+      bestStart = days[i - run + 1].start;
+    }
   }
 
   const todayLogged = days.length > 0 && logged(days[days.length - 1]);
@@ -127,7 +151,7 @@ export const computeStreak = (days: DayTotal[]): StreakInfo => {
     if (!logged(days[i])) break;
     current += 1;
   }
-  return { current, best, todayLogged };
+  return { current, best, todayLogged, bestStart, bestEnd };
 };
 
 export interface WeekSummary {
