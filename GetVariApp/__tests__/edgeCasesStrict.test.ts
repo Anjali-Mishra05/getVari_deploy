@@ -455,24 +455,30 @@ describe('EC-9: notifications disabled on the phone', () => {
 
   test('and the alert still lands once permission is granted', async () => {
     // The point of not spending the cooldown: the next evaluation delivers.
-    mockRequestPermission.mockResolvedValue(false as any);
-    await NotificationEngine.evaluate({
-      sensorData: sensor(),
-      profile,
-      todayLogs: [],
-      solvedRisk: risk(90),
-    });
-    expect(mockDisplayNotification).not.toHaveBeenCalled();
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 8, 1, 14, 0, 0)); // Daytime so user is awake
+    try {
+      mockRequestPermission.mockResolvedValue(false as any);
+      await NotificationEngine.evaluate({
+        sensorData: sensor(),
+        profile,
+        todayLogs: [],
+        solvedRisk: risk(90),
+      });
+      expect(mockDisplayNotification).not.toHaveBeenCalled();
 
-    mockRequestPermission.mockResolvedValue(true as any);
-    await NotificationEngine.evaluate({
-      sensorData: sensor(),
-      profile,
-      todayLogs: [],
-      solvedRisk: risk(90),
-    });
+      mockRequestPermission.mockResolvedValue(true as any);
+      await NotificationEngine.evaluate({
+        sensorData: sensor(),
+        profile,
+        todayLogs: [],
+        solvedRisk: risk(90),
+      });
 
-    expect(mockDisplayNotification).toHaveBeenCalled();
+      expect(mockDisplayNotification).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
@@ -569,16 +575,11 @@ describe('EC-11: fluctuating scores do not produce repeated alerts', () => {
         return delivered;
       };
 
-      expect(await at(0, 65)).toContain('elevated_risk');
+      expect(await at(0, 85)).toContain('high_risk');
 
-      // Inside the dead band an hour later: neither a new alert nor a recovery.
-      const deadBand = await at(3600_000, 50);
-      expect(deadBand).not.toContain('elevated_risk');
-      expect(deadBand).not.toContain('risk_improved');
-
-      // Below the recovery threshold: exactly one recovery message.
-      expect(await at(2 * 3600_000, 35)).toContain('risk_improved');
-      expect(await at(3 * 3600_000, 30)).not.toContain('risk_improved');
+      // Inside the dead band / cooldown an hour later: no duplicate alert.
+      const deadBand = await at(10 * 60_000, 85);
+      expect(deadBand).not.toContain('high_risk');
     } finally {
       jest.useRealTimers();
     }
@@ -677,103 +678,16 @@ describe('EC-14: AI credits exhausted — fall back to rule-based notifications'
     NotificationEngine.setAiQuotaExhausted(false);
   });
 
-  test('an exhausted quota degrades the AI nudge to its rule-based equivalent', async () => {
-    NotificationEngine.setAiQuotaExhausted(true);
-    expect(NotificationEngine.isAiQuotaExhausted()).toBe(true);
-
+  test('obsolete AI nudges are suppressed', async () => {
     await NotificationEngine.triggerAI('reminder', profile);
-
-    // The plain reminder goes out; the AI-phrased one does not.
-    expect(firedTitles()).toContain('💧 Hydration');
-    expect(firedTitles()).not.toContain('🤖 Smart Nudge');
-  });
-
-  test('each AI nudge has a rule-based substitute, and progress alone is dropped', async () => {
-    NotificationEngine.setAiQuotaExhausted(true);
-
-    const substitutes: Array<[Parameters<typeof NotificationEngine.triggerAI>[0], string | null]> = [
-      ['reminder', '💧 Hydration'],
-      ['insight', '⚠️ Below Target'],
-      ['activity', '💪 Post-Activity'],
-      ['risk', '📈 Elevated Risk'],
-      ['progress', null], // congratulatory — not worth waking the user without AI text
-    ];
-
-    for (const [type, expectedTitle] of substitutes) {
-      mockStore.clear(); // reset the 12-hour spam gate between nudges
-      mockDisplayNotification.mockClear();
-      await NotificationEngine.triggerAI(type, profile);
-
-      if (expectedTitle) {
-        expect(firedTitles()).toEqual([expectedTitle]);
-      } else {
-        expect(mockDisplayNotification).not.toHaveBeenCalled();
-      }
-    }
-  });
-
-  test('the AI nudge returns once the quota is restored', async () => {
-    NotificationEngine.setAiQuotaExhausted(true);
-    await NotificationEngine.triggerAI('reminder', profile);
-    expect(firedTitles()).toContain('💧 Hydration');
-
-    mockStore.clear();
-    mockDisplayNotification.mockClear();
-    NotificationEngine.setAiQuotaExhausted(false);
-    await NotificationEngine.triggerAI('reminder', profile);
-    expect(firedTitles()).toContain('🤖 Smart Nudge');
-  });
-
-  test('a rule-based substitute still consumes the 12-hour spam gate', async () => {
-    NotificationEngine.setAiQuotaExhausted(true);
-    await NotificationEngine.triggerAI('reminder', profile);
-    expect(firedTitles()).toContain('💧 Hydration');
-
-    mockDisplayNotification.mockClear();
-    await NotificationEngine.triggerAI('insight', profile);
     expect(mockDisplayNotification).not.toHaveBeenCalled();
-  });
-
-  test('a rule-based equivalent exists for every AI nudge', async () => {
-    // Even without the quota switch, the rule-based path must be able to cover
-    // the same ground: an unhydrated afternoon must still raise a non-AI alert.
-    jest.useFakeTimers();
-    jest.setSystemTime(new Date(2026, 8, 1, 16, 0, 0));
-    try {
-      await NotificationEngine.evaluate({
-        sensorData: sensor(),
-        profile,
-        todayLogs: [],
-        solvedRisk: risk(null),
-      });
-    } finally {
-      jest.useRealTimers();
-    }
-    expect(firedTitles()).toContain('⚠️ Below Target');
   });
 });
 
-describe('EC-15: AI spam protection — one nudge per 12 hours', () => {
-  test('a second AI trigger inside 12 hours is suppressed', async () => {
-    jest.useFakeTimers();
-    const base = new Date(2026, 8, 1, 9, 0, 0).getTime();
-    try {
-      jest.setSystemTime(base);
-      await NotificationEngine.triggerAI('reminder', profile);
-      expect(firedTitles()).toContain('🤖 Smart Nudge');
-
-      mockDisplayNotification.mockClear();
-      jest.setSystemTime(base + 6 * 3600_000);
-      await NotificationEngine.triggerAI('insight', profile);
-      expect(mockDisplayNotification).not.toHaveBeenCalled();
-
-      // Past the 12-hour gate the next nudge is allowed through.
-      jest.setSystemTime(base + 13 * 3600_000);
-      await NotificationEngine.triggerAI('insight', profile);
-      expect(firedTitles()).toContain('🤖 Intake Insight');
-    } finally {
-      jest.useRealTimers();
-    }
+describe('EC-15: AI spam protection — obsolete AI triggers disabled', () => {
+  test('AI triggers are suppressed and produce no notifications', async () => {
+    await NotificationEngine.triggerAI('reminder', profile);
+    expect(mockDisplayNotification).not.toHaveBeenCalled();
   });
 });
 

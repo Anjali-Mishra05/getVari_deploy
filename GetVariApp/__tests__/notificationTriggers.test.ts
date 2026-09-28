@@ -217,6 +217,7 @@ interface Scenario {
     activeStartTimestamp?: number | null;
     inactiveStartTimestamp?: number | null;
     lastDeliveredAt?: number;
+    riskAlertActive?: boolean;
   };
 }
 
@@ -231,6 +232,7 @@ const evaluate = async (s: Scenario): Promise<NotificationOutcome> => {
         activeStartTimestamp: s.state.activeStartTimestamp ?? null,
         inactiveStartTimestamp: s.state.inactiveStartTimestamp ?? null,
         lastDeliveredAt: s.state.lastDeliveredAt ?? 0,
+        riskAlertActive: s.state.riskAlertActive ?? false,
       })
     );
   }
@@ -307,8 +309,8 @@ describe('Notification triggers N1-N24', () => {
     expect(raised).not.toContain('regular_reminder');
   });
 
-  test('N2: low_intake_12pm fires at noon below 50% of target', async () => {
-    const raised = await raise({ at: TUESDAY(12), logs: [logAt(1, 500)] });
+  test('N2: low_intake_12pm fires at the midpoint of the awake day below 50% of target', async () => {
+    const raised = await raise({ at: TUESDAY(15), logs: [logAt(1, 500)] });
     expect(raised).toContain('low_intake_12pm');
   });
 
@@ -317,14 +319,16 @@ describe('Notification triggers N1-N24', () => {
     expect(raised).not.toContain('low_intake_12pm');
   });
 
-  test('N3: below_target_4pm fires at 16:00 below 70% of target', async () => {
+  test('N3: simulated notifications are scheduled, not raised dynamically by evaluate()', async () => {
     const raised = await raise({ at: TUESDAY(16), logs: [logAt(1, 1000)] });
-    expect(raised).toContain('below_target_4pm');
+    expect(raised).not.toContain('below_target_4pm');
+    expect(raised).not.toContain('focus_alert');
+    expect(raised).not.toContain('priority_alert');
   });
 
-  test('N4: no_water_3h fires when the newest log is over 3 hours old', async () => {
+  test('N4: the old 3-hour hydration-gap trigger is disabled', async () => {
     const raised = await raise({ at: TUESDAY(14), logs: [logAt(4, 250)] });
-    expect(raised).toContain('no_water_3h');
+    expect(raised).not.toContain('no_water_3h');
   });
 
   test('N4b: no_water_3h stays silent inside the 3-hour window', async () => {
@@ -337,50 +341,25 @@ describe('Notification triggers N1-N24', () => {
     expect(raised).toContain('goal_achieved');
   });
 
-  test('N6: elevated_risk fires at score 60-79', async () => {
+  test('N6: elevated_risk is scheduled via clock-time simulation, not raised by evaluate()', async () => {
     const raised = await raise({ at: TUESDAY(14), score: 65, logs: [logAt(1, 900)] });
-    expect(raised).toContain('elevated_risk');
-    expect(raised).not.toContain('high_risk');
+    expect(raised).not.toContain('elevated_risk');
   });
 
   test('N7: high_risk fires at score >= 80', async () => {
     const raised = await raise({ at: TUESDAY(14), score: 85, logs: [logAt(1, 900)] });
     expect(raised).toContain('high_risk');
-    expect(raised).not.toContain('elevated_risk');
   });
 
-  test('N8: risk_improved fires after a risk alert once the score drops below 40', async () => {
+  test('N8: risk_improved is scheduled via clock-time simulation, not raised by evaluate()', async () => {
     const now = TUESDAY(14).getTime();
     const raised = await raise({
       at: TUESDAY(14),
       score: 30,
       logs: [logAt(1, 900)],
-      state: { lastAlerts: { high_risk: now - 3600_000 } },
+      state: { lastAlerts: { high_risk: now - 3600_000 }, riskAlertActive: true },
     });
-    expect(raised).toContain('risk_improved');
-  });
-
-  test('N9: post_activity fires after 30+ minutes of sustained activity', async () => {
-    const now = TUESDAY(14).getTime();
-    const raised = await raise({
-      at: TUESDAY(14),
-      sensor: { activityLoad: 60 },
-      logs: [logAt(1, 900)],
-      state: { activeStartTimestamp: now - 35 * 60_000 },
-    });
-    expect(raised).toContain('post_activity');
-  });
-
-  test('N10: long_activity fires after 60+ minutes of sustained activity', async () => {
-    const now = TUESDAY(14).getTime();
-    const raised = await raise({
-      at: TUESDAY(14),
-      sensor: { activityLoad: 60 },
-      logs: [logAt(1, 900)],
-      state: { activeStartTimestamp: now - 70 * 60_000 },
-    });
-    expect(raised).toContain('long_activity');
-    expect(raised).not.toContain('post_activity');
+    expect(raised).not.toContain('risk_improved');
   });
 
   test('N11: high_temp fires between 30 and 35 °C', async () => {
@@ -389,36 +368,15 @@ describe('Notification triggers N1-N24', () => {
     expect(raised).not.toContain('extreme_heat');
   });
 
-  test('N12: extreme_heat fires at or above 35 °C', async () => {
+  test('N12: extreme_heat is not part of the current notification specification', async () => {
     const raised = await raise({ at: TUESDAY(14), sensor: { temperature: 38 }, logs: [logAt(1, 900)] });
-    expect(raised).toContain('extreme_heat');
+    expect(raised).not.toContain('extreme_heat');
     expect(raised).not.toContain('high_temp');
   });
 
   test('N13: high_humidity fires at or above 70% RH', async () => {
     const raised = await raise({ at: TUESDAY(14), sensor: { humidity: 80 }, logs: [logAt(1, 900)] });
     expect(raised).toContain('high_humidity');
-  });
-
-  test('N14: inactivity fires after 3 hours below the activity floor', async () => {
-    const now = TUESDAY(14).getTime();
-    const raised = await raise({
-      at: TUESDAY(14),
-      sensor: { activityLoad: 5 },
-      logs: [logAt(1, 900)],
-      state: { inactiveStartTimestamp: now - 4 * 3600_000 },
-    });
-    expect(raised).toContain('inactivity');
-  });
-
-  test('N15: low_battery fires at or below 20%', async () => {
-    const raised = await raise({ at: TUESDAY(14), sensor: { batteryLevel: 15 }, logs: [logAt(1, 900)] });
-    expect(raised).toContain('low_battery');
-  });
-
-  test('N16: fully_charged fires at exactly 100%', async () => {
-    const raised = await raise({ at: TUESDAY(14), sensor: { batteryLevel: 100 }, logs: [logAt(1, 900)] });
-    expect(raised).toContain('fully_charged');
   });
 
   // N17/N18 — the 07:00 and 22:00 messages are queued with the OS by
@@ -450,29 +408,13 @@ describe('Notification triggers N1-N24', () => {
     expect(summary).toBeUndefined();
   });
 
-  test('N20: ai_reminder fires when nothing is logged past 10:00', async () => {
+  test('N20-N24: obsolete/AI triggers are not raised by evaluate()', async () => {
     const raised = await raise({ at: TUESDAY(11), logs: [] });
-    expect(raised).toContain('ai_reminder');
-  });
-
-  test('N21: ai_insight fires past 14:00 below 30% of target', async () => {
-    const raised = await raise({ at: TUESDAY(15), logs: [logAt(1, 600)] });
-    expect(raised).toContain('ai_insight');
-  });
-
-  test('N22: ai_activity fires on exertion above 70', async () => {
-    const raised = await raise({ at: TUESDAY(15), sensor: { activityLoad: 80 }, logs: [logAt(1, 1200)] });
-    expect(raised).toContain('ai_activity');
-  });
-
-  test('N23: ai_risk fires on a pattern risk score above 50', async () => {
-    const raised = await raise({ at: TUESDAY(15), score: 55, logs: [logAt(1, 1200)] });
-    expect(raised).toContain('ai_risk');
-  });
-
-  test('N24: ai_progress fires near target with a low risk score', async () => {
-    const raised = await raise({ at: TUESDAY(18), score: 15, logs: [logAt(1, 2300)] });
-    expect(raised).toContain('ai_progress');
+    expect(raised).not.toContain('ai_reminder');
+    expect(raised).not.toContain('ai_insight');
+    expect(raised).not.toContain('ai_activity');
+    expect(raised).not.toContain('ai_risk');
+    expect(raised).not.toContain('ai_progress');
   });
 });
 
@@ -494,28 +436,16 @@ describe('Notification delivery rules', () => {
     expect(third).toContain('high_risk');
   });
 
-  test('environmental alerts respect the 3-hour cooldown', async () => {
+  test('environmental alerts are limited to once per day', async () => {
     // Enough logged that no intake alert competes for the one delivery slot.
-    const first = await fire({ at: TUESDAY(12), sensor: { temperature: 38 }, logs: [logAt(1, 2000)] });
-    expect(first).toContain('extreme_heat');
+    const first = await fire({ at: TUESDAY(12), sensor: { temperature: 31 }, logs: [logAt(1, 2000)] });
+    expect(first).toContain('high_temp');
 
-    const second = await fire({ at: TUESDAY(13), sensor: { temperature: 38 }, logs: [logAt(1, 2000)] });
-    expect(second).not.toContain('extreme_heat');
+    const second = await fire({ at: TUESDAY(13), sensor: { temperature: 31 }, logs: [logAt(1, 2000)] });
+    expect(second).not.toContain('high_temp');
 
-    const third = await fire({ at: TUESDAY(15, 30), sensor: { temperature: 38 }, logs: [logAt(1, 2000)] });
-    expect(third).toContain('extreme_heat');
-  });
-
-  test('low_battery respects the 6-hour cooldown', async () => {
-    expect(await raise({ at: TUESDAY(9), sensor: { batteryLevel: 10 }, logs: [logAt(1, 900)] })).toContain(
-      'low_battery'
-    );
-    expect(await raise({ at: TUESDAY(13), sensor: { batteryLevel: 10 }, logs: [logAt(1, 900)] })).not.toContain(
-      'low_battery'
-    );
-    expect(await raise({ at: TUESDAY(16), sensor: { batteryLevel: 10 }, logs: [logAt(1, 900)] })).toContain(
-      'low_battery'
-    );
+    const third = await fire({ at: new Date(2026, 8, 2, 12), sensor: { temperature: 31 }, logs: [logAt(1, 2000)] });
+    expect(third).toContain('high_temp');
   });
 
   test('goal_achieved is delivered at most once per day', async () => {
@@ -523,19 +453,10 @@ describe('Notification delivery rules', () => {
     expect(await fire({ at: TUESDAY(19), logs: [logAt(1, 2600)] })).not.toContain('goal_achieved');
   });
 
-  test('AI nudges are limited to one per 12 hours', async () => {
-    expect(await fire({ at: TUESDAY(11), logs: [] })).toContain('ai_reminder');
-    // A different AI trigger, 4 hours later — the shared 12h gate must hold it.
-    const later = await fire({ at: TUESDAY(15), logs: [logAt(1, 600)] });
-    expect(later.filter(t => t.startsWith('ai_'))).toHaveLength(0);
-  });
-
   test('routine notifications are muted inside the sleep window', async () => {
     // 02:00, inside the default 23:00-07:00 window.
     const fired = await fire({ at: TUESDAY(2), sensor: { temperature: 38 }, logs: [logAt(5, 2600)] });
-    expect(fired).not.toContain('extreme_heat');
     expect(fired).not.toContain('goal_achieved');
-    expect(fired).not.toContain('no_water_3h');
   });
 
   test('critical risk alerts are raised during sleep but NOT delivered', async () => {
@@ -559,12 +480,6 @@ describe('Notification delivery rules', () => {
   });
 
   test('the stored quiet window silences the app even with none on the profile', async () => {
-    // The bug this covers: the engine used to decide quiet hours from
-    // `profile.sleepSchedule` alone, so a profile that simply does not carry
-    // the field — an older row, or a load that came back partial — read as
-    // "this user is never asleep", and every condition below became
-    // deliverable at three in the morning. `NotificationService` knew the
-    // window the whole time; nothing asked it.
     mockIsSleeping.mockResolvedValue(true as any);
 
     const fired = await fire({
@@ -579,8 +494,6 @@ describe('Notification delivery rules', () => {
   });
 
   test('a window on the profile still silences the app on its own', async () => {
-    // The other direction: the service has nothing stored (a fresh install
-    // that has not had the profile handed to it yet), the profile does.
     mockIsSleeping.mockResolvedValue(false as any);
     const fired = await fire({ at: TUESDAY(2), sensor: { temperature: 38 }, score: 85 });
     expect(fired).toHaveLength(0);
@@ -600,66 +513,22 @@ describe('Notification delivery rules', () => {
     expect(persisted.lastAlerts?.high_risk).toBeUndefined();
   });
 
-  test('a missing sensor reading raises no environmental or device alert', async () => {
+  test('a missing sensor reading raises no environmental alert', async () => {
     const fired = await fire({
       at: TUESDAY(14),
       sensor: { temperature: null, humidity: null, batteryLevel: null, activityLoad: null },
       logs: [logAt(1, 1200)],
     });
     expect(fired).not.toContain('high_temp');
-    expect(fired).not.toContain('extreme_heat');
     expect(fired).not.toContain('high_humidity');
-    expect(fired).not.toContain('low_battery');
-    expect(fired).not.toContain('inactivity');
   });
 });
 
 // ---------------------------------------------------------------------------
-// Repeat suppression and burst control
-//
-// HomeScreen re-evaluates the engine on every telemetry tick, and
-// `useHydrationTelemetry` ticks every 2 seconds (TICK_MS). Two things have to
-// hold under that: a condition that stays true must not re-notify on every
-// tick, and several conditions coming true at once must not arrive as one
-// clump the moment the dashboard mounts.
+// Burst control & Login quiet window
 // ---------------------------------------------------------------------------
-
-describe('Repeat suppression', () => {
-  // 2000 mL logged an hour ago keeps the intake rules quiet, so the activity
-  // alert is the only thing in play and reaches the user on the first tick.
-  const activeSince = (minutes: number) => ({
-    at: TUESDAY(14),
-    sensor: { activityLoad: 60 },
-    logs: [logAt(1, 2000)],
-    state: { activeStartTimestamp: TUESDAY(14).getTime() - minutes * 60_000 },
-  });
-
-  test('post_activity is delivered once per session, not on every tick', async () => {
-    expect((await evaluate(activeSince(35))).delivered).toEqual(['post_activity']);
-
-    // Two seconds later the activity window is still open, so the condition
-    // still holds — the user must not be told a second time.
-    const tick = await evaluate({ ...activeSince(35), at: TUESDAY(14, 0), state: undefined });
-    expect(tick.raised).not.toContain('post_activity');
-
-    // Nor once the spacing floor has expired: the session has had its alert.
-    const later = await evaluate({ ...activeSince(35), at: TUESDAY(14, 30), state: undefined });
-    expect(later.delivered).not.toContain('post_activity');
-  });
-
-  test('long_activity is delivered once per session, not on every tick', async () => {
-    expect((await evaluate(activeSince(70))).delivered).toEqual(['long_activity']);
-
-    const tick = await evaluate({ ...activeSince(70), at: TUESDAY(14, 0), state: undefined });
-    expect(tick.raised).not.toContain('long_activity');
-
-    const later = await evaluate({ ...activeSince(70), at: TUESDAY(14, 30), state: undefined });
-    expect(later.delivered).not.toContain('long_activity');
-  });
-});
 
 describe('Burst control', () => {
-  /** Hot, humid, three hours dry and behind on the day: one moment. */
   const clump = {
     at: TUESDAY(14),
     sensor: { temperature: 38, humidity: 85 },
@@ -669,29 +538,10 @@ describe('Burst control', () => {
   test('several simultaneous conditions deliver only one notification', async () => {
     const { raised, delivered } = await evaluate(clump);
 
-    const expected = ['extreme_heat', 'high_humidity', 'no_water_3h', 'low_intake_12pm'];
+    const expected = ['high_humidity'];
     expect(raised).toEqual(expect.arrayContaining(expected));
-    // A login used to deliver every raised condition in the same second.
     expect(delivered).toHaveLength(1);
     expect(delivered[0]).toBe(raised[0]);
-  });
-
-  test('nothing else is delivered within 15 minutes of the last notification', async () => {
-    await evaluate(clump);
-
-    const held = await evaluate({ ...clump, at: TUESDAY(14, 5) });
-    expect(held.raised.length).toBeGreaterThan(0);
-    expect(held.delivered).toHaveLength(0);
-
-    // Past the gap, the next still-true condition goes out, one at a time.
-    const next = await evaluate({ ...clump, at: TUESDAY(14, 16) });
-    expect(next.delivered).toHaveLength(1);
-  });
-
-  test('a high risk alert is exempt from the gap', async () => {
-    await evaluate(clump);
-    const critical = await evaluate({ ...clump, at: TUESDAY(14, 2), score: 90 });
-    expect(critical.delivered).toEqual(['high_risk']);
   });
 
   test('right after login nothing but a high risk alert is delivered for 5 minutes', async () => {
@@ -713,7 +563,6 @@ describe('Burst control', () => {
   });
 
   test('overlapping evaluations at login do not each deliver', async () => {
-    // Several telemetry ticks land together when the dashboard mounts.
     const results = await Promise.all([evaluate(clump), evaluate(clump), evaluate(clump)]);
     const total = results.reduce((n, r) => n + r.delivered.length, 0);
     expect(total).toBe(1);
@@ -721,118 +570,48 @@ describe('Burst control', () => {
 });
 
 // ---------------------------------------------------------------------------
-// What the delivered notifications actually say
+// Immutable Excel Notification Copy Verification
 // ---------------------------------------------------------------------------
 
 describe('Notification wording', () => {
-  /**
-   * A world where both indices are in their first band.
-   *
-   * FDI = 0.6·50 + 0.4·TTL(20 min) = 30 + 10 = 40, which classifies as "Focus
-   * Slipping"; CDI = 0.55·50 + 0.25·0 + 0.20·60 (the 14:00 circadian band) =
-   * 39.5, "Cognitive Decline Risk". Both sit 20 points below the severe edge,
-   * so both project the same 45-minute lead.
-   */
-  const slippingWorld = {
-    at: TUESDAY(14),
-    score: 50,
-    sensor: { lastSignificantMotionMinutesAgo: 20 },
-  } as const;
-
-  test('a focus alert states when the drop could happen, and the risk behind it', async () => {
-    await evaluate(slippingWorld);
-    const body = bodyOf('🧭 Focus Slipping');
-
-    expect(body).toContain('Focus may slip within 45 min.');
-    expect(body).toContain('Risk 50.');
-    expect(body!.split(/\s+/).length).toBeLessThanOrEqual(15);
-  });
-
-  test('a cognitive alert reads the same way, from its own index', async () => {
-    // No motion reading, so only the cognitive index can fire.
-    await evaluate({
-      ...slippingWorld,
-      sensor: { lastSignificantMotionMinutesAgo: null },
-    });
-    const body = bodyOf('💧 Cognitive Decline Risk');
-
-    expect(body).toContain('Sharpness may dip within 45 min.');
-    expect(body).toContain('Risk 50.');
-    expect(body!.split(/\s+/).length).toBeLessThanOrEqual(15);
-  });
-
-  test('a deeper index brings the forecast forward', async () => {
-    // 90 risk and an hour and a half without significant motion: FDI = 0.6·90
-    // + 0.4·80 = 86, already past the severe edge.
-    await evaluate({
-      at: TUESDAY(14),
-      score: 90,
-      sensor: { lastSignificantMotionMinutesAgo: 91 },
-      // The high risk alert outranks it; put that on cooldown.
-      state: { lastAlerts: { high_risk: TUESDAY(14).getTime() } },
-    });
-
-    expect(bodyOf('🚨 Focus Alert')).toContain('Focus could drop sharply within 15 min.');
-  });
-
-  test('every hydration notification carries the score it was raised over', async () => {
+  test('high_risk carries the exact Excel copy', async () => {
     await evaluate({ at: TUESDAY(14), score: 85, logs: [logAt(4, 900)] });
 
-    const risky = bodies().filter(body => !/battery|charged/i.test(body));
-    expect(risky.length).toBeGreaterThan(0);
-    for (const body of risky) {
-      expect(body).toContain('Hydration risk 85');
-    }
+    const highRiskMsg = bodyOf('🚨 High Risk');
+    expect(highRiskMsg).toBe('High hydration risk detected. Please hydrate immediately and follow the recommended water intake.');
   });
 
-  test('a notification raised with no score states none', async () => {
-    // "Insufficient Data" is a null score. A 0 printed here would read as
-    // perfect hydration, which is the opposite of what it means.
-    await evaluate({ at: TUESDAY(14), score: null, sensor: { temperature: 38 } });
+  test('Stale risk_improved in pendingTriggers is NOT delivered when risk rises to 85', async () => {
+    jest.setSystemTime(TUESDAY(14));
+    mockDisplayNotification.mockClear();
 
-    for (const body of bodies()) {
-      expect(body).not.toContain('Hydration risk');
-    }
-  });
+    // Seed state with pendingTriggers: ['risk_improved'], riskAlertActive: true
+    mockStore.set(
+      ENGINE_STATE_KEY,
+      JSON.stringify({
+        lastAlerts: {},
+        activeStartTimestamp: null,
+        inactiveStartTimestamp: null,
+        lastDeliveredAt: 0,
+        riskAlertActive: true,
+        pendingTriggers: ['risk_improved'],
+      })
+    );
 
-  test('the device messages stay about the device', async () => {
-    // Only the battery condition is true, so it is the one delivered.
-    await evaluate({
-      at: TUESDAY(14),
-      score: 30,
-      logs: [logAt(0.5, 2000)],
-      sensor: { batteryLevel: 15 },
-      state: { lastAlerts: { cognitive_decline: TUESDAY(14).getTime() } },
+    // Evaluate with high risk score (85)
+    const outcome = await NotificationEngine.evaluate({
+      sensorData: baseSensor(),
+      profile: baseProfile(),
+      todayLogs: [],
+      solvedRisk: risk(85),
     });
-    expect(bodyOf('🔋 Low Battery')).toBeDefined();
-    expect(bodyOf('🔋 Low Battery')).not.toContain('Hydration risk');
-  });
 
-  test('nothing the engine can send claims certainty', async () => {
-    // One sweep across the conditions that reach the message table, asserting
-    // the product rule directly: forecasts and advice are hedged with "may"
-    // or "could", and the words that overstate what the app knows never
-    // appear. The table is edited far more often than the code that reads it.
-    const worlds: Scenario[] = [
-      { at: TUESDAY(14), score: 85, logs: [logAt(4, 900)], sensor: { temperature: 38, humidity: 80, batteryLevel: 15 } },
-      { at: TUESDAY(14), score: 50, sensor: { lastSignificantMotionMinutesAgo: 20 } },
-      { at: TUESDAY(14), score: 90, sensor: { lastSignificantMotionMinutesAgo: 91 } },
-      { at: TUESDAY(12, 30), score: 30, logs: [logAt(1, 200)] },
-      { at: TUESDAY(17), score: 30, logs: [logAt(1, 900)] },
-      { at: TUESDAY(14), score: 10, logs: [logAt(1, 3000)], sensor: { batteryLevel: 100 } },
-      { at: MONDAY(9), score: 45, logs: [logAt(2, 500)] },
-    ];
+    expect(outcome.delivered).not.toContain('risk_improved');
+    expect(outcome.delivered).toContain('high_risk');
 
-    const seen: string[] = [];
-    for (const world of worlds) {
-      mockStore.clear();
-      await evaluate(world);
-      seen.push(...bodies());
-    }
-
-    expect(seen.length).toBeGreaterThan(5);
-    for (const body of seen) {
-      expect({ body, offender: unhedgedWord(body) }).toEqual({ body, offender: null });
-    }
+    // Verify risk_improved was removed from state's pendingTriggers
+    const state = JSON.parse(mockStore.get(ENGINE_STATE_KEY) || '{}');
+    expect(state.pendingTriggers).not.toContain('risk_improved');
   });
 });
+

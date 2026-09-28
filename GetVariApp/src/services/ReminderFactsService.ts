@@ -90,6 +90,7 @@ export const gatherReminderFacts = async (userId?: string | null): Promise<Remin
   try {
     const profile = await ProfileService.fetchProfile(id);
     if (profile) {
+      facts.fullName = profile.fullName;
       const averages = await TelemetryHistoryService.getAverages(7, id, profile);
       const risk = HydrationRiskEngine.solveRisk(
         {

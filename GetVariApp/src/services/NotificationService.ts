@@ -28,13 +28,7 @@ import { NativeModules, Platform } from 'react-native';
 import ActiveReminder from './ActiveReminder';
 import NotificationHistory from './NotificationHistory';
 import { primaryQuickAmount } from '../utils/hydrationAmounts';
-import {
-  GENERIC_REMINDER_BODY,
-  genericReminderBody,
-  REMINDER_TITLE,
-  buildReminderContent,
-  type ReminderFacts,
-} from '../utils/reminderContent';
+import type { ReminderFacts } from '../utils/reminderContent';
 import {
   DEFAULT_SLEEP_SCHEDULE,
   SleepSchedule,
@@ -45,6 +39,8 @@ import {
   parseClock,
 } from '../utils/sleepWindow';
 import type { NotificationKind } from '../types';
+import buildNotificationContent from '../utils/notificationContent';
+import type { NotificationTrigger } from './NotificationEngine';
 
 /**
  * Channel id carries a version, because Android notification channels are
@@ -107,8 +103,13 @@ export const NOTIFICATION_SNOOZE_MIN = 15;
  * hand — a background handler, a cold start, the headless delivery task.
  */
 const SLEEP_SCHEDULE_KEY = 'getvari_sleep_schedule';
+const NOTIFICATION_RECIPIENT_KEY = 'getvari_notification_recipient';
 /** Cap on replayable background presses, so the queue cannot grow unbounded. */
 const PENDING_PROMPT_LIMIT = 10;
+
+/** Key and cap for persisted processed event ids (deduplication registry). */
+const PROCESSED_EVENTS_KEY = 'getvari_processed_notification_events';
+const PROCESSED_EVENTS_LIMIT = 100;
 
 /**
  * Reminders repeat every 2 hours while the user has nothing logged — N1 in the
@@ -178,6 +179,127 @@ export const HYDRATION_REMINDER_TYPE = 'hydration_reminder';
 export const DAILY_MESSAGE_TYPE = 'daily_message';
 const DAILY_ID_PREFIX = 'getvari-daily-';
 
+export const SIMULATED_ID_PREFIX = 'getvari-simulated-';
+
+export interface SimulatedSlot {
+  hour: number;
+  minute: number;
+  trigger: NotificationTrigger;
+  type: string;
+}
+
+export const SIMULATED_SCHEDULE_SLOTS: SimulatedSlot[] = [
+  { hour: 9, minute: 0, trigger: 'regular_reminder', type: HYDRATION_REMINDER_TYPE },
+  { hour: 11, minute: 0, trigger: 'elevated_risk', type: 'simulated_alert' },
+  { hour: 11, minute: 30, trigger: 'risk_improved', type: 'simulated_alert' },
+  { hour: 12, minute: 30, trigger: 'focus_alert', type: 'simulated_alert' },
+  { hour: 14, minute: 30, trigger: 'priority_alert', type: 'simulated_alert' },
+  { hour: 16, minute: 0, trigger: 'focus_alert', type: 'simulated_alert' },
+  { hour: 17, minute: 0, trigger: 'regular_reminder', type: HYDRATION_REMINDER_TYPE },
+  { hour: 18, minute: 30, trigger: 'priority_alert', type: 'simulated_alert' },
+  { hour: 20, minute: 0, trigger: 'elevated_risk', type: 'simulated_alert' },
+  { hour: 20, minute: 30, trigger: 'risk_improved', type: 'simulated_alert' },
+  { hour: 22, minute: 30, trigger: 'regular_reminder', type: HYDRATION_REMINDER_TYPE },
+];
+
+/**
+ * Single source of truth for Excel simulated clock-time notification schedule relative gaps.
+ */
+export const SIMULATED_TEMPLATE_GAPS = [
+  60,  // GM -> Slot 1 (Hydration)
+  120, // Slot 1 -> Slot 2 (Elevated Risk)
+  30,  // Slot 2 -> Slot 3 (Risk Improved)
+  60,  // Slot 3 -> Slot 4 (Focus Alert)
+  120, // Slot 4 -> Slot 5 (Priority Alert)
+  90,  // Slot 5 -> Slot 6 (Focus Alert)
+  60,  // Slot 6 -> Slot 7 (Hydration)
+  90,  // Slot 7 -> Slot 8 (Priority Alert)
+  90,  // Slot 8 -> Slot 9 (Elevated Risk)
+  30,  // Slot 9 -> Slot 10 (Risk Improved)
+  120, // Slot 10 -> Slot 11 (Hydration)
+];
+
+export interface ScheduledSimulatedSlot {
+  slotIndex: number;
+  trigger: NotificationTrigger;
+  type: string;
+  timestamp: number;
+}
+
+/**
+ * Dynamically calculates the 11 simulated notifications relative to user's GM (wake + 1h) and GN (sleep - 1h).
+ * Ensures Slot 11 <= GN - 30 minutes so GN is at least 30m after Slot 11.
+ * Detects impossible short windows (< 360m) rather than violating spacing rules.
+ */
+export function calculateDailySimulatedSchedule(
+  sleepSchedule: SleepSchedule = DEFAULT_SLEEP_SCHEDULE,
+  date: Date = new Date()
+): ScheduledSimulatedSlot[] {
+  const wakeAnchor = parseClock(sleepSchedule.wakeUp) ?? parseClock(DEFAULT_SLEEP_SCHEDULE.wakeUp)!;
+  const sleepAnchor = parseClock(sleepSchedule.sleepStart) ?? parseClock(DEFAULT_SLEEP_SCHEDULE.sleepStart)!;
+
+  const gmMinute = ((wakeAnchor + DAILY_MESSAGE_OFFSET_MIN) % 1440 + 1440) % 1440;
+  const gnMinute = ((sleepAnchor - DAILY_MESSAGE_OFFSET_MIN) % 1440 + 1440) % 1440;
+
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+
+  const gmDate = new Date(year, month, day, Math.floor(gmMinute / 60), gmMinute % 60, 0, 0);
+  let gnDate = new Date(year, month, day, Math.floor(gnMinute / 60), gnMinute % 60, 0, 0);
+
+  if (gnDate.getTime() <= gmDate.getTime()) {
+    gnDate.setDate(gnDate.getDate() + 1);
+  }
+
+  const windowDurationMins = (gnDate.getTime() - gmDate.getTime()) / 60000;
+
+  // Impossible window check: 12 gaps of 30m require at least 360 minutes
+  if (windowDurationMins < 360) {
+    console.error(
+      `[Simulated] Impossible window: GM->GN duration (${windowDurationMins}m) < 360m minimum requirement for 30m spacing.`
+    );
+    return [];
+  }
+
+  // Target maximum duration for the 11 simulated gaps is W - 30m (so GN is >= 30m after Slot 11)
+  const targetMaxDurationMins = windowDurationMins - 30;
+  let gaps = [...SIMULATED_TEMPLATE_GAPS];
+  const templateTotalMins = gaps.reduce((a, b) => a + b, 0); // 870
+
+  if (targetMaxDurationMins < templateTotalMins) {
+    const k = targetMaxDurationMins / templateTotalMins;
+    gaps = gaps.map(g => Math.max(30, Math.floor(g * k)));
+    let sum = gaps.reduce((a, b) => a + b, 0);
+    let i = gaps.length - 1;
+    while (sum > targetMaxDurationMins && i >= 0) {
+      const excess = sum - targetMaxDurationMins;
+      const reducible = gaps[i] - 30;
+      if (reducible > 0) {
+        const delta = Math.min(excess, reducible);
+        gaps[i] -= delta;
+        sum -= delta;
+      }
+      i--;
+    }
+  }
+
+  let currentMs = gmDate.getTime();
+  const scheduled: ScheduledSimulatedSlot[] = [];
+
+  for (let idx = 0; idx < SIMULATED_SCHEDULE_SLOTS.length; idx++) {
+    currentMs += gaps[idx] * 60000;
+    scheduled.push({
+      slotIndex: idx + 1,
+      trigger: SIMULATED_SCHEDULE_SLOTS[idx].trigger,
+      type: SIMULATED_SCHEDULE_SLOTS[idx].type,
+      timestamp: currentMs,
+    });
+  }
+
+  return scheduled;
+}
+
 /**
  * How far the daily messages sit from the edges of the user's sleep window.
  *
@@ -201,11 +323,9 @@ const DAILY_MESSAGE_OFFSET_MIN = 60;
  * greeting always follows their wake-up and the wind-down always precedes
  * their bedtime.
  *
- * ## Why each has a pool of lines rather than one
- *
- * The same sentence every morning for a week stops being read. These rotate
- * by date — see `dailyMessageFor` — so the message is stable for any given
- * day but different from the day before.
+ * The scheduled payload itself always comes from `notificationContent.ts`.
+ * The legacy `bodies` metadata remains exported only for compatibility with
+ * older scheduling tests; it is not a delivery source.
  */
 export const DAILY_MESSAGES = [
   {
@@ -239,7 +359,7 @@ export const DAILY_MESSAGES = [
 type DailyMessage = (typeof DAILY_MESSAGES)[number];
 
 /**
- * The line to use for a message on a given day.
+ * Legacy helper retained for compatibility; scheduling does not call it.
  *
  * Keyed off the local date so it is stable: the queue is rebuilt whenever the
  * app is opened or a drink is logged, and a random pick would rewrite
@@ -337,16 +457,10 @@ export const clearOfDailyMessages = (
  * second kind of notification.
  */
 /**
- * The line a reminder falls back to.
- *
- * Every queued reminder starts with this, because a trigger notification is
- * built up to 24 hours before it fires and nothing specific about the user
- * stays true that long. `refreshReminderContent` rewrites it with real numbers
- * at the moment it is delivered; this is what stands if that rewrite cannot
- * run — the app was killed and the read failed, or there is genuinely nothing
- * known yet.
+ * Recipient cached before one-shot alarms are built. The queued copy is never
+ * rewritten at delivery.
  */
-const REMINDER_BODY = GENERIC_REMINDER_BODY;
+let notificationRecipient: string | undefined;
 
 /** Makes each locally displayed notification's event id unique. */
 let displayCounter = 0;
@@ -383,6 +497,17 @@ const LAST_INTAKE_KEY = 'getvari_last_intake_at';
  * stamp both paths write and both read, which is what makes the gap real.
  */
 const LAST_NOTIFICATION_KEY = 'getvari_last_notification_at';
+const RECENT_DELIVERY_KEY = 'getvari_recent_delivery_state';
+const GLOBAL_DELIVERY_GAP_MS = 30 * 60 * 1000;
+const SAME_TYPE_DELIVERY_GAP_MS = 60 * 60 * 1000;
+
+/** Stable storage key for a notification type, regardless of a title's case. */
+const normalizeNotificationKey = (value: unknown): string =>
+  String(value ?? 'notification')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .slice(0, 120) || 'notification';
 
 /** FCM listeners are registered once per app run; see `setupFCM`. */
 let fcmListenersRegistered = false;
@@ -478,7 +603,7 @@ const androidOptions = (
 const reminderNotification = ({
   id,
   eventId,
-  body = REMINDER_BODY,
+  body,
   refreshed = false,
 }: {
   id: string;
@@ -495,13 +620,16 @@ const reminderNotification = ({
   refreshed?: boolean;
 }): Notification => {
   const primary = primaryQuickAmount();
+  const content = buildNotificationContent('regular_reminder', notificationRecipient);
+  const exactBody = content?.body ?? body ?? buildNotificationContent('regular_reminder')!.body;
 
   return {
     id,
-    title: REMINDER_TITLE,
-    body,
+    title: content?.title ?? '💧 Hydration Reminder',
+    body: exactBody,
     data: {
       type: HYDRATION_REMINDER_TYPE,
+        notificationKey: 'regular_reminder',
       eventId,
       // Carried on the notification so a background action press knows what
       // "Log" meant without having to read the config it may not have loaded.
@@ -509,7 +637,7 @@ const reminderNotification = ({
       ...(refreshed ? { refreshed: '1' } : {}),
     },
     android: {
-      ...androidOptions(REMINDER_CHANNEL_ID, body, {
+      ...androidOptions(REMINDER_CHANNEL_ID, exactBody, {
         importance: AndroidImportance.HIGH,
         pressAction: { id: REMINDER_PRESS_ACTION, launchActivity: 'default' },
         summary: 'Hydration reminder',
@@ -546,6 +674,13 @@ class NotificationService {
   /** Serialises reminder (re)scheduling so overlapping calls can't interleave. */
   private schedulingQueue: Promise<void> = Promise.resolve();
 
+  /**
+   * Serialises the final delivery gate across local and scheduled paths.
+   * Check-and-record must be one operation or two concurrent deliveries can
+   * both observe an open 30-minute window.
+   */
+  private deliveryQueue: Promise<unknown> = Promise.resolve();
+
   /** Whether the user has already been shown the prompt this session. */
   private permissionAsked = false;
 
@@ -561,16 +696,17 @@ class NotificationService {
    * duplicate work. Extra callers join the pending run instead, taking the
    * most recent `fromMs` with them.
    */
-  private pending: Record<'reminders' | 'daily', { run: Promise<void>; fromMs: number } | null> = {
+  private pending: Record<'reminders' | 'daily' | 'simulated', { run: Promise<void>; fromMs: number } | null> = {
     reminders: null,
     daily: null,
+    simulated: null,
   };
 
   /**
    * Queue `task`, collapsing it into an identical one that is already waiting.
    */
   private enqueue(
-    kind: 'reminders' | 'daily',
+    kind: 'reminders' | 'daily' | 'simulated',
     fromMs: number,
     task: (at: number) => Promise<void>
   ): Promise<void> {
@@ -598,6 +734,38 @@ class NotificationService {
    * means "not read yet"; `null` means "read, and the user has none".
    */
   private sleepSchedule: SleepSchedule | null | undefined = undefined;
+
+  /**
+   * Cache the recipient used by the Excel copy before one-shot alarms are
+   * built. Alarm payloads are immutable, so this is intentionally done at
+   * scheduling time rather than by rewriting a notification after delivery.
+   */
+  async setNotificationRecipient(fullName?: string | null): Promise<void> {
+    const next = fullName?.trim() || undefined;
+    notificationRecipient = next;
+    try {
+      if (next) await AsyncStorage.setItem(NOTIFICATION_RECIPIENT_KEY, next);
+      else await AsyncStorage.removeItem(NOTIFICATION_RECIPIENT_KEY);
+    } catch (error) {
+      console.error('[Notifications] Failed to persist notification recipient:', error);
+    }
+  }
+
+  private withDeliveryLock<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.deliveryQueue.then(work);
+    this.deliveryQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async getNotificationRecipient(): Promise<string | undefined> {
+    if (notificationRecipient !== undefined) return notificationRecipient;
+    try {
+      notificationRecipient = (await AsyncStorage.getItem(NOTIFICATION_RECIPIENT_KEY))?.trim() || undefined;
+    } catch (error) {
+      console.error('[Notifications] Failed to read notification recipient:', error);
+    }
+    return notificationRecipient;
+  }
 
   /** Resolves when `work` finishes, or when it has taken too long. */
   private withTimeout(kind: string, work: Promise<void>): Promise<void> {
@@ -663,6 +831,7 @@ class NotificationService {
     // The queue in the OS was built against the previous window.
     await this.scheduleHydrationReminders();
     await this.scheduleDailyNotifications();
+    await this.scheduleSimulatedNotifications();
   }
 
   /**
@@ -780,6 +949,7 @@ class NotificationService {
    * be relied on to complete.
    */
   async suppressIfRecentlyHydrated(notification?: Notification | null): Promise<boolean> {
+    if (notification?.data?.type !== HYDRATION_REMINDER_TYPE) return false;
     const lastAt = await this.lastIntakeAt();
     if (lastAt === null) return false;
 
@@ -812,8 +982,70 @@ class NotificationService {
   async noteNotificationShown(atMs: number = Date.now()): Promise<void> {
     try {
       await AsyncStorage.setItem(LAST_NOTIFICATION_KEY, String(atMs));
+      const raw = await AsyncStorage.getItem(RECENT_DELIVERY_KEY);
+      let byType: Record<string, number> = {};
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed.byType && typeof parsed.byType === 'object') {
+            byType = parsed.byType;
+          } else if (parsed.key && typeof parsed.at === 'number') {
+            byType[parsed.key] = parsed.at;
+          }
+        } catch {}
+      }
+      await AsyncStorage.setItem(
+        RECENT_DELIVERY_KEY,
+        JSON.stringify({ lastGlobalAt: atMs, byType })
+      );
     } catch (error) {
       console.error('[Notifications] Could not record the delivery time:', error);
+    }
+  }
+
+  private processedEventsSet: Set<string> | null = null;
+
+  private async getProcessedEvents(): Promise<Set<string>> {
+    if (this.processedEventsSet !== null) {
+      return this.processedEventsSet;
+    }
+    try {
+      const raw = await AsyncStorage.getItem(PROCESSED_EVENTS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.processedEventsSet = new Set(parsed);
+          return this.processedEventsSet;
+        }
+      }
+    } catch (error) {
+      console.error('[Notifications] Failed to read processed events:', error);
+    }
+    this.processedEventsSet = new Set();
+    return this.processedEventsSet;
+  }
+
+  async isEventAlreadyProcessed(eventId: string): Promise<boolean> {
+    if (!eventId || eventId.includes('unknown')) return false;
+    const events = await this.getProcessedEvents();
+    const baseId = eventId.includes('@') ? eventId.split('@')[0] : '';
+    return events.has(eventId) || (baseId ? events.has(baseId) : false);
+  }
+
+  async markEventProcessed(eventId: string): Promise<void> {
+    if (!eventId || eventId.includes('unknown')) return;
+    const events = await this.getProcessedEvents();
+    events.add(eventId);
+    if (eventId.includes('@')) {
+      const baseId = eventId.split('@')[0];
+      if (baseId) events.add(baseId);
+    }
+    const arr = [...events].slice(-PROCESSED_EVENTS_LIMIT);
+    this.processedEventsSet = new Set(arr);
+    try {
+      await AsyncStorage.setItem(PROCESSED_EVENTS_KEY, JSON.stringify(arr));
+    } catch (error) {
+      console.error('[Notifications] Failed to persist processed event:', error);
     }
   }
 
@@ -823,9 +1055,29 @@ class NotificationService {
    */
   async msSinceLastNotification(): Promise<number> {
     try {
-      const raw = await AsyncStorage.getItem(LAST_NOTIFICATION_KEY);
-      const at = raw ? Number(raw) : NaN;
-      if (!Number.isFinite(at) || at <= 0) return Infinity;
+      const rawKey = await AsyncStorage.getItem(LAST_NOTIFICATION_KEY);
+      const atKey = rawKey ? Number(rawKey) : NaN;
+
+      const rawDelivery = await AsyncStorage.getItem(RECENT_DELIVERY_KEY);
+      let atDelivery = NaN;
+      if (rawDelivery) {
+        try {
+          const parsed = JSON.parse(rawDelivery);
+          atDelivery =
+            typeof parsed.lastGlobalAt === 'number'
+              ? parsed.lastGlobalAt
+              : typeof parsed.at === 'number'
+              ? parsed.at
+              : NaN;
+        } catch {}
+      }
+
+      const at = Math.max(
+        Number.isFinite(atKey) && atKey > 0 ? atKey : 0,
+        Number.isFinite(atDelivery) && atDelivery > 0 ? atDelivery : 0
+      );
+
+      if (at <= 0) return Infinity;
       const since = Date.now() - at;
       // A backwards clock must open the gate, never wedge it shut.
       return since < 0 ? Infinity : since;
@@ -970,15 +1222,10 @@ class NotificationService {
     onMessage(messaging, async remoteMessage => {
       console.log('A new FCM message arrived!', JSON.stringify(remoteMessage));
 
-      // Display a local notification using Notifee
-      if (remoteMessage.notification) {
-        await this.displayNotification(
-          remoteMessage.notification.title || 'Notification',
-          remoteMessage.notification.body || '',
-          REMINDER_CHANNEL_ID,
-          'push'
-        );
-      }
+      // Push payload copy is not an approved notification source. The Excel
+      // table is authoritative, and its triggers are evaluated/scheduled by
+      // this service and NotificationEngine instead of mirroring arbitrary
+      // server text into the notification shade.
     });
   }
 
@@ -1030,46 +1277,44 @@ class NotificationService {
     body: string,
     channelId: string = REMINDER_CHANNEL_ID,
     kind: NotificationKind = 'local',
-    options: { ignoreSleepWindow?: boolean; allowRepeat?: boolean } = {}
-  ) {
-    // The whole app goes quiet during the user's sleep window, push messages
-    // included — a nudge that wakes someone up costs more than it earns.
-    // Absolute block: no notification is displayed while the user is asleep.
-    if (await this.isSleeping()) {
-      console.log('[Notifications] Suppressed during sleep window:', title);
-      return;
-    }
+    options: { ignoreSleepWindow?: boolean; allowRepeat?: boolean; notificationKey?: string } = {}
+  ): Promise<boolean> {
+    return this.withDeliveryLock(async () => {
+      // The whole app goes quiet during the user's sleep window, push messages
+      // included — a nudge that wakes someone up costs more than it earns.
+      if (!options.ignoreSleepWindow && (await this.isSleeping())) {
+        console.log('[Notifications] Suppressed during sleep window:', title);
+        return false;
+      }
 
-    // Ensure permission is granted
-    const hasPermission = await this.requestPermission();
-    if (!hasPermission) return;
+      const hasPermission = await this.requestPermission();
+      if (!hasPermission) return false;
 
-    // Drop a repeat of something shown recently (see DUPLICATE_WINDOW_MS).
-    // `allowRepeat` is for notifications already limited by their own rule.
-    if (!options.allowRepeat && (await this.shownRecently(title))) {
-      console.log('[Notifications] Suppressed duplicate:', title);
-      return;
-    }
+      const notificationKey = normalizeNotificationKey(options.notificationKey ?? title);
+      // `allowRepeat` is for a newly earned welcome. It skips only the
+      // same-type hour gate; the cross-notification 30-minute interruption
+      // gap remains mandatory.
+      if (!(await this.canDeliverNow(notificationKey, options.allowRepeat === true))) {
+        console.log('[Notifications] Suppressed by delivery spacing:', title);
+        return false;
+      }
 
-    // Ensure channel exists
-    await this.createNotificationChannel();
+      await this.createNotificationChannel();
+      const eventId = `${kind}:${Date.now()}:${(displayCounter++).toString(36)}`;
+      await notifee.displayNotification({
+        id: `shown:${notificationKey}:${eventId}`,
+        title,
+        body,
+        data: { type: kind, notificationKey, deliveryAccepted: '1', eventId },
+        android: androidOptions(channelId, body),
+      });
 
-    // Display the notification. The id is derived from the title, so if a
-    // repeat does get through it replaces the one in the tray, not stacks.
-    await notifee.displayNotification({
-      id: `shown:${title}`,
-      title,
-      body,
-      data: {
-        type: kind,
-        eventId: `${kind}:${Date.now()}:${(displayCounter++).toString(36)}`,
-      },
-      android: androidOptions(channelId, body),
+      // Recorded only after the native post succeeds, while the lock is held.
+      await this.markEventProcessed(eventId);
+      await this.noteNotificationShown();
+      await this.noteDeliveredType(notificationKey);
+      return true;
     });
-
-    // Recorded after the display call rather than before it, so a throw does
-    // not start a gap for a notification the user never saw.
-    await this.noteNotificationShown();
   }
 
   /**
@@ -1092,8 +1337,8 @@ class NotificationService {
   async showPendingWelcome(): Promise<void> {
     try {
       if ((await AsyncStorage.getItem(PENDING_WELCOME_KEY)) !== '1') return;
-      await AsyncStorage.removeItem(PENDING_WELCOME_KEY);
-      await this.showWelcomeNotification();
+      const delivered = await this.showWelcomeNotification();
+      if (delivered) await AsyncStorage.removeItem(PENDING_WELCOME_KEY);
     } catch (error) {
       console.error('[Notifications] Pending welcome failed:', error);
     }
@@ -1104,19 +1349,214 @@ class NotificationService {
    * respects the sleep window and the notification permission (asking for it
    * if needed).
    */
-  async showWelcomeNotification(): Promise<void> {
+  async showWelcomeNotification(): Promise<boolean> {
     try {
-      await this.displayNotification(
-        '👋 Welcome to GetVari',
-        "You're signed in. We'll track your hydration and remind you when it matters.",
+      const content = buildNotificationContent('welcome');
+      if (!content) return false;
+      return await this.displayNotification(
+        content.title,
+        content.body,
         REMINDER_CHANNEL_ID,
         'local',
         // Already once per login (see `showPendingWelcome`). Without this, a
         // quick log out and back in was swallowed as a "duplicate".
-        { allowRepeat: true }
+        { allowRepeat: true, notificationKey: 'welcome' }
       );
     } catch (error) {
       console.error('[Notifications] Welcome notification failed:', error);
+      return false;
+    }
+  }
+
+  private async canDeliverNow(rawKey: string, allowSameTypeRepeat = false): Promise<boolean> {
+    const notificationKey = normalizeNotificationKey(rawKey);
+    try {
+      const raw = await AsyncStorage.getItem(RECENT_DELIVERY_KEY);
+      if (!raw) return true;
+      const parsed = JSON.parse(raw);
+      let lastGlobalAt = 0;
+      let byType: Record<string, number> = {};
+
+      if (typeof parsed.lastGlobalAt === 'number') {
+        lastGlobalAt = parsed.lastGlobalAt;
+        byType = parsed.byType ?? {};
+      } else if (typeof parsed.at === 'number') {
+        lastGlobalAt = parsed.at;
+        if (parsed.key) byType[parsed.key] = parsed.at;
+      }
+
+      const now = Date.now();
+      if (lastGlobalAt > 0 && now - lastGlobalAt < GLOBAL_DELIVERY_GAP_MS) {
+        return false;
+      }
+
+      const typeLastAt = byType[notificationKey] ?? 0;
+      if (!allowSameTypeRepeat && typeLastAt > 0 && now - typeLastAt < SAME_TYPE_DELIVERY_GAP_MS) {
+        return false;
+      }
+
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  private async noteDeliveredType(rawKey: string, atMs: number = Date.now()): Promise<void> {
+    const notificationKey = normalizeNotificationKey(rawKey);
+    try {
+      const raw = await AsyncStorage.getItem(RECENT_DELIVERY_KEY);
+      let byType: Record<string, number> = {};
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed.byType && typeof parsed.byType === 'object') {
+            byType = parsed.byType;
+          } else if (parsed.key && typeof parsed.at === 'number') {
+            byType[parsed.key] = parsed.at;
+          }
+        } catch {}
+      }
+      byType[notificationKey] = atMs;
+      await AsyncStorage.setItem(
+        RECENT_DELIVERY_KEY,
+        JSON.stringify({ lastGlobalAt: atMs, byType })
+      );
+    } catch (error) {
+      console.error('[Notifications] Could not persist delivery spacing:', error);
+    }
+  }
+
+  async acceptScheduledDelivery(notification: Notification): Promise<boolean> {
+    return this.withDeliveryLock(async () => {
+      const rawKey = String(
+        notification.data?.notificationKey ??
+          notification.data?.key ??
+          notification.data?.type ??
+          notification.title ??
+          'notification'
+      );
+      const notificationKey = normalizeNotificationKey(rawKey);
+      const eventId = readReminderEventId(notification);
+
+      if (await this.isEventAlreadyProcessed(eventId)) return true;
+      if (await this.isSleeping()) return false;
+
+      const canDeliver = await this.canDeliverNow(notificationKey);
+      if (!canDeliver) {
+        // Do NOT drop scheduled notifications blocked by gap limits.
+        // Reschedule to the next valid available time within GM->GN.
+        await this.rescheduleBlockedNotification(notification);
+        return false;
+      }
+
+      await this.markEventProcessed(eventId);
+      await this.noteNotificationShown();
+      await this.noteDeliveredType(notificationKey);
+      return true;
+    });
+  }
+
+  private async rescheduleBlockedNotification(notification: Notification): Promise<boolean> {
+    try {
+      const rawKey = String(
+        notification.data?.notificationKey ??
+          notification.data?.key ??
+          notification.data?.type ??
+          notification.title ??
+          'notification'
+      );
+      const notificationKey = normalizeNotificationKey(rawKey);
+      const now = Date.now();
+
+      const raw = await AsyncStorage.getItem(RECENT_DELIVERY_KEY);
+      let lastGlobalAt = 0;
+      let byType: Record<string, number> = {};
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed.lastGlobalAt === 'number') {
+            lastGlobalAt = parsed.lastGlobalAt;
+            byType = parsed.byType ?? {};
+          }
+        } catch {}
+      }
+
+      const typeLastAt = byType[notificationKey] ?? 0;
+      let nextAvailableMs = Math.max(
+        now + GLOBAL_DELIVERY_GAP_MS,
+        lastGlobalAt + GLOBAL_DELIVERY_GAP_MS,
+        typeLastAt + SAME_TYPE_DELIVERY_GAP_MS
+      );
+
+      const schedule = await this.getSleepSchedule();
+      const wakeAnchor = parseClock(schedule.wakeUp) ?? parseClock(DEFAULT_SLEEP_SCHEDULE.wakeUp)!;
+      const sleepAnchor = parseClock(schedule.sleepStart) ?? parseClock(DEFAULT_SLEEP_SCHEDULE.sleepStart)!;
+
+      const gnMinute = ((sleepAnchor - DAILY_MESSAGE_OFFSET_MIN) % 1440 + 1440) % 1440;
+      const targetDate = new Date(nextAvailableMs);
+      const year = targetDate.getFullYear();
+      const month = targetDate.getMonth();
+      const day = targetDate.getDate();
+
+      let gnDate = new Date(year, month, day, Math.floor(gnMinute / 60), gnMinute % 60, 0, 0);
+      const gmMinute = ((wakeAnchor + DAILY_MESSAGE_OFFSET_MIN) % 1440 + 1440) % 1440;
+      const gmDate = new Date(year, month, day, Math.floor(gmMinute / 60), gmMinute % 60, 0, 0);
+
+      if (gnDate.getTime() <= gmDate.getTime()) {
+        gnDate.setDate(gnDate.getDate() + 1);
+      }
+
+      const gnLimitMs = gnDate.getTime() - 30 * 60 * 1000;
+
+      if (nextAvailableMs > gnLimitMs) {
+        console.warn(`[Notifications] Cannot reschedule blocked notification ${notificationKey}: exceeds GN limit. Marking missed.`);
+        const eventId = readReminderEventId(notification);
+        await this.markEventProcessed(eventId);
+        return false;
+      }
+
+      const sleepStartMinute = parseClock(schedule.sleepStart) ?? 23 * 60;
+      const wakeUpMinute = parseClock(schedule.wakeUp) ?? 7 * 60;
+      const currentMin = targetDate.getHours() * 60 + targetDate.getMinutes();
+      const isAsleep = sleepStartMinute > wakeUpMinute
+        ? currentMin >= sleepStartMinute || currentMin < wakeUpMinute
+        : currentMin >= sleepStartMinute && currentMin < wakeUpMinute;
+
+      if (isAsleep) {
+        console.warn(`[Notifications] Cannot reschedule blocked notification ${notificationKey}: falls in sleep window. Marking missed.`);
+        const eventId = readReminderEventId(notification);
+        await this.markEventProcessed(eventId);
+        return false;
+      }
+
+      const rawEventId = readReminderEventId(notification);
+      const originalEventId = rawEventId.includes('@') ? rawEventId.split('@')[0] : rawEventId;
+      const nextId = `${notification.id ?? 'rescheduled'}-shift-${Date.now()}`;
+      await notifee.createTriggerNotification(
+        {
+          id: nextId,
+          title: notification.title,
+          body: notification.body,
+          data: {
+            ...(notification.data ?? {}),
+            notificationKey,
+            originalEventId,
+            eventId: `${originalEventId}@${nextAvailableMs}`,
+          },
+          android: notification.android,
+        },
+        {
+          type: TriggerType.TIMESTAMP,
+          timestamp: nextAvailableMs,
+          alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
+        } satisfies TimestampTrigger
+      );
+
+      console.log(`[Notifications] Rescheduled blocked notification ${notificationKey} to ${new Date(nextAvailableMs).toLocaleTimeString()}`);
+      return true;
+    } catch (error) {
+      console.error('[Notifications] Failed to reschedule blocked notification:', error);
+      return false;
     }
   }
 
@@ -1175,6 +1615,7 @@ class NotificationService {
       }
 
       await this.createNotificationChannel();
+      await this.getNotificationRecipient();
       // Log whatever is in the tray *before* clearing it. Reminders delivered
       // while the app was killed may never have reached JS as an event, and
       // the cancel below is the last moment they can still be observed.
@@ -1251,7 +1692,7 @@ class NotificationService {
             // by slot rather than picked at random because this queue is
             // rebuilt on every app open and every logged drink — a random pick
             // would rewrite a pending reminder's text repeatedly.
-            body: genericReminderBody(slot),
+            body: buildNotificationContent('regular_reminder', notificationRecipient)?.body,
           }),
           trigger
         );
@@ -1353,6 +1794,7 @@ class NotificationService {
     const eventId = readReminderEventId(notification);
 
     if (type === EventType.DELIVERED) {
+      const id = notification?.id;
       // A reminder that reaches the user inside the quiet window is taken back
       // rather than answered. See `suppressIfAsleep`.
       if (await this.suppressIfAsleep(notification)) return 'none';
@@ -1360,9 +1802,21 @@ class NotificationService {
       // Withdrawn before `noteReminderDelivered`, so a reminder nobody should
       // have seen never becomes an outstanding one the bell menu reports.
       if (await this.suppressIfRecentlyHydrated(notification)) return 'none';
+      if (notification.data?.deliveryAccepted !== '1') {
+        const accepted = await this.acceptScheduledDelivery(notification);
+        if (!accepted) {
+          if (id) {
+            try {
+              await notifee.cancelDisplayedNotifications([id]);
+            } catch (error) {
+              console.error('[Notifications] Could not withdraw suppressed reminder:', error);
+            }
+          }
+          return 'none';
+        }
+        notification.data = { ...(notification.data ?? {}), deliveryAccepted: '1' };
+      }
       await this.noteReminderDelivered(notification);
-      // This is the delivery the engine's gap has to be able to see.
-      await this.noteNotificationShown();
       return 'none';
     }
 
@@ -1712,30 +2166,11 @@ class NotificationService {
    */
   async refreshReminderContent(
     notification: Notification | null | undefined,
-    facts: ReminderFacts
+    _facts: ReminderFacts
   ): Promise<'refreshed' | 'skipped'> {
-    if (notification?.data?.type !== HYDRATION_REMINDER_TYPE) return 'skipped';
-    if (notification.data.refreshed === '1') return 'skipped';
-
-    const id = notification.id;
-    const eventId = readReminderEventId(notification);
-    if (!id) return 'skipped';
-
-    try {
-      const { body } = buildReminderContent(facts);
-
-      // Nothing specific to add. Re-posting the identical line would cost the
-      // user a second heads-up for no new information.
-      if (body === GENERIC_REMINDER_BODY) return 'skipped';
-
-      await notifee.displayNotification(
-        reminderNotification({ id, eventId, body, refreshed: true })
-      );
-      return 'refreshed';
-    } catch (error) {
-      console.error('[Reminders] Failed to refresh the reminder content:', error);
-      return 'skipped';
-    }
+    // Excel copy is immutable. A delivery-time rewrite can create a second
+    // DELIVERED event and, worse, append stale personal/risk details.
+    return 'skipped';
   }
 
   /* ------------------------------------------------------------------ *
@@ -1847,6 +2282,7 @@ class NotificationService {
       }
 
       await this.createNotificationChannel();
+      await this.getNotificationRecipient();
       await this.cancelDailyNotifications();
 
       const schedule = await this.getSleepSchedule();
@@ -1872,23 +2308,28 @@ class NotificationService {
           // window narrower than the two offsets can still fold one inside.
           if (isAsleepAt(schedule, timestamp)) continue;
 
-          // Rotates by date, so a week does not repeat one sentence.
-          const body = dailyMessageBody(message, timestamp);
+          const content = buildNotificationContent(
+            message.key === 'morning' ? 'morning_msg' : 'night_msg',
+            notificationRecipient
+          );
+          if (!content) continue;
+          const body = content.body;
 
           const id = `${DAILY_ID_PREFIX}${message.key}-${day}`;
           await notifee.createTriggerNotification(
             {
               id,
-              title: message.title,
+              title: content.title,
               body,
               data: {
                 type: DAILY_MESSAGE_TYPE,
                 key: message.key,
+                notificationKey: message.key === 'morning' ? 'morning_msg' : 'night_msg',
                 eventId: `${id}@${timestamp}`,
               },
               android: androidOptions(REMINDER_CHANNEL_ID, body, {
                 importance: AndroidImportance.DEFAULT,
-                summary: message.title,
+                summary: content.title,
               }),
             },
             {
@@ -1917,6 +2358,98 @@ class NotificationService {
       }
     } catch (error) {
       console.error('[Daily] Failed to cancel:', error);
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Excel Simulated Notifications
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Queue the 11 Excel simulated notifications for the next `DAILY_HORIZON_DAYS` days.
+   *
+   * Simulated notifications are placed within the user's awake window (between GM = wakeUp + 1h
+   * and GN = sleepStart - 1h) using dynamic relative-gap compression. Rescheduling cancels
+   * strictly simulated notification IDs.
+   */
+  async scheduleSimulatedNotifications(fromMs: number = Date.now()): Promise<void> {
+    return this.enqueue('simulated', fromMs, at => this.rescheduleSimulated(at));
+  }
+
+  private async rescheduleSimulated(fromMs: number): Promise<void> {
+    try {
+      const hasPermission = await this.requestPermission();
+      if (!hasPermission) {
+        console.warn('[Simulated] Notification permission denied; skipping schedule.');
+        return;
+      }
+
+      await this.createNotificationChannel();
+      await this.getNotificationRecipient();
+      await this.cancelSimulatedNotifications();
+
+      const schedule = await this.getSleepSchedule();
+      let queued = 0;
+
+      for (let day = 0; day < DAILY_HORIZON_DAYS; day++) {
+        const baseDate = new Date(fromMs);
+        baseDate.setDate(baseDate.getDate() + day);
+
+        const dailySlots = calculateDailySimulatedSchedule(schedule, baseDate);
+
+        for (const slot of dailySlots) {
+          const timestamp = slot.timestamp;
+          if (timestamp <= Date.now()) continue;
+
+          const content = buildNotificationContent(slot.trigger, notificationRecipient);
+          if (!content) continue;
+          const body = content.body;
+
+          const id = `${SIMULATED_ID_PREFIX}${slot.trigger}-${day}-${slot.slotIndex}`;
+          await notifee.createTriggerNotification(
+            {
+              id,
+              title: content.title,
+              body,
+              data: {
+                type: slot.type,
+                notificationKey: slot.trigger,
+                eventId: `${id}@${timestamp}`,
+              },
+              android: androidOptions(REMINDER_CHANNEL_ID, body, {
+                importance: slot.trigger === 'regular_reminder' ? AndroidImportance.HIGH : AndroidImportance.DEFAULT,
+                summary: content.title,
+              }),
+            },
+            {
+              type: TriggerType.TIMESTAMP,
+              timestamp,
+              alarmManager: { type: AlarmType.SET_ALARM_CLOCK },
+            } satisfies TimestampTrigger
+          );
+          queued++;
+        }
+      }
+
+      console.log(`[Simulated] Queued ${queued} simulated notifications over ${DAILY_HORIZON_DAYS} days.`);
+    } catch (error) {
+      console.error('[Simulated] Failed to schedule:', error);
+    }
+  }
+
+  /**
+   * Cancel only queued simulated notifications (`SIMULATED_ID_PREFIX`),
+   * leaving Good Morning / Good Night and other notifications untouched.
+   */
+  async cancelSimulatedNotifications(): Promise<void> {
+    try {
+      const triggerIds = await notifee.getTriggerNotificationIds();
+      const queued = triggerIds.filter(id => id.startsWith(SIMULATED_ID_PREFIX));
+      if (queued.length) {
+        await notifee.cancelTriggerNotifications(queued);
+      }
+    } catch (error) {
+      console.error('[Simulated] Failed to cancel:', error);
     }
   }
 
@@ -1983,7 +2516,25 @@ class NotificationService {
   startHistoryTracking(): () => void {
     return notifee.onForegroundEvent(({ type, detail }) => {
       if (type === EventType.DELIVERED) {
-        NotificationHistory.recordDelivery(detail.notification);
+        const notification = detail.notification;
+        if (!notification) return;
+        if (notification.data?.refreshed === '1') return;
+
+        if (notification.data?.deliveryAccepted === '1') {
+          void NotificationHistory.recordDelivery(notification);
+          return;
+        }
+        void this.acceptScheduledDelivery(notification).then(accepted => {
+          if (!accepted) {
+            const id = notification.id;
+            if (id) {
+              void notifee.cancelDisplayedNotifications([id]).catch(() => {});
+            }
+            return;
+          }
+          notification.data = { ...(notification.data ?? {}), deliveryAccepted: '1' };
+          void NotificationHistory.recordDelivery(notification);
+        });
       } else if (type === EventType.PRESS) {
         NotificationHistory.recordPress(detail.notification);
       }
@@ -2003,9 +2554,48 @@ class NotificationService {
   async syncDeliveredFromTray(): Promise<void> {
     try {
       const displayed = await notifee.getDisplayedNotifications();
+      const now = Date.now();
+      const EXPIRY_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+
       for (const entry of displayed) {
-        const shownAt = entry.date ? Date.parse(entry.date) : NaN;
-        const deliveredAt = Number.isFinite(shownAt) ? shownAt : Date.now();
+        if (!entry.notification) continue;
+        const eventId = readReminderEventId(entry.notification);
+        if (await this.isEventAlreadyProcessed(eventId)) continue;
+
+        const notificationKey = String(
+          entry.notification.data?.notificationKey ??
+            entry.notification.data?.key ??
+            entry.notification.data?.type ??
+            entry.notification.title ??
+            'notification'
+        );
+
+        let scheduledAt = NaN;
+        if (eventId.includes('@')) {
+          const parts = eventId.split('@');
+          scheduledAt = Number(parts[parts.length - 1]);
+        }
+        if (!Number.isFinite(scheduledAt) && entry.date) {
+          scheduledAt = Date.parse(entry.date);
+        }
+
+        const ageMs = Number.isFinite(scheduledAt) ? now - scheduledAt : 0;
+
+        if (ageMs > EXPIRY_THRESHOLD_MS) {
+          // Stale / old missed notification: mark processed and clear from tray without prompt/burst
+          console.log(`[Notifications] Clearing expired tray notification (${Math.round(ageMs / 60000)}m old): ${eventId}`);
+          await this.markEventProcessed(eventId);
+          if (entry.notification.id) {
+            await notifee.cancelDisplayedNotifications([entry.notification.id]).catch(() => {});
+          }
+          continue;
+        }
+
+        const deliveredAt = Number.isFinite(scheduledAt) ? scheduledAt : now;
+
+        await this.markEventProcessed(eventId);
+        await this.noteNotificationShown(deliveredAt);
+        await this.noteDeliveredType(notificationKey, deliveredAt);
         await NotificationHistory.recordDelivery(entry.notification, deliveredAt);
 
         // A reminder still sitting in the tray is a reminder nobody has
@@ -2014,7 +2604,7 @@ class NotificationService {
         // pressure, or a phone that was simply off — so the tray itself is the
         // last reliable place to notice it.
         if (entry.notification?.data?.type === HYDRATION_REMINDER_TYPE) {
-          await ActiveReminder.raise(readReminderEventId(entry.notification), deliveredAt);
+          await ActiveReminder.raise(eventId, deliveredAt);
         }
       }
     } catch (error) {

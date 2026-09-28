@@ -439,13 +439,13 @@ describe('Repeat deliveries of one press', () => {
     expect(record!.snoozeCount).toBe(0);
   });
 
-  test('a newer reminder replaces the older one instead of queueing behind it', async () => {
+  test('a second reminder delivery is suppressed by the global spacing rule', async () => {
     await NotificationService.handleReminderEvent(DELIVERED as any, reminderEvent('event-a'));
     await NotificationService.handleReminderEvent(DELIVERED as any, reminderEvent('event-b'));
 
-    // Three ignored nudges must produce one prompt, not three.
+    // A second delivery inside the global gap must not create another prompt.
     const record = await ActiveReminder.current();
-    expect(record!.eventId).toBe('event-b');
+    expect(record!.eventId).toBe('event-a');
   });
 
   test('a non-reminder notification is ignored entirely', async () => {

@@ -404,8 +404,8 @@ const HomeScreen = ({ navigation }: any) => {
       ConfigService.refresh().catch(() => undefined);
       warmBackend();
       NotificationService.scheduleHydrationReminders();
-      // Tops the fixed-time queue back up to a full week ahead.
       NotificationService.scheduleDailyNotifications();
+      NotificationService.scheduleSimulatedNotifications();
     });
 
     return () => {
@@ -436,6 +436,7 @@ const HomeScreen = ({ navigation }: any) => {
       // 07:00 and 22:00 messages, queued with the OS so they arrive on time
       // whether or not the app is open.
       await NotificationService.scheduleDailyNotifications();
+      await NotificationService.scheduleSimulatedNotifications();
     } catch (error) {
       console.error('[Notifications] Setup failed:', error);
     }
@@ -483,6 +484,7 @@ const HomeScreen = ({ navigation }: any) => {
         // row, so the sleep window is handed to the notification layer on
         // every load. That also picks up a window edited on another device.
         try {
+          await NotificationService.setNotificationRecipient(profile.fullName);
           await NotificationService.setSleepSchedule(normaliseSleepSchedule(profile));
         } catch (sleepError) {
           console.error('[Notifications] Failed to apply sleep window:', sleepError);

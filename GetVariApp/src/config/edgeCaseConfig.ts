@@ -25,7 +25,7 @@ export const NOTIFICATION_COOLDOWNS = {
   RISK_ALERT: 30 * 60 * 1000, // 30 minutes for elevated/high risk
   HYDRATION_REMINDER: 2 * 60 * 60 * 1000, // 2 hours
   LOW_BATTERY: 6 * 60 * 60 * 1000, // 6 hours
-  ENVIRONMENTAL_ALERT: 3 * 60 * 60 * 1000, // 3 hours
+  ENVIRONMENTAL_ALERT: 24 * 60 * 60 * 1000, // once per day
   INACTIVITY_REMINDER: 3 * 60 * 60 * 1000, // 3 hours
   GOAL_ACHIEVED: 24 * 60 * 60 * 1000, // Once per day
   WEEKLY_SUMMARY: 7 * 24 * 60 * 60 * 1000, // Once per week
@@ -38,14 +38,14 @@ export const NOTIFICATION_COOLDOWNS = {
    * four in the same second. Conditions that stay true are simply re-raised on
    * a later tick, so spacing costs nothing but the clump.
    */
-  MIN_GAP_BETWEEN_ALERTS: 15 * 60 * 1000, // 15 minutes
+  MIN_GAP_BETWEEN_ALERTS: 30 * 60 * 1000, // 30 minutes
   /**
    * Focus and cognitive alerts share one cooldown: any of the four blocks the
    * others for this long. They are forecasts, not emergencies, and hearing
    * about your focus every half hour is exactly the nagging that gets the
    * app's notifications turned off.
    */
-  FOCUS_COGNITIVE_ALERT: 3 * 60 * 60 * 1000, // one check every 3 hours, shared
+  FOCUS_COGNITIVE_ALERT: 24 * 60 * 60 * 1000, // scheduled checks are once per slot/day
   /** After login, only a high risk alert may be delivered for this long. */
   LOGIN_QUIET_MS: 5 * 60 * 1000, // 5 minutes
 };

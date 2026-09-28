@@ -13,7 +13,6 @@ import NotificationService, {
 } from './src/services/NotificationService';
 import NotificationHistory from './src/services/NotificationHistory';
 import HydrationService from './src/services/HydrationService';
-import ReminderFactsService from './src/services/ReminderFactsService';
 
 /**
  * Events that reach the app while it is backgrounded or not running at all.
@@ -45,6 +44,14 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
     // turned into a full-screen prompt.
     if (await NotificationService.suppressIfRecentlyHydrated(detail.notification)) return;
 
+    if (detail.notification?.data?.deliveryAccepted !== '1') {
+      if (!(await NotificationService.acceptScheduledDelivery(detail.notification))) return;
+      detail.notification.data = {
+        ...(detail.notification.data || {}),
+        deliveryAccepted: '1',
+      };
+    }
+
     await NotificationHistory.recordDelivery(detail.notification);
 
     // Anything that survives the two gates above has reached the user, so it
@@ -52,7 +59,6 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
     // here rather than per-type because the engine's question is "has the user
     // just been interrupted?", and a "Good Morning" message interrupts exactly
     // as much as a reminder does.
-    await NotificationService.noteNotificationShown();
   } else if (type === EventType.PRESS || type === EventType.ACTION_PRESS) {
     await NotificationHistory.recordPress(detail.notification);
   }
@@ -65,24 +71,11 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
   // `ActiveReminder.raise` above both collapse the repeat on the unchanged
   // event id, and doing the work twice would mean a second launch attempt.
   const isFirstDelivery =
-    type === EventType.DELIVERED && detail.notification?.data?.refreshed !== '1';
+    type === EventType.DELIVERED &&
+    detail.notification?.data?.type === HYDRATION_REMINDER_TYPE &&
+    detail.notification?.data?.refreshed !== '1';
 
   if (isFirstDelivery) {
-    // Say something true about *this* user rather than the same fixed line
-    // twelve times a day. The numbers are read now, at delivery: a reminder is
-    // queued as an alarm up to a day ahead, and anything specific baked in at
-    // that point would be a wrong number on a health notification by the time
-    // it fired. Gathered outside the notification layer because the profile,
-    // the log and the telemetry history all already depend on it.
-    try {
-      const facts = await ReminderFactsService.gatherReminderFacts();
-      await NotificationService.refreshReminderContent(detail.notification, facts);
-    } catch (error) {
-      // A reminder that could not be personalised is still a reminder, and it
-      // is already in front of the user.
-      console.error('[Reminders] Could not personalise the reminder:', error);
-    }
-
     // Bring the reminder screen up over whatever the user is doing.
     //
     // The notification already carries a `fullScreenAction`, but Android only

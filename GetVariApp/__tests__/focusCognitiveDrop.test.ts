@@ -30,14 +30,25 @@ const mockMsSinceLastNotification = jest.fn(() => Promise.resolve(Infinity));
 
 jest.mock('../src/services/NotificationService', () => ({
   __esModule: true,
+  SIMULATED_SCHEDULE_SLOTS: [
+    { hour: 9, minute: 0, trigger: 'regular_reminder', type: 'hydration_reminder' },
+    { hour: 11, minute: 0, trigger: 'elevated_risk', type: 'simulated_alert' },
+    { hour: 11, minute: 30, trigger: 'risk_improved', type: 'simulated_alert' },
+    { hour: 12, minute: 30, trigger: 'focus_alert', type: 'simulated_alert' },
+    { hour: 14, minute: 30, trigger: 'priority_alert', type: 'simulated_alert' },
+    { hour: 16, minute: 0, trigger: 'focus_alert', type: 'simulated_alert' },
+    { hour: 17, minute: 0, trigger: 'regular_reminder', type: 'hydration_reminder' },
+    { hour: 18, minute: 30, trigger: 'priority_alert', type: 'simulated_alert' },
+    { hour: 20, minute: 0, trigger: 'elevated_risk', type: 'simulated_alert' },
+    { hour: 20, minute: 30, trigger: 'risk_improved', type: 'simulated_alert' },
+    { hour: 22, minute: 30, trigger: 'regular_reminder', type: 'hydration_reminder' },
+  ],
   default: {
     requestPermission: (...args: any[]) => mockRequestPermission.apply(null, args as []),
     displayNotification: (...args: any[]) => mockDisplayNotification.apply(null, args as []),
     scheduleHydrationReminders: () => Promise.resolve(),
+    scheduleSimulatedNotifications: () => Promise.resolve(),
     isSleeping: () => Promise.resolve(false),
-    // The gap between alerts now spans both delivery paths — the engine's own
-    // and the scheduled reminder's — so it reads this shared stamp rather than
-    // only its own state. Infinity is "nothing has been shown yet".
     msSinceLastNotification: (...args: any[]) => mockMsSinceLastNotification.apply(null, args as []),
     noteNotificationShown: () => Promise.resolve(),
     noteIntakeLogged: () => Promise.resolve(),
@@ -64,6 +75,7 @@ jest.mock('@react-native-firebase/messaging', () => ({}));
 
 import NotificationEngine from '../src/services/NotificationEngine';
 import MockTelemetryService from '../src/services/MockTelemetryService';
+import { SIMULATED_SCHEDULE_SLOTS } from '../src/services/NotificationService';
 import type { SensorData, UserProfile, HydrationLog, HydrationRiskDetails } from '../src/types';
 import {
   calculateTTLLoad,
@@ -132,7 +144,13 @@ const evaluateFocusIntake = async (scenario: {
   return NotificationEngine.evaluate({
     sensorData: baseSensor(scenario.sensor),
     profile: scenario.profile ?? baseProfile(),
-    todayLogs: scenario.logs ?? [],
+    todayLogs: scenario.logs ?? [{
+      id: 'focus-test-log',
+      timestamp: new Date(scenario.at.getTime() - 60 * 60 * 1000).toISOString(),
+      reportedAt: new Date(scenario.at.getTime() - 60 * 60 * 1000).toISOString(),
+      amountMl: 2000,
+      source: 'manual',
+    }],
     solvedRisk: risk(scenario.score === undefined ? null : scenario.score),
   });
 };
@@ -235,179 +253,31 @@ describe('Focus / Cognitive Drop Engine', () => {
     expect(classifyCDI(edgeImpairment)).toBe('Cognitive Impairment Risk');
   });
 
-  test('one focus/cognitive check per evaluation, from whichever index is higher', async () => {
-    const BRAIN = [
-      'focus_slipping',
-      'focus_lost',
-      'focus_steady',
-      'cognitive_decline',
-      'cognitive_impairment',
-      'cognitive_steady',
-    ];
-    const brainOf = (raised: string[]) => raised.filter(t => BRAIN.includes(t));
+  test('FDI and CDI are scheduled simulation slots in SIMULATED_SCHEDULE_SLOTS', async () => {
+    const focusSlots = SIMULATED_SCHEDULE_SLOTS.filter(s => s.trigger === 'focus_alert');
+    const prioritySlots = SIMULATED_SCHEDULE_SLOTS.filter(s => s.trigger === 'priority_alert');
 
-    // No motion reading: FDI cannot be computed, so the cognitive index speaks.
-    for (const motion of [undefined, null]) {
-      const out = await evaluateFocusIntake({
-        at: new Date(2026, 0, 1, 9, 0),
-        score: 50,
-        sensor: { lastSignificantMotionMinutesAgo: motion },
-      });
-      expect(brainOf(out.raised)).toHaveLength(1);
-      expect(brainOf(out.raised)[0]).toMatch(/^cognitive_/);
-    }
+    expect(focusSlots).toHaveLength(2); // 12:30 PM and 4:00 PM
+    expect(prioritySlots).toHaveLength(2); // 2:30 PM and 6:30 PM
 
-    const withMotion = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 9, 0),
-      score: 50,
-      sensor: { lastSignificantMotionMinutesAgo: 30 },
-    });
-    expect(brainOf(withMotion.raised)).toHaveLength(1);
-    expect(withMotion.delivered).toEqual(brainOf(withMotion.raised));
+    expect(focusSlots.map(s => `${s.hour}:${s.minute}`)).toEqual(['12:30', '16:0']);
+    expect(prioritySlots.map(s => `${s.hour}:${s.minute}`)).toEqual(['14:30', '18:30']);
+  });
 
-    // FDI = 0.6·80 + 0.4·80 = 80 beats the CDI here, so focus speaks.
-    const lost = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 9, 0),
-      score: 80,
+  test('CDI/FDI simulation slots are not dynamically re-raised by evaluate()', async () => {
+    const fdi = await evaluateFocusIntake({
+      at: new Date(2026, 0, 1, 12, 30),
+      score: 75,
       sensor: { lastSignificantMotionMinutesAgo: 91 },
     });
-    expect(lost.raised).toContain('focus_lost');
-    expect(lost.raised).toContain('high_risk');
-    // One notification per evaluation: the high risk alert outranks it.
-    expect(lost.delivered).toEqual(['high_risk']);
+    expect(fdi.raised).not.toContain('focus_alert');
 
-    const cognitiveDecline = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 14, 0),
-      score: 50,
-      sensor: { temperature: 30, humidity: 70 },
+    const cdi = await evaluateFocusIntake({
+      at: new Date(2026, 0, 1, 14, 30),
+      score: 75,
+      sensor: { temperature: 45, humidity: 100 },
     });
-    expect(cognitiveDecline.raised).toContain('cognitive_decline');
-    expect(cognitiveDecline.delivered).toContain('cognitive_decline');
-
-    const impairment = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 15, 0),
-      score: 80,
-      sensor: { temperature: 35, humidity: 80 },
-    });
-    expect(impairment.raised).toContain('cognitive_impairment');
-    expect(impairment.delivered).toEqual(['high_risk']);
-
-    // Both indices low: still one check, the "steady" read-out.
-    const sharp = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 10, 30),
-      score: 0,
-      sensor: { lastSignificantMotionMinutesAgo: 5, temperature: 0, humidity: 0 },
-    });
-    expect(brainOf(sharp.raised)).toHaveLength(1);
-    expect(brainOf(sharp.raised)[0]).toMatch(/_steady$/);
-  });
-
-  test('FDI full chain from MockTelemetryService', async () => {
-    // Sedentary profile -> 45 mins motion gap -> TTL 45 -> FDI 0.6*15 + 0.4*45 = 9 + 18 = 27 (Focus Slipping)
-    const mockData = MockTelemetryService.getMockPrimaryTelemetry('user1', 'sedentary');
-    expect(mockData.lastSignificantMotionMinutesAgo).toBe(45);
-
-    const slipping = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 10, 30),
-      score: 15,
-      sensor: { lastSignificantMotionMinutesAgo: mockData.lastSignificantMotionMinutesAgo },
-    });
-    expect(slipping.raised).toContain('focus_slipping');
-    expect(slipping.delivered).toContain('focus_slipping');
-
-    // Critical Risk profile -> 40 mins motion gap -> TTL 45 -> FDI 0.6*80 + 0.4*45 = 48 + 18 = 66 (Focus Lost)
-    const mockDataCrit = MockTelemetryService.getMockPrimaryTelemetry('user2', 'critical_risk');
-    expect(mockDataCrit.lastSignificantMotionMinutesAgo).toBe(40);
-
-    const lost = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 10, 30),
-      score: 80,
-      sensor: { lastSignificantMotionMinutesAgo: mockDataCrit.lastSignificantMotionMinutesAgo },
-    });
-    expect(lost.raised).toContain('focus_lost');
-  });
-
-  test('CDI full chain with thermal and circadian load', async () => {
-    // 14:00 -> Circadian 60
-    // Temp 30, Humid 60 -> Thermal (30+60)/2 = 45
-    // DL 50
-    // CDI = 0.55*50 + 0.25*45 + 0.20*60 = 27.5 + 11.25 + 12 = 50.75 (Cognitive Decline Risk)
-    const decline = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 14, 0),
-      score: 50,
-      sensor: { temperature: 30, humidity: 60 },
-    });
-    expect(decline.raised).toContain('cognitive_decline');
-    expect(decline.delivered).toContain('cognitive_decline');
-
-    // 04:00 -> Circadian 90
-    // Temp 35, Humid 80 -> Thermal (35+80)/2 = 57.5
-    // DL 80
-    // CDI = 0.55*80 + 0.25*57.5 + 0.20*90 = 44 + 14.375 + 18 = 76.375 (Cognitive Impairment Risk)
-    const impairment = await evaluateFocusIntake({
-      at: new Date(2026, 0, 1, 4, 0),
-      score: 80,
-      sensor: { temperature: 35, humidity: 80 },
-    });
-    expect(impairment.raised).toContain('cognitive_impairment');
-  });
-
-  test('focus and cognitive alerts share one 3-hour cooldown', async () => {
-    const now = new Date(2026, 0, 1, 10, 0).getTime();
-    const MIN = 60 * 1000;
-
-    // 1. focus_slipping only (DL=25 ensures FDI=25 while CDI=16.75 stays low)
-    const first = await evaluateFocusIntake({
-      at: new Date(now),
-      score: 25,
-      sensor: { lastSignificantMotionMinutesAgo: 30 },
-      clearState: true,
-    });
-    expect(first.delivered).toEqual(['focus_slipping']);
-
-    // 2. An hour later cognitive_decline is true, but the shared cooldown
-    //    holds it: the user just heard about their focus.
-    const second = await evaluateFocusIntake({
-      at: new Date(now + 60 * MIN),
-      score: 50,
-      sensor: { lastSignificantMotionMinutesAgo: 30 },
-      clearState: false,
-    });
-    expect(second.raised).not.toContain('cognitive_decline');
-    expect(second.raised).not.toContain('focus_slipping');
-
-    // 3. Past three hours, one of them may go out again.
-    const third = await evaluateFocusIntake({
-      at: new Date(now + 181 * MIN),
-      score: 50,
-      sensor: { lastSignificantMotionMinutesAgo: 30 },
-      clearState: false,
-    });
-    expect(third.delivered).toHaveLength(1);
-    expect(['focus_slipping', 'cognitive_decline']).toContain(third.delivered[0]);
-  });
-
-  test('one focus/cognitive check every 3 hours, whatever the risk', async () => {
-    const start = new Date(2026, 0, 1, 8, 0).getTime();
-    const HOUR = 60 * 60 * 1000;
-    const brain = /^(focus|cognitive)_/;
-    const deliveredAt: number[] = [];
-    // Checked every 30 minutes from 08:00 to 20:00, risk moving about.
-    for (let i = 0; i <= 24; i++) {
-      const at = start + i * 30 * 60 * 1000;
-      const out = await evaluateFocusIntake({
-        at: new Date(at),
-        score: [10, 35, 55][i % 3],
-        sensor: { lastSignificantMotionMinutesAgo: 30 },
-        clearState: i === 0,
-      });
-      if (out.delivered.some(t => brain.test(t))) deliveredAt.push(at);
-    }
-    // 08:00, 11:00, 14:00, 17:00, 20:00.
-    expect(deliveredAt).toHaveLength(5);
-    for (let i = 1; i < deliveredAt.length; i++) {
-      expect(deliveredAt[i] - deliveredAt[i - 1]).toBe(3 * HOUR);
-    }
+    expect(cdi.raised).not.toContain('priority_alert');
   });
 
   test('CDI/FDI and High Risk are absolutely suppressed during sleep', async () => {
@@ -429,8 +299,7 @@ describe('Focus / Cognitive Drop Engine', () => {
 
     // All should be raised for diagnostics/tests
     expect(evaluation.raised).toContain('high_risk');
-    // One focus/cognitive check per evaluation — here the focus index is higher.
-    expect(evaluation.raised).toContain('focus_lost');
+    expect(evaluation.raised).not.toContain('focus_alert');
 
     // BUT nothing should be delivered
     expect(evaluation.delivered).toHaveLength(0);

@@ -210,9 +210,7 @@ export default function App() {
   // Onboarding control (checks local storage or state)
   const [isOnboarded, setIsOnboarded] = useState<boolean>(() => {
     try {
-      // Always start fresh with onboarding screens on page reload per user feedback
-      localStorage.removeItem('getvari_onboard_complete');
-      return false;
+      return localStorage.getItem('getvari_onboard_complete') === 'true';
     } catch {
       return false;
     }
@@ -226,9 +224,7 @@ export default function App() {
   const [splashWaterLevel, setSplashWaterLevel] = useState<number>(0);
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
     try {
-      // Always start fresh with the login screen on page reload to demonstrate flow
-      localStorage.removeItem('getvari_logged_in');
-      return false;
+      return localStorage.getItem('getvari_logged_in') === 'true';
     } catch {
       return false;
     }
@@ -616,6 +612,15 @@ export default function App() {
         try {
           const loadedLoggedIn = localStorage.getItem('getvari_logged_in') === 'true';
           const loadedOnboarded = localStorage.getItem('getvari_onboard_complete') === 'true';
+          const savedProfileRaw = localStorage.getItem('getvari_profile');
+          if (savedProfileRaw) {
+            try {
+              const savedProfile = JSON.parse(savedProfileRaw);
+              if (savedProfile && typeof savedProfile === 'object') {
+                setProfile(savedProfile);
+              }
+            } catch {}
+          }
           setIsLoggedIn(loadedLoggedIn);
           setIsOnboarded(loadedOnboarded);
           if (loadedLoggedIn) {

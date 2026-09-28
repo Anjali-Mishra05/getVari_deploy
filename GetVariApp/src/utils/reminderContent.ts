@@ -30,6 +30,8 @@
 
 /** Everything known about the user at the moment a reminder is posted. */
 export interface ReminderFacts {
+  /** First name used by the authoritative notification copy. */
+  fullName?: string;
   /** Hours since the last logged drink, or null when nothing is logged yet. */
   hoursSinceDrink?: number | null;
   /** Millilitres logged so far today. */

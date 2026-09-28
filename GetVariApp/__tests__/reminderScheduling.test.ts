@@ -20,6 +20,7 @@ let mockAuthStatus = 1; // AuthorizationStatus.AUTHORIZED
 const mockCancelledIds: string[] = [];
 /** Ids withdrawn from the tray, for the sleep-window gate below. */
 const mockCancelledDisplayed: string[] = [];
+let mockDisplayed: any[] = [];
 /** Channels the fake OS holds, so the immutability rule can be asserted. */
 const mockChannels = new Map<string, any>();
 const mockDeletedChannels: string[] = [];
@@ -66,7 +67,7 @@ jest.mock('@notifee/react-native', () => ({
       ids.forEach(id => mockOsQueue.delete(id));
       return Promise.resolve();
     },
-    getDisplayedNotifications: () => Promise.resolve([]),
+    getDisplayedNotifications: () => Promise.resolve([...mockDisplayed]),
     cancelDisplayedNotifications: (ids: string[]) => {
       mockCancelledDisplayed.push(...ids);
       return Promise.resolve();
@@ -123,6 +124,9 @@ import NotificationService, {
   REMINDER_INTERVAL_MS,
   REMINDER_COVERAGE_MS,
   HYDRATION_REMINDER_TYPE,
+  SIMULATED_SCHEDULE_SLOTS,
+  SIMULATED_ID_PREFIX,
+  calculateDailySimulatedSchedule,
 } from '../src/services/NotificationService';
 
 const SLOTS = Math.floor(REMINDER_COVERAGE_MS / REMINDER_INTERVAL_MS);
@@ -180,12 +184,9 @@ describe('N1: recurring hydration reminder', () => {
       // N1's message from the spec, verbatim and on every slot — the
       // "Log your water / still nothing logged" variations were a testing
       // nudge and are gone with the 2-minute cadence.
-      expect(notification.title).toBe('💧 Hydration');
-      // The queued line is the generic fallback — the real numbers are
-      // written at delivery — but it is varied per slot so a day of
-      // reminders that never get refreshed does not repeat one sentence
-      // twelve times over.
-      expect(GENERIC_REMINDER_BODIES).toContain(notification.body);
+      expect(notification.title).toBe('💧 Hydration Reminder');
+      // Excel copy is queued as-is and never rewritten at delivery.
+      expect(notification.body).toContain('No water for 2 hours?');
       expect(notification.android.channelId).toBe(REMINDER_CHANNEL_ID);
       eventIds.add(notification.data.eventId);
     }
@@ -291,6 +292,42 @@ describe('N17/N18: fixed-time daily messages', () => {
     for (const hour of hours) expect([18, 8]).toContain(hour);
   });
 
+  test('uses exact one-hour offsets for a configured same-day window', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 8, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    await NotificationService.setSleepSchedule({ sleepStart: '23:00', wakeUp: '09:00' });
+    mockQueued.length = 0;
+    await NotificationService.scheduleDailyNotifications(now);
+
+    const times = dailyQueue().map(q => {
+      const at = new Date(q.trigger.timestamp);
+      return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+    });
+
+    expect(times).toContain('10:00');
+    expect(times).toContain('22:00');
+  });
+
+  test('uses exact one-hour offsets when bedtime crosses midnight', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 8, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    await NotificationService.setSleepSchedule({ sleepStart: '00:30', wakeUp: '08:00' });
+    mockQueued.length = 0;
+    await NotificationService.scheduleDailyNotifications(now);
+
+    const times = dailyQueue().map(q => {
+      const at = new Date(q.trigger.timestamp);
+      return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+    });
+
+    expect(times).toContain('09:00');
+    expect(times).toContain('23:30');
+  });
+
   test('a message that would land inside the sleep window is dropped, not shifted', async () => {
     jest.useFakeTimers();
     const now = new Date(2026, 8, 1, 10, 0, 0).getTime();
@@ -322,10 +359,173 @@ describe('N17/N18: fixed-time daily messages', () => {
     expect(dailyQueue()).toHaveLength(firstBatch.length);
   });
 
+  test('changing the sleep schedule cancels old daily times before queuing new ones', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 10, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    await NotificationService.setSleepSchedule({ sleepStart: '23:00', wakeUp: '07:00' });
+    const firstBatch = dailyQueue().map(q => q.notification.id);
+    mockQueued.length = 0;
+    mockCancelledIds.length = 0;
+
+    await NotificationService.setSleepSchedule({ sleepStart: '00:30', wakeUp: '08:00' });
+
+    expect(mockCancelledIds).toEqual(expect.arrayContaining(firstBatch));
+    const replacementIds = dailyQueue().map(q => q.notification.id);
+    expect(new Set(replacementIds).size).toBe(replacementIds.length);
+    const replacementTimes = dailyQueue().map(q => {
+      const at = new Date(q.trigger.timestamp);
+      return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+    });
+    expect(replacementTimes).toContain('09:00');
+    expect(replacementTimes).toContain('23:30');
+  });
+
   test('nothing is queued when notification permission is denied', async () => {
     mockAuthStatus = 0; // DENIED
     await NotificationService.scheduleDailyNotifications(Date.now());
     expect(dailyQueue()).toHaveLength(0);
+  });
+});
+
+describe('Simulated Excel Notifications schedule & Dynamic Window', () => {
+  const simulatedQueue = () => mockQueued.filter(q => q.notification.id.startsWith(SIMULATED_ID_PREFIX));
+
+  test('Case 1 & 3: User A (Wake 7:00 AM, Sleep 11:00 PM) -> GM 8:00 AM, GN 10:00 PM; Slot 11 is >= 30m before GN', () => {
+    const date = new Date(2026, 8, 1, 0, 0, 0);
+    const schedule = { wakeUp: '07:00', sleepStart: '23:00' };
+    const slots = calculateDailySimulatedSchedule(schedule, date);
+
+    expect(slots).toHaveLength(11);
+    const gmTime = new Date(2026, 8, 1, 8, 0, 0).getTime();
+    const gnTime = new Date(2026, 8, 1, 22, 0, 0).getTime();
+
+    // GM to Slot 1 >= 30m
+    expect((slots[0].timestamp - gmTime) / 60000).toBeGreaterThanOrEqual(30);
+
+    // Consecutive gaps >= 30m
+    for (let i = 1; i < slots.length; i++) {
+      const gapMins = (slots[i].timestamp - slots[i - 1].timestamp) / 60000;
+      expect(gapMins).toBeGreaterThanOrEqual(30);
+    }
+
+    // Slot 11 to GN >= 30m
+    const slot11ToGn = (gnTime - slots[10].timestamp) / 60000;
+    expect(slot11ToGn).toBeGreaterThanOrEqual(30);
+  });
+
+  test('Case 2 & 4: User B (Wake 10:00 AM, Sleep 12:00 AM) -> GM 11:00 AM, GN 11:00 PM; Slot 11 is >= 30m before GN', () => {
+    const date = new Date(2026, 8, 1, 0, 0, 0);
+    const schedule = { wakeUp: '10:00', sleepStart: '00:00' };
+    const slots = calculateDailySimulatedSchedule(schedule, date);
+
+    expect(slots).toHaveLength(11);
+    const gmTime = new Date(2026, 8, 1, 11, 0, 0).getTime();
+    const gnTime = new Date(2026, 8, 1, 23, 0, 0).getTime();
+
+    expect((slots[0].timestamp - gmTime) / 60000).toBeGreaterThanOrEqual(30);
+
+    for (let i = 1; i < slots.length; i++) {
+      const gapMins = (slots[i].timestamp - slots[i - 1].timestamp) / 60000;
+      expect(gapMins).toBeGreaterThanOrEqual(30);
+    }
+
+    const slot11ToGn = (gnTime - slots[10].timestamp) / 60000;
+    expect(slot11ToGn).toBeGreaterThanOrEqual(30);
+  });
+
+  test('Case 5 & 6: Impossible short window (< 360m) is detected rather than violating spacing rules', () => {
+    const date = new Date(2026, 8, 1, 0, 0, 0);
+    // 5-hour window (GM 09:00 AM -> GN 02:00 PM = 300 mins < 360 mins required)
+    const schedule = { wakeUp: '08:00', sleepStart: '15:00' };
+    const slots = calculateDailySimulatedSchedule(schedule, date);
+
+    // Detected as impossible window -> returns empty array rather than violating spacing
+    expect(slots).toHaveLength(0);
+  });
+
+  test('Case 8: GM is exactly wake + 1h and GN is exactly sleep - 1h', () => {
+    const date = new Date(2026, 8, 1, 0, 0, 0);
+    const schedule = { wakeUp: '06:30', sleepStart: '22:30' };
+    const slots = calculateDailySimulatedSchedule(schedule, date);
+
+    const gmTime = new Date(2026, 8, 1, 7, 30, 0).getTime();
+    const gnTime = new Date(2026, 8, 1, 21, 30, 0).getTime();
+
+    expect((slots[0].timestamp - gmTime) / 60000).toBeGreaterThanOrEqual(30);
+    expect((gnTime - slots[10].timestamp) / 60000).toBeGreaterThanOrEqual(30);
+  });
+
+  test('Case 9: Changing user sleep/wake schedule cancels/rebuilds simulated schedule correctly without duplicates', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 8, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    await NotificationService.scheduleDailyNotifications(now);
+    await NotificationService.scheduleSimulatedNotifications(now);
+    const simBatch = Array.from(mockOsQueue).filter(id => id.startsWith(SIMULATED_ID_PREFIX));
+
+    mockQueued.length = 0;
+    mockCancelledIds.length = 0;
+
+    await NotificationService.setSleepSchedule({ wakeUp: '09:00', sleepStart: '01:00' });
+
+    expect(mockCancelledIds).toEqual(expect.arrayContaining(simBatch));
+    expect(mockCancelledIds.some(id => id.startsWith('getvari-daily-'))).toBe(true); // Daily also rebuilt
+  });
+
+  test('Issue 1: Blocked scheduled notification is rescheduled to next valid time rather than dropped', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 10, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    // Record a notification delivered 5 minutes ago (at 09:55 AM)
+    await NotificationService.noteNotificationShown(now - 5 * 60 * 1000);
+
+    const testNotif: any = {
+      id: 'test-slot-1',
+      title: 'Hydration Reminder',
+      body: 'Time to drink water',
+      data: { notificationKey: 'regular_reminder', type: HYDRATION_REMINDER_TYPE, eventId: 'test-slot-1@10000' },
+    };
+
+    const accepted = await NotificationService.acceptScheduledDelivery(testNotif);
+    // Blocked because 5m < 30m gap
+    expect(accepted).toBe(false);
+
+    // Check that a rescheduled trigger notification was queued
+    const rescheduled = mockQueued.find(q => q.notification.id?.includes('test-slot-1-shift-'));
+    expect(rescheduled).toBeDefined();
+    expect(rescheduled.trigger.timestamp).toBeGreaterThanOrEqual(now + 25 * 60 * 1000); // Shifted by ~25m to satisfy 30m gap
+  });
+
+  test('Issue 2: Tray synchronization clears old expired notifications (>30m) without creating a burst', async () => {
+    jest.useFakeTimers();
+    const scheduledMs = new Date(2026, 8, 1, 10, 0, 0).getTime();
+    const now = new Date(2026, 8, 1, 14, 0, 0).getTime(); // 4 hours later
+    jest.setSystemTime(now);
+
+    mockCancelledDisplayed.length = 0;
+
+    // Tray contains a notification scheduled for 10:00 AM (4 hours old)
+    mockDisplayed = [
+      {
+        id: 'old-notif-1',
+        notification: {
+          id: 'old-notif-1',
+          title: 'Elevated Risk',
+          body: 'Risk elevated',
+          data: { notificationKey: 'elevated_risk', eventId: `old-notif-1@${scheduledMs}` },
+        },
+        date: new Date(scheduledMs).toISOString(),
+      },
+    ];
+
+    await NotificationService.syncDeliveredFromTray();
+
+    // Expired notification marked processed and cancelled from displayed tray without triggering prompt
+    expect(mockCancelledDisplayed).toContain('old-notif-1');
   });
 });
 
@@ -513,3 +713,140 @@ describe('The quiet window holds', () => {
     expect(mockCancelledDisplayed).toHaveLength(0);
   });
 });
+
+describe('Excel Specification & Delivery Spacing Rules', () => {
+  test('Hydration reminder delivered within 30 minutes of another notification is suppressed and withdrawn from shade', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 14, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    // Record a previous delivery
+    await NotificationService.noteNotificationShown(now);
+
+    mockCancelledDisplayed.length = 0;
+    const reminderNotif = {
+      id: 'rem-suppressed-1',
+      title: '💧 Hydration',
+      body: 'Time to hydrate',
+      data: { type: HYDRATION_REMINDER_TYPE, notificationKey: 'regular_reminder', eventId: 'ev-rem-1' },
+    } as any;
+
+    // Fire 10 minutes after previous notification
+    jest.setSystemTime(now + 10 * 60_000);
+    const result = await NotificationService.handleReminderEvent(3 /* EventType.DELIVERED */, {
+      notification: reminderNotif,
+    } as any);
+
+    expect(result).toBe('none');
+    expect(mockCancelledDisplayed).toContain('rem-suppressed-1');
+  });
+
+  test('High risk notification respects the 30-minute global delivery gap', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 14, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    // Deliver a local notification
+    await NotificationService.displayNotification('Welcome', 'Hello', undefined, 'local', {
+      notificationKey: 'welcome',
+    });
+
+    // Try to deliver High Risk 15 minutes later
+    jest.setSystemTime(now + 15 * 60_000);
+    const suppressed = await NotificationService.displayNotification('🚨 High Risk', 'High risk body', undefined, 'local', {
+      notificationKey: 'high_risk',
+    });
+    expect(suppressed).toBe(false);
+
+    // Try to deliver High Risk 35 minutes later
+    jest.setSystemTime(now + 35 * 60_000);
+    const delivered = await NotificationService.displayNotification('🚨 High Risk', 'High risk body', undefined, 'local', {
+      notificationKey: 'high_risk',
+    });
+    expect(delivered).toBe(true);
+  });
+
+  test('Same notification type cannot repeat within 1 hour', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 14, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    // Deliver regular_reminder
+    await NotificationService.displayNotification('💧 Hydration', 'Drink water', undefined, 'local', {
+      notificationKey: 'regular_reminder',
+    });
+
+    // At 40 minutes later (global gap 30m passed, but same type 60m NOT passed)
+    jest.setSystemTime(now + 40 * 60_000);
+    const repeatAttempt = await NotificationService.displayNotification('💧 Hydration', 'Drink water again', undefined, 'local', {
+      notificationKey: 'regular_reminder',
+    });
+    expect(repeatAttempt).toBe(false);
+
+    // At 65 minutes later (both gaps passed)
+    jest.setSystemTime(now + 65 * 60_000);
+    const validAttempt = await NotificationService.displayNotification('💧 Hydration', 'Drink water again', undefined, 'local', {
+      notificationKey: 'regular_reminder',
+    });
+    expect(validAttempt).toBe(true);
+  });
+
+  test('allowRepeat bypasses only the same-type gate, not the global gap', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 14, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    expect(await NotificationService.displayNotification('Welcome', 'Hello', undefined, 'local', {
+      notificationKey: 'welcome',
+    })).toBe(true);
+
+    jest.setSystemTime(now + 10 * 60_000);
+    expect(await NotificationService.displayNotification('Welcome', 'Hello again', undefined, 'local', {
+      notificationKey: 'welcome', allowRepeat: true,
+    })).toBe(false);
+
+    jest.setSystemTime(now + 40 * 60_000);
+    expect(await NotificationService.displayNotification('Welcome', 'Hello again', undefined, 'local', {
+      notificationKey: 'welcome', allowRepeat: true,
+    })).toBe(true);
+  });
+
+  test('concurrent delivery attempts admit only one notification', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 8, 1, 14, 0, 0).getTime());
+
+    const results = await Promise.all([
+      NotificationService.displayNotification('First', 'One', undefined, 'local', { notificationKey: 'first' }),
+      NotificationService.displayNotification('Second', 'Two', undefined, 'local', { notificationKey: 'second' }),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  test('Deduplication: Refreshed re-posted notification does not reset global delivery timestamp', async () => {
+    jest.useFakeTimers();
+    const now = new Date(2026, 8, 1, 14, 0, 0).getTime();
+    jest.setSystemTime(now);
+
+    const eventId = 'ev-unique-123';
+    const notif = {
+      id: 'notif-123',
+      data: { eventId, notificationKey: 'regular_reminder', type: HYDRATION_REMINDER_TYPE },
+    } as any;
+
+    await NotificationService.acceptScheduledDelivery(notif);
+    expect(await NotificationService.msSinceLastNotification()).toBe(0);
+
+    // 10 minutes later, a refreshed re-post arrives
+    jest.setSystemTime(now + 10 * 60_000);
+    const refreshedNotif = {
+      ...notif,
+      data: { ...notif.data, refreshed: '1' },
+    };
+
+    await NotificationService.acceptScheduledDelivery(refreshedNotif);
+    // msSinceLastNotification should still report 10 minutes (600,000 ms), not 0
+    expect(await NotificationService.msSinceLastNotification()).toBe(10 * 60_000);
+  });
+});
+

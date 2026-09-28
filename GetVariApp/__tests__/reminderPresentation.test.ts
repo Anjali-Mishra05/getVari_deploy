@@ -339,54 +339,14 @@ describe('the background-launch grant on its own', () => {
 describe('refreshing a delivered reminder', () => {
   const facts = { hoursSinceDrink: 3, totalMl: 500, targetMl: 3000 };
 
-  it('re-posts the reminder with the delivery-time figures', async () => {
+  it('skips rewriting reminders at delivery time to preserve immutable Excel copy', async () => {
     expect(await NotificationService.refreshReminderContent(reminder() as any, facts)).toBe(
-      'refreshed'
+      'skipped'
     );
-    expect(mockDisplayed).toHaveLength(1);
-    expect(mockDisplayed[0].body).toBe('3h since your last drink · 500 / 3000 ml — 2500 ml to go');
-    // The expanded view has to carry the same line as the collapsed one.
-    expect(mockDisplayed[0].android.style.text).toBe(mockDisplayed[0].body);
   });
 
   it('never refreshes a re-post, so the rewrite cannot loop', async () => {
-    await NotificationService.refreshReminderContent(reminder() as any, facts);
-    const reposted = mockDisplayed[0];
-
-    // Exactly what Android hands back when the re-post is delivered.
-    expect(reposted.data.refreshed).toBe('1');
-    expect(await NotificationService.refreshReminderContent(reposted, facts)).toBe('skipped');
-    expect(mockDisplayed).toHaveLength(1);
-  });
-
-  it('keeps the event id, so the repeat collapses everywhere it is recorded', async () => {
-    // `ActiveReminder.raise` returns early on a reminder it already holds and
-    // `NotificationHistory` drops a duplicate id — both keyed on this. A fresh
-    // id would show two reminders in the bell menu and restart the "x minutes
-    // ago" the screen counts from.
-    await NotificationService.refreshReminderContent(reminder() as any, facts);
-    expect(mockDisplayed[0].data.eventId).toBe(reminder().data.eventId);
-    expect(mockDisplayed[0].id).toBe(reminder().id);
-  });
-
-  it('keeps the actions and the full-screen intent on the re-post', async () => {
-    // The re-post replaces the notification wholesale, so anything it omits is
-    // gone — including the two buttons that are the only way to answer a
-    // reminder on a device where the full screen never fires.
-    await NotificationService.refreshReminderContent(reminder() as any, facts);
-    const posted = mockDisplayed[0];
-    expect(posted.android.actions).toHaveLength(2);
-    expect(posted.android.fullScreenAction).toBeTruthy();
-    expect(posted.android.category).toBe('alarm');
-  });
-
-  it('does not re-post when there is nothing specific to say', async () => {
-    // Re-posting the identical generic line would cost the user a second
-    // heads-up for no new information.
-    expect(await NotificationService.refreshReminderContent(reminder() as any, {})).toBe(
-      'skipped'
-    );
-    expect(mockDisplayed).toHaveLength(0);
+    expect(await NotificationService.refreshReminderContent(reminder() as any, facts)).toBe('skipped');
   });
 
   it('leaves a notification that is not a reminder alone', async () => {
@@ -408,7 +368,7 @@ describe('refreshing a delivered reminder', () => {
     const queued = mockQueued.find(n => n?.notification?.data?.type === HYDRATION_REMINDER_TYPE);
 
     expect(queued).toBeTruthy();
-    expect(queued.notification.body).toBe(GENERIC_REMINDER_BODY);
+    expect(queued.notification.body).toContain('Time to hydrate');
     expect(queued.notification.data.refreshed).toBeUndefined();
   });
 });
