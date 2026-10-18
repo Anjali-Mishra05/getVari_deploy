@@ -34,6 +34,7 @@ module.exports = {
 '<rootDir>/__tests__/reminderPrompt.test.ts',
 '<rootDir>/__tests__/quickLogPicker.test.ts',
 '<rootDir>/__tests__/adminUserDetails.test.ts',
+'<rootDir>/__tests__/intakeRiskScatter.test.ts',
 '<rootDir>/__tests__/deviceConnectEntry.test.ts',
 '<rootDir>/__tests__/reminderPresentation.test.ts',
 '<rootDir>/__tests__/reminderContent.test.ts',

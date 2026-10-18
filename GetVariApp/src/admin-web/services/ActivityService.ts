@@ -1,5 +1,7 @@
 import { ActivityEvent } from '../types';
 import { supabase } from '../../services/SupabaseClient';
+import { steadyStateRisk } from '../../utils/appRiskModel';
+import { clockForProfile, startOfUserDay, wallClockShiftMs } from '../utils/userClock';
 
 /** PostgREST answers at most 1000 rows per request by default. */
 const PAGE_SIZE = 1000;
@@ -72,11 +74,45 @@ export const fetchEventsForUser = async (userId: string): Promise<ActivityEvent[
       .order('timestamp', { ascending: true })
   );
 
+  // The risk each drink answered, for the journey's "Water Intake vs Risk
+  // Score" chart: the app's own solve (as the Users list and its hourly trend
+  // use) at the moment of the entry, over the entries already logged that day
+  // on the user's clock. Recomputed, as the app keeps no history of its score.
+  const profile = profileRow?.profile ?? undefined;
+  const clock = clockForProfile(profile);
+  const riskBefore = (index: number): number | undefined => {
+    const at = new Date(logs[index].timestamp).getTime();
+    if (!Number.isFinite(at)) return undefined;
+    const dayStart = startOfUserDay(clock, at);
+    const earlierToday = logs.slice(0, index).filter(l => {
+      const t = new Date(l.timestamp).getTime();
+      return t >= dayStart && t < at;
+    });
+    const score = steadyStateRisk(profile, earlierToday, at, wallClockShiftMs(clock, at)).output.score;
+    // "Insufficient Data" has no place on the risk axis.
+    return typeof score === 'number' && Number.isFinite(score) ? score : undefined;
+  };
+
   let cumulativeMl = 0;
-  for (const log of logs) {
+  /**
+   * The day's running total after each entry, on the user's clock and with
+   * corrections taken off, as the app's daily total counts them. This, not the
+   * all-time `cumulativeMl`, is the intake the chart plots a drink against.
+   */
+  let dayStartMs: number | null = null;
+  let dailyTotalMl = 0;
+  for (const [index, log] of logs.entries()) {
     const amount = Number(log.amount_ml) || 0;
     cumulativeMl += amount;
+    const at = new Date(log.timestamp).getTime();
+    const dayStart: number | null = Number.isFinite(at) ? startOfUserDay(clock, at) : dayStartMs;
+    if (dayStart !== dayStartMs) {
+      dayStartMs = dayStart;
+      dailyTotalMl = 0;
+    }
+    dailyTotalMl += amount;
     const isCorrection = log.source === 'correction' || amount < 0;
+    const riskSnapshot = isCorrection ? undefined : riskBefore(index);
     events.push({
       eventId: String(log.id),
       userId,
@@ -93,9 +129,11 @@ export const fetchEventsForUser = async (userId: string): Promise<ActivityEvent[
       metadata: {
         amount,
         cumulativeAmount: cumulativeMl,
+        dailyTotalMl,
         source: log.source,
         reportedAt: log.reported_at ?? log.timestamp,
         verificationSource: log.verification_source,
+        ...(riskSnapshot !== undefined ? { riskSnapshot } : {}),
       },
     });
   }

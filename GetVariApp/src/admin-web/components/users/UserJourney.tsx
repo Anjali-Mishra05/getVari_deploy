@@ -229,7 +229,9 @@ const UserJourney: React.FC<Props> = ({ user }) => {
     const scatter = filtered
       .filter(e => e.eventType === 'water_intake_added' && e.metadata?.riskSnapshot !== undefined)
       .map(e => ({
-        consumed: e.metadata?.cumulativeAmount || e.metadata?.amount,
+        // That day's running total with this drink — not the all-time sum,
+        // which put a single day's points out past 100,000 ml.
+        consumed: e.metadata?.dailyTotalMl ?? e.metadata?.amount,
         risk: e.metadata?.riskSnapshot,
         name: e.title
       }));
