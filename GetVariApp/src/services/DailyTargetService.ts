@@ -1,7 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import PBWRService, { type PBWRBreakdown } from './PBWRService';
+import { supabase } from './SupabaseClient';
 import type { UserProfile } from '../types';
+import {
+  localDateKey,
+  localUtcOffsetMinutes,
+  storedTargetForToday,
+  type StoredDailyTarget,
+} from '../utils/dailyTargetRecord';
 
 /**
  * The daily hydration goal, decided once per calendar day.
@@ -38,6 +45,14 @@ import type { UserProfile } from '../types';
  */
 
 const STORAGE_KEY = 'getvari_daily_target';
+const PROFILES_TABLE = 'getvari_profiles';
+
+/**
+ * Per account: a device shared by two accounts must never hand one of them the
+ * other's goal. The unscoped key is only for a caller with no account id.
+ */
+const storageKeyFor = (userId?: string | null): string =>
+  userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY;
 
 /** What is remembered for the day. */
 interface LockedTarget {
@@ -46,23 +61,19 @@ interface LockedTarget {
   targetMl: number;
   /** The breakdown behind it, so the PBWR card can explain the locked number. */
   breakdown?: PBWRBreakdown;
+  /** Whether it has been written to the account's profile row. */
+  persisted?: boolean;
 }
 
-/**
- * The device's local calendar date.
- *
- * Built from the local getters rather than `toISOString().split('T')[0]`,
- * which is UTC and is the bug this exists to avoid.
- */
-export const localDateKey = (at: Date = new Date()): string => {
-  const month = `${at.getMonth() + 1}`.padStart(2, '0');
-  const day = `${at.getDate()}`.padStart(2, '0');
-  return `${at.getFullYear()}-${month}-${day}`;
-};
 
-const readLocked = async (): Promise<LockedTarget | null> => {
+// The local-day key and the stored-target reader live in a pure util so the
+// admin panel reads the stored target exactly the way the app does.
+export { localDateKey, storedTargetForToday } from '../utils/dailyTargetRecord';
+export type { StoredDailyTarget } from '../utils/dailyTargetRecord';
+
+const readLocked = async (userId?: string | null): Promise<LockedTarget | null> => {
   try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    const raw = await AsyncStorage.getItem(storageKeyFor(userId));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as LockedTarget;
     const target = Number(parsed?.targetMl);
@@ -74,11 +85,61 @@ const readLocked = async (): Promise<LockedTarget | null> => {
   }
 };
 
-const writeLocked = async (locked: LockedTarget): Promise<void> => {
+const writeLocked = async (locked: LockedTarget, userId?: string | null): Promise<void> => {
   try {
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(locked));
+    await AsyncStorage.setItem(storageKeyFor(userId), JSON.stringify(locked));
   } catch (error) {
     console.warn('[DailyTarget] Could not store the locked target:', error);
+  }
+};
+
+/**
+ * Writes the day's final target onto the account's profile row: `dailyTarget`
+ * and `targetDailyMl` both carry the capped Final Daily Target. Returns
+ * whether the row now holds it. Never throws — the dashboard's own number
+ * does not depend on the write.
+ */
+const persistFinalTarget = async (
+  userId: string,
+  today: string,
+  breakdown: PBWRBreakdown
+): Promise<boolean> => {
+  try {
+    const { data, error } = await supabase
+      .from(PROFILES_TABLE)
+      .select('profile')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error || !data?.profile) return false;
+
+    const profile = data.profile as any;
+    const utcOffsetMinutes = localUtcOffsetMinutes();
+    if (
+      storedTargetForToday(profile, today) === breakdown.finalTarget &&
+      profile.dailyTarget?.utcOffsetMinutes === utcOffsetMinutes
+    ) {
+      return true;
+    }
+
+    const dailyTarget: StoredDailyTarget = {
+      date: today,
+      finalTargetMl: breakdown.finalTarget,
+      adjustedTotalMl: breakdown.adjustedTotal,
+      upperLimitMl: breakdown.upperLimit,
+      utcOffsetMinutes,
+    };
+    const { error: writeError } = await supabase
+      .from(PROFILES_TABLE)
+      .update({ profile: { ...profile, targetDailyMl: breakdown.finalTarget, dailyTarget } })
+      .eq('id', userId);
+    if (writeError) {
+      console.warn('[DailyTarget] Could not store the final target:', writeError.message);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn('[DailyTarget] Could not store the final target:', error);
+    return false;
   }
 };
 
@@ -94,7 +155,7 @@ export const getTodayBreakdown = async (
   userId?: string
 ): Promise<PBWRBreakdown> => {
   const today = localDateKey();
-  const locked = await readLocked();
+  const locked = await readLocked(userId);
 
   const breakdown = await PBWRService.calculatePBWR(profile, waterConsumedMl, userId);
 
@@ -103,14 +164,20 @@ export const getTodayBreakdown = async (
   // card explains, and explaining yesterday's inputs would be worse than
   // explaining a total that no longer sums exactly to the locked figure.
   if (locked && locked.date === today) {
-    return {
+    const result = {
       ...breakdown,
       finalTarget: locked.targetMl,
       remaining: Math.max(0, locked.targetMl - (Number(waterConsumedMl) || 0)),
     };
+    // A write that failed earlier today (offline, say) is retried.
+    if (userId && !locked.persisted && (await persistFinalTarget(userId, today, result))) {
+      await writeLocked({ ...locked, persisted: true }, userId);
+    }
+    return result;
   }
 
-  await writeLocked({ date: today, targetMl: breakdown.finalTarget, breakdown });
+  const persisted = userId ? await persistFinalTarget(userId, today, breakdown) : false;
+  await writeLocked({ date: today, targetMl: breakdown.finalTarget, breakdown, persisted }, userId);
   return breakdown;
 };
 
@@ -128,8 +195,8 @@ export const getTodayTargetMl = async (
  * the profile's stored figure when the app has not run yet today, which is
  * the old behaviour and still the best available answer at that point.
  */
-export const peekTodayTargetMl = async (): Promise<number | null> => {
-  const locked = await readLocked();
+export const peekTodayTargetMl = async (userId?: string | null): Promise<number | null> => {
+  const locked = await readLocked(userId);
   return locked && locked.date === localDateKey() ? locked.targetMl : null;
 };
 
@@ -141,9 +208,9 @@ export const peekTodayTargetMl = async (): Promise<number | null> => {
  * yesterday's number after they edited the inputs would read as the edit not
  * having taken.
  */
-export const clearLockedTarget = async (): Promise<void> => {
+export const clearLockedTarget = async (userId?: string | null): Promise<void> => {
   try {
-    await AsyncStorage.removeItem(STORAGE_KEY);
+    await AsyncStorage.removeItem(storageKeyFor(userId));
   } catch (error) {
     console.warn('[DailyTarget] Could not clear the locked target:', error);
   }
@@ -155,6 +222,7 @@ export const DailyTargetService = {
   peekTodayTargetMl,
   clearLockedTarget,
   localDateKey,
+  storedTargetForToday,
 };
 
 export default DailyTargetService;

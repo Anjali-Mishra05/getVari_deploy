@@ -1,8 +1,11 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { ChartColumn, Droplets, TrendingUp } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { NAV_HEIGHT, navBottomOffset, sideInset } from '../../utils/navLayout';
 import { ACCENT } from './riskTheme';
+import { tone } from '../../theme/theme';
 
 /**
  * The bottom bar.
@@ -42,24 +45,24 @@ interface DashboardNavProps {
 const styles = StyleSheet.create({
   bar: {
     position: 'absolute',
-    bottom: 32,
-    left: 32,
-    right: 32,
-    height: 80,
+    // Docked edge to edge. Its height and padding are set at render, from the
+    // system insets.
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: 'rgba(10,10,10,0.92)',
-    borderWidth: 1,
+    borderTopWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 28,
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    paddingHorizontal: 16,
+    alignItems: 'stretch',
   },
-  item: { alignItems: 'center', justifyContent: 'center' },
+  // Four equal columns, whatever the width: each item is centred in its own
+  // quarter of the bar and the whole quarter is the touch target.
+  item: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   slot: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
+    width: 40,
+    height: 32,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -69,16 +72,19 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(0,242,254,0.35)',
   },
   label: {
-    fontSize: 8,
+    fontSize: 9,
     fontWeight: '900',
     letterSpacing: 0.8,
     textTransform: 'uppercase',
     marginTop: 4,
+    alignSelf: 'stretch',
+    textAlign: 'center',
+    paddingHorizontal: 2,
   },
   avatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
@@ -88,9 +94,10 @@ const styles = StyleSheet.create({
 });
 
 const IDLE = '#64748b';
+const ICON_SIZE = 20;
 
 /**
- * The bar has a fixed height and four fixed slots, so its labels cannot grow
+ * The bar has a fixed height and four equal columns, so its labels cannot grow
  * with the system font size: at 130% "ANALYTICS" ran into "ACCOUNT". They
  * stay on one line and shrink to fit instead.
  */
@@ -103,11 +110,48 @@ const DashboardNav: React.FC<DashboardNavProps> = ({
   onOpenProfile,
   profileInitial,
 }) => {
+  // The system's own navigation shares the bottom of the screen: the bar's
+  // surface runs behind it and its items sit above it, whichever kind it is
+  // (see `navLayout`).
+  const insets = useSafeAreaInsets();
+  const bottomInset = navBottomOffset(insets.bottom);
   const dashboardSelected = active === 'dashboard';
   const analyticsSelected = active === 'analytics';
+  /** The accent is too pale to read on a light bar. */
+  const selected = tone(ACCENT, '#0e7490');
+  /** Unselected icons and labels: darker on white, to hold their contrast. */
+  const idle = tone(IDLE, '#52525b');
+  /** A neutral grey behind the selected item, not a blue block: the accent
+   *  is carried by the icon and label alone. Translucent like the bar. */
+  const selectedSlot = tone(styles.selectedSlot, {
+    backgroundColor: 'rgba(24,24,27,0.06)',
+    borderWidth: 0,
+    borderColor: 'transparent',
+  });
 
   return (
-    <View style={styles.bar}>
+    <View
+      style={[
+        styles.bar,
+        {
+          height: NAV_HEIGHT + bottomInset,
+          paddingBottom: bottomInset,
+          // The surface spans the screen; the items keep clear of a cutout or
+          // a side navigation bar in landscape.
+          paddingLeft: 8 + sideInset(insets.left),
+          paddingRight: 8 + sideInset(insets.right),
+          // The same translucency in both modes — 92% — over each mode's own
+          // surface colour: near-black in dark, a light neutral grey in light
+          // (a step darker than the off-white page and the white cards, so
+          // the bar still reads as its own surface).
+          //
+          // No shadow: Android draws one *through* a translucent view, as a
+          // grey smear inside the bar. The top border separates it from the page.
+          backgroundColor: tone('rgba(10,10,10,0.92)', 'rgba(233,233,231,0.92)'),
+          borderColor: tone('rgba(255,255,255,0.1)', 'rgba(24,24,27,0.14)'),
+        },
+      ]}
+    >
       <TouchableOpacity
         style={styles.item}
         onPress={() => onSelect('dashboard')}
@@ -115,14 +159,14 @@ const DashboardNav: React.FC<DashboardNavProps> = ({
         accessibilityState={{ selected: dashboardSelected }}
         accessibilityLabel="Dashboard"
       >
-        <View style={[styles.slot, dashboardSelected && styles.selectedSlot]}>
+        <View style={[styles.slot, dashboardSelected && selectedSlot]}>
           <TrendingUp
-            color={dashboardSelected ? ACCENT : IDLE}
-            size={22}
+            color={dashboardSelected ? selected : idle}
+            size={ICON_SIZE}
             strokeWidth={dashboardSelected ? 2.5 : 2}
           />
         </View>
-        <Text {...LABEL_FIT} style={[styles.label, { color: dashboardSelected ? ACCENT : IDLE }]}>Dashboard</Text>
+        <Text {...LABEL_FIT} style={[styles.label, { color: dashboardSelected ? selected : idle }]}>Dashboard</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -132,9 +176,9 @@ const DashboardNav: React.FC<DashboardNavProps> = ({
         accessibilityLabel="Log water"
       >
         <View style={styles.slot}>
-          <Droplets color={IDLE} size={22} />
+          <Droplets color={idle} size={ICON_SIZE} />
         </View>
-        <Text {...LABEL_FIT} style={[styles.label, { color: IDLE }]}>Log</Text>
+        <Text {...LABEL_FIT} style={[styles.label, { color: idle }]}>Log</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -144,14 +188,14 @@ const DashboardNav: React.FC<DashboardNavProps> = ({
         accessibilityState={{ selected: analyticsSelected }}
         accessibilityLabel="Analytics"
       >
-        <View style={[styles.slot, analyticsSelected && styles.selectedSlot]}>
+        <View style={[styles.slot, analyticsSelected && selectedSlot]}>
           <ChartColumn
-            color={analyticsSelected ? ACCENT : IDLE}
-            size={22}
+            color={analyticsSelected ? selected : idle}
+            size={ICON_SIZE}
             strokeWidth={analyticsSelected ? 2.5 : 2}
           />
         </View>
-        <Text {...LABEL_FIT} style={[styles.label, { color: analyticsSelected ? ACCENT : IDLE }]}>Analytics</Text>
+        <Text {...LABEL_FIT} style={[styles.label, { color: analyticsSelected ? selected : idle }]}>Analytics</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -161,11 +205,19 @@ const DashboardNav: React.FC<DashboardNavProps> = ({
         accessibilityLabel="Profile and account settings"
       >
         <View style={styles.slot}>
-          <View style={styles.avatar}>
-            <Text style={{ fontSize: 10, fontWeight: '900', color: IDLE }}>{profileInitial}</Text>
+          <View
+            style={[
+              styles.avatar,
+              {
+                backgroundColor: tone('rgba(255,255,255,0.06)', '#f4f4f5'),
+                borderColor: tone('rgba(255,255,255,0.12)', '#d4d4d8'),
+              },
+            ]}
+          >
+            <Text style={{ fontSize: 10, fontWeight: '900', color: idle }}>{profileInitial}</Text>
           </View>
         </View>
-        <Text {...LABEL_FIT} style={[styles.label, { color: IDLE }]}>Account</Text>
+        <Text {...LABEL_FIT} style={[styles.label, { color: idle }]}>Account</Text>
       </TouchableOpacity>
     </View>
   );

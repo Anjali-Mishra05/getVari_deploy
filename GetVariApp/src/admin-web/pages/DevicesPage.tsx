@@ -1,31 +1,32 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import DeviceTable from '../components/devices/DeviceTable';
-import { User } from '../types';
-import { SupabaseAdminService } from '../services/SupabaseAdminService';
+import useAdminUsers from '../hooks/useAdminUsers';
+import DataStatus from '../components/shared/DataStatus';
 
 const DevicesPage: React.FC = () => {
-  const [users, setUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { users, loading, error, loadedAt, refresh } = useAdminUsers();
 
-  useEffect(() => {
-    const loadData = async () => {
-      const data = await SupabaseAdminService.fetchAllUsers();
-      setUsers(data);
-      setLoading(false);
-    };
-    loadData();
-  }, []);
-
-  if (loading) {
+  if (loading && loadedAt === null) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-slate-400 font-mono text-sm animate-pulse">SCANNING HARDWARE FLEET...</div>
-      </div>
+      <DataStatus loading loadingLabel="SCANNING HARDWARE FLEET..." error={null} loadedAt={null} onRefresh={refresh} />
     );
   }
 
   return (
     <div>
+      <DataStatus
+        loading={loading}
+        loadingLabel="SCANNING HARDWARE FLEET..."
+        error={error}
+        loadedAt={loadedAt}
+        onRefresh={refresh}
+        isEmpty={users.length === 0}
+        emptyLabel="No user profiles yet."
+      />
+      <div className="mb-4 p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs font-bold">
+        The mobile app does not pair or register a wearable yet. Battery and signal below are the
+        app's simulated sensor values for each profile, the same ones its dashboard shows.
+      </div>
       <DeviceTable
         users={users}
         onUpdate={(id, name) => console.log('Updating', name)}

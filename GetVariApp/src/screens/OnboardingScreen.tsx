@@ -1,27 +1,22 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
-  SafeAreaView,
   Platform,
   ScrollView,
   ActivityIndicator,
-  Alert,
-  Linking,
-  NativeModules,
   TextInput,
 } from 'react-native';
+// Not React Native's own SafeAreaView: that is a plain View on Android and
+// leaves the content under the system bars. This one applies the real insets.
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   Waves,
-  ChevronRight,
   ChevronLeft,
   Check,
   MapPin,
-  Radio,
-  Info,
   CircleAlert,
-  Bluetooth,
   Moon,
   Sunrise,
   BellOff,
@@ -32,10 +27,9 @@ import Animated, {
   FadeInUp,
 } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
-import { BleManager, Device } from 'react-native-ble-plx';
-import { request, requestMultiple, PERMISSIONS, RESULTS } from 'react-native-permissions';
 
 import GlassCard from '../components/GlassCard';
+import { DeviceConnectPanel, useDeviceConnection } from '../components/DeviceConnect';
 import Button from '../components/ui/Button';
 import NumberField from '../components/ui/NumberField';
 import TimeField from '../components/TimeField';
@@ -54,6 +48,7 @@ import {
   formatClockLabel,
   sleepDurationMinutes,
 } from '../utils/sleepWindow';
+import { onAccent, themed, tone, useThemeMode } from '../theme/theme';
 
 /**
  * A labelled field that says it is required, and why it is not satisfied.
@@ -68,19 +63,17 @@ const RequiredField: React.FC<{
   children: React.ReactNode;
 }> = ({ label, error, className = '', children }) => (
   <View className={className}>
-    <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">
-      {label} <Text className="text-red-400">*</Text>
+    <Text className={themed('text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2')}>
+      {label} <Text className={themed('text-red-400')}>*</Text>
     </Text>
     {children}
-    {!!error && <Text className="text-[10px] text-red-400 mt-1.5">{error}</Text>}
+    {!!error && <Text className={themed('text-[10px] text-red-400 mt-1.5')}>{error}</Text>}
   </View>
 );
 
-const manager = new BleManager();
-const GETVARI_SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
-
 
 const OnboardingScreen = ({ navigation }: any) => {
+  useThemeMode();
   const [step, setStep] = useState(1);
   const totalSteps = 7;
 
@@ -116,11 +109,12 @@ const OnboardingScreen = ({ navigation }: any) => {
   const [physicianLimit, setPhysicianLimit] = useState('');
 
   // State for Step 6
-  const [bleState, setBleState] = useState<'idle' | 'checking' | 'bluetoothOff' | 'requesting' | 'scanning' | 'devicesFound' | 'noDevicesFound' | 'connecting' | 'connected' | 'error'>('idle');
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  // The wearable connection, shared with the dashboard's connect-device sheet.
+  // Its scan errors show in this screen's own error line.
+  const deviceConnection = useDeviceConnection({ onErrorMessage: setErrorMsg });
+  const { connectedDevice } = deviceConnection;
 
   // Subscribed, not sampled: the config arrives over the network and can land
   // after this screen has painted, or change while it is open.
@@ -160,42 +154,24 @@ const OnboardingScreen = ({ navigation }: any) => {
   const sleepHours = sleepDurationMinutes(sleepSchedule) / 60;
   const awakeHours = awakeHoursPerDay(sleepSchedule);
 
-  /**
-   * The scan's timers, held so a new scan — or leaving the screen — cancels
-   * the previous one. Left running, the old ten-second timeout would fire
-   * into a scan that had already been restarted and stop it early.
-   */
-  const scanFlushRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  // An existing account must never be asked for its details again. Routing
+  // already checks, but its lookup is on a deadline and may have come back
+  // "unknown" on a slow start; this second look, off the critical path, sends
+  // an account that turns out to have a saved profile to the dashboard instead
+  // of letting this wizard overwrite that profile.
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const userId = await AuthService.getCurrentUserId();
+      if (!userId || cancelled) return;
+      if ((await AuthService.profileStatus(userId)) !== 'complete' || cancelled) return;
+      await AuthService.markOnboardingComplete();
+      if (!cancelled) navigation.replace('Home');
+    })().catch(error => console.warn('[Onboarding] Existing-profile check failed:', error));
     return () => {
-      manager.stopDeviceScan();
-      if (scanFlushRef.current) clearInterval(scanFlushRef.current);
-      if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
+      cancelled = true;
     };
-  }, []);
-
-  const requestPermissions = async () => {
-    if (Platform.OS === 'android') {
-      const apiLevel = parseInt(String(Platform.Version), 10);
-      if (apiLevel >= 31) {
-        // One combined request. Three concurrent `request` calls could
-        // overlap, and on some phones the overlapping one comes back denied
-        // without the user ever seeing a dialog for it.
-        const result = await requestMultiple([
-          PERMISSIONS.ANDROID.BLUETOOTH_SCAN,
-          PERMISSIONS.ANDROID.BLUETOOTH_CONNECT,
-          PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION,
-        ]);
-        return Object.values(result).every((res) => res === RESULTS.GRANTED);
-      } else {
-        const result = await request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
-        return result === RESULTS.GRANTED;
-      }
-    }
-    return true;
-  };
+  }, [navigation]);
 
   /**
    * Resolve the user's city from the device.
@@ -327,6 +303,9 @@ const OnboardingScreen = ({ navigation }: any) => {
           // the notification layer explicitly — it cannot read the profile row
           // from a background handler or a cold start.
           try {
+            // The target first: the Daily Water Requirement is only queued
+            // when one is known, and the rebuild below is what queues it.
+            await NotificationService.cacheDailyWaterTarget(targetMl, { onlyIfEmpty: true });
             await NotificationService.setSleepSchedule(sleepSchedule);
           } catch (sleepError) {
             console.error('[Onboarding] Failed to apply sleep window:', sleepError);
@@ -357,262 +336,69 @@ const OnboardingScreen = ({ navigation }: any) => {
     }
   };
 
-  const handleScanBLE = async () => {
-    if (bleState === 'scanning') return;
-
-    setBleState('checking');
-    setDevices([]);
-
-    const currentState = await manager.state();
-    // A phone with no Bluetooth LE at all: say so, rather than asking the
-    // user to "turn on" something the phone does not have.
-    if (currentState === 'Unsupported') {
-      setBleState('idle');
-      Alert.alert(
-        'Bluetooth not supported',
-        "This phone doesn't support Bluetooth LE, so the wearable can't connect. You can continue and log water manually."
-      );
-      return;
-    }
-    if (currentState !== 'PoweredOn') {
-      setBleState('bluetoothOff');
-      Alert.alert(
-        "Bluetooth is turned off",
-        "Please turn on Bluetooth to scan and connect to your device.",
-        [
-          { text: "Cancel", onPress: () => setBleState('idle'), style: "cancel" },
-          {
-            text: "Turn On",
-            onPress: async () => {
-              if (Platform.OS === 'android') {
-                try {
-                  // Listen for state change BEFORE enabling
-                  const sub = manager.onStateChange((state) => {
-                    console.log('[Onboarding] Bluetooth state changed:', state);
-                    if (state === 'PoweredOn') {
-                      sub.remove();
-                      // Small delay to ensure stack is ready
-                      setTimeout(handleScanBLE, 800);
-                    }
-                  }, true);
-
-                  const { BluetoothModule } = NativeModules;
-                  if (BluetoothModule) {
-                    const enabled = await BluetoothModule.enableBluetooth();
-                    if (!enabled) {
-                      sub.remove();
-                      setBleState('idle');
-                    }
-                  } else {
-                    console.warn('[Onboarding] BluetoothModule is not registered');
-                    Linking.sendIntent('android.settings.BLUETOOTH_SETTINGS');
-                    setBleState('idle');
-                  }
-                } catch (e) {
-                  console.error('[Onboarding] Native enable failed:', e);
-                  Linking.sendIntent('android.settings.BLUETOOTH_SETTINGS');
-                  setBleState('idle');
-                }
-              } else {
-                Linking.openSettings();
-              }
-            }
-          }
-        ]
-      );
-      return;
-    }
-
-    const hasPermission = await requestPermissions();
-    if (!hasPermission) {
-      setBleState('error');
-      Alert.alert(
-        "Permissions Required",
-        "GetVari needs Bluetooth and Location access to find your device.",
-        [
-          { text: "Cancel", style: "cancel", onPress: () => setBleState('idle') },
-          { text: "Open Settings", onPress: () => Linking.openSettings() }
-        ]
-      );
-      return;
-    }
-
-    setBleState('scanning');
-    setErrorMsg('');
-
-    /**
-     * The scan used to run its full ten seconds every time and re-render this
-     * screen on every advertisement packet. Three separate costs:
-     *
-     *  - it never stopped early, so finding the wearable in one second still
-     *    meant waiting nine more;
-     *  - `setDevices` was called per packet, and the RSSI branch fired a fresh
-     *    render whenever any nearby device's signal moved 5 dBm. With a dozen
-     *    BLE devices in range that is several full re-renders a second of a
-     *    screen carrying SVG gradients and entering animations;
-     *  - every device in range went into the list, so the user's own wearable
-     *    arrived somewhere in a pile of headphones and TVs.
-     *
-     * Results are now collected into a ref and flushed on an interval, the
-     * scan stops the moment a GetVari device appears, and GetVari devices sort
-     * to the top. The ten seconds is now only the ceiling for *not* finding it.
-     */
-    const found = new Map<string, Device>();
-    let dirty = false;
-
-    const isGetVariDevice = (device: Device): boolean =>
-      Boolean(
-        (device.serviceUUIDs && device.serviceUUIDs.includes(GETVARI_SERVICE_UUID)) ||
-          (device.name && device.name.toLowerCase().includes('getvari'))
-      );
-
-    /** The wearable first, then everything else strongest-signal first. */
-    const flush = () => {
-      if (!dirty) return;
-      dirty = false;
-      setDevices(
-        [...found.values()].sort((a, b) => {
-          const byKind = Number((b as any).isGetVari) - Number((a as any).isGetVari);
-          return byKind !== 0 ? byKind : (b.rssi ?? -999) - (a.rssi ?? -999);
-        })
-      );
-    };
-
-    const stop = (next: (current: string) => string) => {
-      manager.stopDeviceScan();
-      if (scanFlushRef.current) clearInterval(scanFlushRef.current);
-      if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
-      scanFlushRef.current = null;
-      scanTimeoutRef.current = null;
-      dirty = true;
-      flush();
-      setBleState(current => next(current) as typeof current);
-    };
-
-    manager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
-      if (error) {
-        if (error.message.includes('powered off')) {
-          stop(() => 'bluetoothOff');
-        } else {
-          console.log('[Onboarding] BLE Scan Error:', error.message);
-          setErrorMsg(error.message);
-          stop(() => 'error');
-        }
-        return;
-      }
-
-      if (!device) return;
-
-      const known = found.get(device.id);
-      if (!known) {
-        (device as any).isGetVari = isGetVariDevice(device);
-        found.set(device.id, device);
-        dirty = true;
-        console.log('[Onboarding] Found new device:', device.name || 'Unnamed', device.id);
-
-        // The wearable is the whole point of this screen. Once it is in the
-        // list there is nothing left to wait for.
-        if ((device as any).isGetVari) {
-          stop(current => (current === 'scanning' ? 'devicesFound' : current));
-          return;
-        }
-      } else if (Math.abs((known.rssi || 0) - (device.rssi || 0)) > 5) {
-        (device as any).isGetVari = (known as any).isGetVari;
-        found.set(device.id, device);
-        dirty = true;
-      }
-    });
-
-    // Batched rather than per packet: the list only has to look live, and four
-    // updates a second is well past what anyone can read.
-    scanFlushRef.current = setInterval(flush, 250);
-
-    // The ceiling, not the duration — a scan that finds the wearable stops as
-    // soon as it does.
-    scanTimeoutRef.current = setTimeout(() => {
-      stop(current =>
-        current === 'scanning' ? (found.size > 0 ? 'devicesFound' : 'noDevicesFound') : current
-      );
-    }, 10000);
-  };
-
-  const connectToDevice = async (device: Device) => {
-    manager.stopDeviceScan();
-    try {
-      const connected = await manager.connectToDevice(device.id);
-      await connected.discoverAllServicesAndCharacteristics();
-      setConnectedDevice(connected);
-      setBleState('connected');
-    } catch (e: any) {
-      console.error('Connection error:', e);
-      Alert.alert("Connection Failed", `Could not connect to ${device.name || 'device'}`);
-      setBleState('idle');
-    }
-  };
-
   return (
-    <View className="flex-1 bg-[#01040a]">
-      <View className="absolute inset-0">
+    <View className={themed('flex-1 bg-[#01040a]')}>
+      <View className={themed('absolute inset-0')}>
         <Svg height="100%" width="100%">
           <Defs>
             <RadialGradient id="grad" cx="50%" cy="50%" rx="45%" ry="35%" fx="50%" fy="50%" gradientUnits="userSpaceOnUse">
-              <Stop offset="0%" stopColor="#0b2133" stopOpacity="0.2" />
-              <Stop offset="100%" stopColor="#01040a" stopOpacity="1" />
+              <Stop offset="0%" stopColor={tone('#0b2133', '#ffffff')} stopOpacity="0.2" />
+              <Stop offset="100%" stopColor={tone('#01040a', '#f5f5f3')} stopOpacity="1" />
             </RadialGradient>
           </Defs>
           <SvgRect x="0" y="0" width="100%" height="100%" fill="url(#grad)" />
         </Svg>
       </View>
 
-      <SafeAreaView className="flex-1">
-        <View className="flex-1 px-6 pt-10">
-          <Animated.View entering={FadeInUp.duration(1000)} className="flex-1">
-            <GlassCard className="flex-1 py-10 px-8 rounded-[42px] bg-white/[0.01] border-white/5 shadow-2xl">
-              <View className="flex-row justify-center gap-2 mb-10">
+      <SafeAreaView className={themed('flex-1')}>
+        <View className={themed('flex-1 px-6 pt-10')}>
+          <Animated.View entering={FadeInUp.duration(1000)} className={themed('flex-1')}>
+            <GlassCard adaptive className={themed('flex-1 py-10 px-8 rounded-[42px] bg-white/[0.01] border-white/5 shadow-2xl')}>
+              <View className={themed('flex-row justify-center gap-2 mb-10')}>
                 {Array.from({ length: totalSteps }).map((_, idx) => (
-                  <View key={idx} className={`h-1.5 rounded-full transition-all duration-300 ${idx + 1 === step ? 'w-10 bg-[#00f2fe]' : 'w-2 bg-white/10'}`} />
+                  <View key={idx} className={themed(`h-1.5 rounded-full transition-all duration-300 ${idx + 1 === step ? 'w-10 bg-[#00f2fe]' : 'w-2 bg-white/10'}`)} />
                 ))}
               </View>
 
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
                 {step === 1 && (
-                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="items-center w-full">
+                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className={themed('items-center w-full')}>
                     <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(0, 242, 254, 0.03)', borderWidth: 1, borderColor: 'rgba(0, 242, 254, 0.1)', justifyContent: 'center', alignItems: 'center', marginBottom: 32 }}>
-                      <Waves color="#00f2fe" size={40} strokeWidth={1.5} opacity={0.8} />
+                      <Waves color={tone('#00f2fe', '#0891b2')} size={40} strokeWidth={1.5} opacity={0.8} />
                     </View>
-                    <View className="flex-row items-baseline justify-center mb-1">
-                      <Text style={{ fontSize: 34, fontFamily: Platform.OS === 'android' ? 'sans-serif-thin' : 'HelveticaNeue-Thin', color: '#a3b3cc', letterSpacing: -0.5 }}>get</Text>
-                      <Text style={{ fontSize: 40, fontWeight: '900', color: '#ffffff', letterSpacing: -1, marginLeft: 2 }}>Vāri</Text>
+                    <View className={themed('flex-row items-baseline justify-center mb-1')}>
+                      <Text style={{ fontSize: 34, fontFamily: Platform.OS === 'android' ? 'sans-serif-thin' : 'HelveticaNeue-Thin', color: tone('#a3b3cc', '#52525b'), letterSpacing: -0.5 }}>get</Text>
+                      <Text style={{ fontSize: 40, fontWeight: '900', color: tone('#ffffff', '#18181b'), letterSpacing: -1, marginLeft: 2 }}>Vāri</Text>
                     </View>
-                    <View className="w-full items-center mb-10">
-                      <Text className="text-[9px] text-[#00f2fe] font-black uppercase text-center w-full" style={{ letterSpacing: 3.6 }}>AI-POWERED HYDRATION INTELLIGENCE</Text>
+                    <View className={themed('w-full items-center mb-10')}>
+                      <Text className={themed('text-[9px] text-[#00f2fe] font-black uppercase text-center w-full')} style={{ letterSpacing: 3.6 }}>AI-POWERED HYDRATION INTELLIGENCE</Text>
                     </View>
-                    <Text className="text-[13px] text-neutral-400 text-center leading-relaxed font-medium mb-12 px-2">
+                    <Text className={themed('text-[13px] text-neutral-400 text-center leading-relaxed font-medium mb-12 px-2')}>
                       Monitor hydration risk using real-time body signals like heart rate, activity, temperature, and recovery patterns.
                     </Text>
                   </Animated.View>
                 )}
 
                 {step === 2 && (
-                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
-                    <Text className="text-2xl font-black text-white mb-1">Biometric Blueprint</Text>
-                    <Text className="text-[12px] text-neutral-400 mb-8">Provide basic values to adjust hydration metabolic models.</Text>
+                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className={themed('w-full')}>
+                    <Text className={themed('text-2xl font-black text-white mb-1')}>Biometric Blueprint</Text>
+                    <Text className={themed('text-[12px] text-neutral-400 mb-8')}>Provide basic values to adjust hydration metabolic models.</Text>
 
                     <RequiredField
                       label="Full Name"
                       error={showFieldErrors ? nameError : null}
-                      className="mb-6"
+                      className={themed('mb-6')}
                     >
                       <TextInput
-                        className="bg-white/5 border rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        className={themed('bg-white/5 border rounded-xl px-4 py-3 text-white text-[13px] font-bold')}
                         style={{
                           borderColor:
                             showFieldErrors && nameError
                               ? 'rgba(248,113,113,0.6)'
-                              : 'rgba(255,255,255,0.10)',
+                              : tone('rgba(255,255,255,0.10)', 'rgba(24,24,27,0.14)'),
                         }}
                         placeholder="e.g. John Doe"
-                        placeholderTextColor="#475569"
+                        placeholderTextColor={tone('#475569', '#a1a1aa')}
                         value={fullName}
                         onChangeText={setFullName}
                         autoCapitalize="words"
@@ -622,18 +408,18 @@ const OnboardingScreen = ({ navigation }: any) => {
                     <RequiredField
                       label="Email Address"
                       error={showFieldErrors ? emailError : null}
-                      className="mb-8"
+                      className={themed('mb-8')}
                     >
                       <TextInput
-                        className="bg-white/5 border rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                        className={themed('bg-white/5 border rounded-xl px-4 py-3 text-white text-[13px] font-bold')}
                         style={{
                           borderColor:
                             showFieldErrors && emailError
                               ? 'rgba(248,113,113,0.6)'
-                              : 'rgba(255,255,255,0.10)',
+                              : tone('rgba(255,255,255,0.10)', 'rgba(24,24,27,0.14)'),
                         }}
                         placeholder="e.g. john@example.com"
-                        placeholderTextColor="#475569"
+                        placeholderTextColor={tone('#475569', '#a1a1aa')}
                         value={email}
                         onChangeText={setEmail}
                         keyboardType="email-address"
@@ -650,11 +436,11 @@ const OnboardingScreen = ({ navigation }: any) => {
                       value={age}
                       onChange={setAge}
                     />
-                    <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Gender</Text>
-                    <View className="flex-row gap-2 mb-8">
+                    <Text className={themed('text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3')}>Gender</Text>
+                    <View className={themed('flex-row gap-2 mb-8')}>
                       {['Female', 'Male', 'Non-Binary'].map((g) => (
-                        <TouchableOpacity key={g} onPress={() => setGender(g)} className={`flex-1 py-3 rounded-xl border items-center ${gender === g ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`}>
-                          <Text className={`text-[11px] font-bold ${gender === g ? 'text-[#00f2fe]' : 'text-neutral-400'}`}>{g}</Text>
+                        <TouchableOpacity key={g} onPress={() => setGender(g)} className={themed(`flex-1 py-3 rounded-xl border items-center ${gender === g ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`)}>
+                          <Text className={themed(`text-[11px] font-bold ${gender === g ? 'text-[#00f2fe]' : 'text-neutral-400'}`)}>{g}</Text>
                         </TouchableOpacity>
                       ))}
                     </View>
@@ -668,40 +454,40 @@ const OnboardingScreen = ({ navigation }: any) => {
                       hint="Sets your daily goal"
                     />
 
-                    <View className="mt-4 pt-4 border-t border-white/5">
-                      <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Location (Climate Tracking)</Text>
+                    <View className={themed('mt-4 pt-4 border-t border-white/5')}>
+                      <Text className={themed('text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3')}>Location (Climate Tracking)</Text>
 
                       {/* The city is measured, not asked for. This block
                           reports what the device found; the picker below is
                           the correction, which is why it is a quiet link and
                           not the primary control it used to be. */}
                       {isLocating ? (
-                        <View className="flex-row items-center gap-3 bg-white/5 border border-white/10 rounded-xl px-4 py-3.5">
-                          <ActivityIndicator size="small" color="#00f2fe" />
-                          <Text className="text-[12px] text-neutral-400 font-medium">
+                        <View className={themed('flex-row items-center gap-3 bg-white/5 border border-white/10 rounded-xl px-4 py-3.5')}>
+                          <ActivityIndicator size="small" color={tone('#00f2fe', '#0891b2')} />
+                          <Text className={themed('text-[12px] text-neutral-400 font-medium')}>
                             Finding your location…
                           </Text>
                         </View>
                       ) : selectedCity ? (
-                        <View className="flex-row items-center gap-3 bg-emerald-500/[0.07] border border-emerald-500/25 rounded-xl px-4 py-3.5">
-                          <MapPin size={16} color="#10b981" />
-                          <View className="flex-1">
-                            <Text className="text-[14px] font-black text-white">{selectedCity}</Text>
-                            <Text className="text-[10px] text-emerald-500/80 font-mono mt-0.5">
+                        <View className={themed('flex-row items-center gap-3 bg-emerald-500/[0.07] border border-emerald-500/25 rounded-xl px-4 py-3.5')}>
+                          <MapPin size={16} color={tone('#10b981', '#047857')} />
+                          <View className={themed('flex-1')}>
+                            <Text className={themed('text-[14px] font-black text-white')}>{selectedCity}</Text>
+                            <Text className={themed('text-[10px] text-emerald-500/80 font-mono mt-0.5')}>
                               {locationAuto ? 'Detected automatically' : 'Chosen manually'}
                             </Text>
                           </View>
                         </View>
                       ) : (
-                        <View className="flex-row items-center gap-3 bg-amber-500/[0.07] border border-amber-500/25 rounded-xl px-4 py-3.5">
-                          <CircleAlert size={16} color="#f59e0b" />
-                          <Text className="text-[11px] text-amber-500/90 leading-[16px] flex-1">
+                        <View className={themed('flex-row items-center gap-3 bg-amber-500/[0.07] border border-amber-500/25 rounded-xl px-4 py-3.5')}>
+                          <CircleAlert size={16} color={tone('#f59e0b', '#b45309')} />
+                          <Text className={themed('text-[11px] text-amber-500/90 leading-[16px] flex-1')}>
                             {locationErrorMsg || 'Location not set yet.'}
                           </Text>
                         </View>
                       )}
 
-                      <View className="flex-row items-center gap-4 mt-3">
+                      <View className={themed('flex-row items-center gap-4 mt-3')}>
                         <TouchableOpacity
                           onPress={() => detectLocation(true)}
                           disabled={isLocating}
@@ -709,7 +495,7 @@ const OnboardingScreen = ({ navigation }: any) => {
                           accessibilityRole="button"
                           accessibilityLabel="Detect my location again"
                         >
-                          <Text className="text-[11px] font-black uppercase text-[#00f2fe] tracking-wider">
+                          <Text className={themed('text-[11px] font-black uppercase text-[#00f2fe] tracking-wider')}>
                             Detect again
                           </Text>
                         </TouchableOpacity>
@@ -719,7 +505,7 @@ const OnboardingScreen = ({ navigation }: any) => {
                           accessibilityRole="button"
                           accessibilityLabel="Choose a city manually"
                         >
-                          <Text className="text-[11px] font-black uppercase text-neutral-400 tracking-wider">
+                          <Text className={themed('text-[11px] font-black uppercase text-neutral-400 tracking-wider')}>
                             Choose manually
                           </Text>
                         </TouchableOpacity>
@@ -745,17 +531,17 @@ const OnboardingScreen = ({ navigation }: any) => {
                 )}
 
                 {step === 3 && (
-                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
-                    <Text className="text-2xl font-black text-white mb-1">Pre-existing Medical States</Text>
-                    <Text className="text-[12px] text-neutral-400 mb-8 leading-relaxed">Select any active diagnoses. GetVari dynamically tunes cardiovascular fluid strain thresholds and sweat predictions accordingly.</Text>
+                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className={themed('w-full')}>
+                    <Text className={themed('text-2xl font-black text-white mb-1')}>Pre-existing Medical States</Text>
+                    <Text className={themed('text-[12px] text-neutral-400 mb-8 leading-relaxed')}>Select any active diagnoses. GetVari dynamically tunes cardiovascular fluid strain thresholds and sweat predictions accordingly.</Text>
                     {conditions.map((cond) => (
-                      <TouchableOpacity key={cond.id} onPress={() => toggleCondition(cond.id)} activeOpacity={0.7} className={`w-full p-4 rounded-2xl border mb-3 flex-row items-center justify-between ${medicalConditions.includes(cond.id) ? 'bg-[#00f2fe]/5 border-[#00f2fe]/50' : 'bg-white/[0.02] border-white/5'}`}>
-                        <View className="flex-1 pr-4">
-                          <Text className="text-white font-bold text-[14px] mb-1">{cond.title}</Text>
-                          <Text className="text-neutral-500 text-[10px] leading-relaxed">{cond.description}</Text>
+                      <TouchableOpacity key={cond.id} onPress={() => toggleCondition(cond.id)} activeOpacity={0.7} className={themed(`w-full p-4 rounded-2xl border mb-3 flex-row items-center justify-between ${medicalConditions.includes(cond.id) ? 'bg-[#00f2fe]/5 border-[#00f2fe]/50' : 'bg-white/[0.02] border-white/5'}`)}>
+                        <View className={themed('flex-1 pr-4')}>
+                          <Text className={themed('text-white font-bold text-[14px] mb-1')}>{cond.title}</Text>
+                          <Text className={themed('text-neutral-500 text-[10px] leading-relaxed')}>{cond.description}</Text>
                         </View>
-                        <View className={`w-6 h-6 rounded-lg border items-center justify-center ${medicalConditions.includes(cond.id) ? 'bg-[#00f2fe] border-[#00f2fe]' : 'border-white/20'}`}>
-                          {medicalConditions.includes(cond.id) && <Check size={14} color="#01040a" strokeWidth={4} />}
+                        <View className={themed(`w-6 h-6 rounded-lg border items-center justify-center ${medicalConditions.includes(cond.id) ? 'bg-[#00f2fe] border-[#00f2fe]' : 'border-white/20'}`)}>
+                          {medicalConditions.includes(cond.id) && <Check size={14} color={onAccent()} strokeWidth={4} />}
                         </View>
                       </TouchableOpacity>
                     ))}
@@ -763,9 +549,9 @@ const OnboardingScreen = ({ navigation }: any) => {
                 )}
 
                 {step === 4 && (
-                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
-                    <Text className="text-2xl font-black text-white mb-1">Circadian Window</Text>
-                    <Text className="text-[12px] text-neutral-400 mb-8 leading-relaxed">
+                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className={themed('w-full')}>
+                    <Text className={themed('text-2xl font-black text-white mb-1')}>Circadian Window</Text>
+                    <Text className={themed('text-[12px] text-neutral-400 mb-8 leading-relaxed')}>
                       Roughly when do you sleep and wake? Hours you spend asleep are excluded from your hydration averages, and GetVari stays silent through them.
                     </Text>
 
@@ -782,36 +568,36 @@ const OnboardingScreen = ({ navigation }: any) => {
                       onChange={setWakeUp}
                     />
 
-                    <View className="w-full p-4 rounded-2xl border border-[#00f2fe]/20 bg-[#00f2fe]/[0.04] mb-3">
-                      <Text className="text-[10px] text-neutral-500 font-mono uppercase tracking-[2px] mb-2">Derived Baseline</Text>
-                      <View className="flex-row justify-between items-center mb-1">
-                        <Text className="text-neutral-400 text-[12px]">Sleep window</Text>
-                        <Text className="text-white text-[12px] font-black">
+                    <View className={themed('w-full p-4 rounded-2xl border border-[#00f2fe]/20 bg-[#00f2fe]/[0.04] mb-3')}>
+                      <Text className={themed('text-[10px] text-neutral-500 font-mono uppercase tracking-[2px] mb-2')}>Derived Baseline</Text>
+                      <View className={themed('flex-row justify-between items-center mb-1')}>
+                        <Text className={themed('text-neutral-400 text-[12px]')}>Sleep window</Text>
+                        <Text className={themed('text-white text-[12px] font-black')}>
                           {formatClockLabel(sleepStart)} - {formatClockLabel(wakeUp)}
                         </Text>
                       </View>
-                      <View className="flex-row justify-between items-center mb-1">
-                        <Text className="text-neutral-400 text-[12px]">Rest duration</Text>
-                        <Text className="text-white text-[12px] font-black">{sleepHours.toFixed(1)} h</Text>
+                      <View className={themed('flex-row justify-between items-center mb-1')}>
+                        <Text className={themed('text-neutral-400 text-[12px]')}>Rest duration</Text>
+                        <Text className={themed('text-white text-[12px] font-black')}>{sleepHours.toFixed(1)} h</Text>
                       </View>
-                      <View className="flex-row justify-between items-center">
-                        <Text className="text-neutral-400 text-[12px]">Waking hours (averaging base)</Text>
-                        <Text className="text-[#00f2fe] text-[12px] font-black">{awakeHours.toFixed(1)} h</Text>
+                      <View className={themed('flex-row justify-between items-center')}>
+                        <Text className={themed('text-neutral-400 text-[12px]')}>Waking hours (averaging base)</Text>
+                        <Text className={themed('text-[#00f2fe] text-[12px] font-black')}>{awakeHours.toFixed(1)} h</Text>
                       </View>
                     </View>
 
                     {sleepHours < 3 && (
-                      <View className="flex-row items-center gap-2 mb-3">
-                        <CircleAlert size={12} color="#f59e0b" />
-                        <Text className="text-[10px] text-amber-500 font-mono flex-1">
+                      <View className={themed('flex-row items-center gap-2 mb-3')}>
+                        <CircleAlert size={12} color={tone('#f59e0b', '#b45309')} />
+                        <Text className={themed('text-[10px] text-amber-500 font-mono flex-1')}>
                           That is under 3 hours of rest. Adjust it if the times were picked by mistake.
                         </Text>
                       </View>
                     )}
 
-                    <View className="flex-row items-start gap-3 p-4 rounded-2xl bg-white/[0.02] border border-white/5">
+                    <View className={themed('flex-row items-start gap-3 p-4 rounded-2xl bg-white/[0.02] border border-white/5')}>
                       <BellOff size={14} color="#64748b" />
-                      <Text className="text-neutral-500 text-[10px] leading-relaxed flex-1">
+                      <Text className={themed('text-neutral-500 text-[10px] leading-relaxed flex-1')}>
                         Hydration reminders and alerts pause for the whole window and pick up again at your wake-up time.
                       </Text>
                     </View>
@@ -819,29 +605,29 @@ const OnboardingScreen = ({ navigation }: any) => {
                 )}
 
                 {step === 5 && (
-                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
-                    <Text className="text-2xl font-black text-white mb-1">Metabolic Dynamics</Text>
-                    <Text className="text-[12px] text-neutral-400 mb-8">Lifestyle habits dramatically update cellular sweating thresholds.</Text>
-                    <Text className="text-[10px] text-neutral-500 font-mono uppercase tracking-[2px] mb-4">Daily Activity Strain</Text>
+                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className={themed('w-full')}>
+                    <Text className={themed('text-2xl font-black text-white mb-1')}>Metabolic Dynamics</Text>
+                    <Text className={themed('text-[12px] text-neutral-400 mb-8')}>Lifestyle habits dramatically update cellular sweating thresholds.</Text>
+                    <Text className={themed('text-[10px] text-neutral-500 font-mono uppercase tracking-[2px] mb-4')}>Daily Activity Strain</Text>
                     {activityLevels.map((opt) => (
-                      <TouchableOpacity key={opt.id} onPress={() => setActivityLevel(opt.id)} activeOpacity={0.7} className={`w-full p-4 rounded-2xl border mb-3 ${activityLevel === opt.id ? 'bg-[#00f2fe]/5 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`}>
-                        <Text className={`font-bold text-[14px] mb-0.5 ${activityLevel === opt.id ? 'text-[#00f2fe]' : 'text-white'}`}>{opt.title}</Text>
-                        <Text className="text-neutral-500 text-[10px]">{opt.description}</Text>
+                      <TouchableOpacity key={opt.id} onPress={() => setActivityLevel(opt.id)} activeOpacity={0.7} className={themed(`w-full p-4 rounded-2xl border mb-3 ${activityLevel === opt.id ? 'bg-[#00f2fe]/5 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`)}>
+                        <Text className={themed(`font-bold text-[14px] mb-0.5 ${activityLevel === opt.id ? 'text-[#00f2fe]' : 'text-white'}`)}>{opt.title}</Text>
+                        <Text className={themed('text-neutral-500 text-[10px]')}>{opt.description}</Text>
                       </TouchableOpacity>
                     ))}
                   </Animated.View>
                 )}
 
                 {step === 6 && (
-                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
-                    <Text className="text-2xl font-black text-white mb-1">Environment & Limits</Text>
-                    <Text className="text-[12px] text-neutral-400 mb-8 leading-relaxed">Where do you spend most of your day? This calibrates your water target baseline.</Text>
+                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className={themed('w-full')}>
+                    <Text className={themed('text-2xl font-black text-white mb-1')}>Environment & Limits</Text>
+                    <Text className={themed('text-[12px] text-neutral-400 mb-8 leading-relaxed')}>Where do you spend most of your day? This calibrates your water target baseline.</Text>
 
-                    <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3">Work Environment</Text>
-                    <View className="flex-row flex-wrap gap-2 mb-8">
+                    <Text className={themed('text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-3')}>Work Environment</Text>
+                    <View className={themed('flex-row flex-wrap gap-2 mb-8')}>
                       {workEnvironments.map((env) => (
-                        <TouchableOpacity key={env.id} onPress={() => setWorkEnvironment(env.id as any)} className={`px-4 py-3 rounded-xl border items-center ${workEnvironment === env.id ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`}>
-                          <Text className={`text-[11px] font-bold ${workEnvironment === env.id ? 'text-[#00f2fe]' : 'text-neutral-400'}`}>{env.label}</Text>
+                        <TouchableOpacity key={env.id} onPress={() => setWorkEnvironment(env.id as any)} className={themed(`px-4 py-3 rounded-xl border items-center ${workEnvironment === env.id ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`)}>
+                          <Text className={themed(`text-[11px] font-bold ${workEnvironment === env.id ? 'text-[#00f2fe]' : 'text-neutral-400'}`)}>{env.label}</Text>
                         </TouchableOpacity>
                       ))}
                     </View>
@@ -851,23 +637,23 @@ const OnboardingScreen = ({ navigation }: any) => {
                         repeated on every screen that asks. */}
                     {ConfigService.requiresPhysicianLimit(medicalConditions) && (
                       <View>
-                        <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">
-                          Physician Daily Limit (ml) <Text className="text-neutral-500">(optional)</Text>
+                        <Text className={themed('text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2')}>
+                          Physician Daily Limit (ml) <Text className={themed('text-neutral-500')}>(optional)</Text>
                         </Text>
                         <TextInput
-                          className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold mb-2"
+                          className={themed('bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold mb-2')}
                           placeholder="e.g. 2000"
-                          placeholderTextColor="#475569"
+                          placeholderTextColor={tone('#475569', '#a1a1aa')}
                           value={physicianLimit}
                           onChangeText={setPhysicianLimit}
                           keyboardType="numeric"
                         />
-                        <Text className="text-[10px] text-amber-500/80 leading-relaxed italic">
+                        <Text className={themed('text-[10px] text-amber-500/80 leading-relaxed italic')}>
                           Optional. If your doctor gave you a daily limit, enter it and your goal
                           will never go above it.
                         </Text>
                         {showFieldErrors && !!physicianLimitError && (
-                          <Text className="text-[10px] text-red-400 mt-1.5">
+                          <Text className={themed('text-[10px] text-red-400 mt-1.5')}>
                             {physicianLimitError}
                           </Text>
                         )}
@@ -877,91 +663,16 @@ const OnboardingScreen = ({ navigation }: any) => {
                 )}
 
                 {step === 7 && (
-                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className="w-full">
-                    <Text className="text-2xl font-black text-white mb-1">Sensor Synaptic Connect</Text>
-                    <Text className="text-[12px] text-neutral-400 mb-10">Connect the proprietary GetVari wearable.</Text>
-
-                    <View className="w-full p-6 bg-white/[0.02] border border-white/5 rounded-3xl mb-4">
-                      <View className="flex-row justify-between items-start mb-6">
-                        <View>
-                          <View className="bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded self-start mb-2">
-                            <Text className="text-[8px] text-amber-500 font-mono font-bold uppercase tracking-widest">Prototyping Node</Text>
-                          </View>
-                          <View className="flex-row items-center gap-2">
-                            <Radio size={16} color="#00f2fe" />
-                            <Text className="text-white font-black text-[15px]">
-                              {connectedDevice?.name || 'GetVari Wearable Node'}
-                            </Text>
-                          </View>
-                          <Text className="text-neutral-500 text-[10px] mt-1">Pairs directly over standard BLE.</Text>
-                        </View>
-                        <TouchableOpacity
-                          onPress={handleScanBLE}
-                          disabled={bleState === 'scanning' || !!connectedDevice}
-                          className={`px-4 py-2 rounded-xl items-center justify-center ${connectedDevice ? 'bg-white/5 border border-white/10' : 'bg-[#00f2fe]'}`}
-                        >
-                          <Text className={`text-[11px] font-black uppercase ${connectedDevice ? 'text-neutral-500' : 'text-[#01040a]'}`}>
-                            {connectedDevice ? 'Connected' : bleState === 'scanning' ? 'Scanning...' : (devices.length > 0 ? 'Scan Again' : 'Scan BLE')}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-
-                      {bleState === 'scanning' && (
-                        <View className="space-y-2">
-                          <View className="flex-row justify-between">
-                            <Text className="text-[9px] text-[#00f2fe] font-mono">SCANNING CARRIER WAVE...</Text>
-                            <ActivityIndicator size="small" color="#00f2fe" style={{ transform: [{ scale: 0.6 }] }} />
-                          </View>
-                          <View className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden mt-2">
-                            <View style={{ width: '65%' }} className="h-full bg-[#00f2fe]" />
-                          </View>
-                        </View>
-                      )}
-
-                      {bleState === 'noDevicesFound' && (
-                        <View className="mt-2">
-                          <Text className="text-[10px] text-red-400 font-medium text-center">No BLE devices found. Make sure your device is nearby and try again.</Text>
-                        </View>
-                      )}
-
-                      {connectedDevice && (
-                        <View className="bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-xl flex-row items-center gap-3">
-                          <Info size={14} color="#10b981" />
-                          <Text className="text-[10px] text-emerald-500 font-medium flex-1">
-                            {connectedDevice.name || 'Device'} paired successfully. Real-time streaming link established.
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-
-                    {devices.length > 0 && !connectedDevice && (
-                      <View className="space-y-2">
-                        <Text className="text-[10px] text-neutral-500 font-mono uppercase tracking-widest mb-2">Available Devices</Text>
-                        {devices.map((device) => (
-                          <TouchableOpacity key={device.id} onPress={() => connectToDevice(device)} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl flex-row items-center justify-between">
-                            <View className="flex-row items-center gap-3">
-                              <Bluetooth size={16} color="#a3b3cc" />
-                              <View>
-                                <Text className="text-white font-bold text-sm">{device.name || 'Unnamed Device'}</Text>
-                                <Text className="text-[10px] text-neutral-500 font-mono">{device.id}</Text>
-                              </View>
-                            </View>
-                            <View className="flex-row items-center gap-2">
-                              <Text className="text-[10px] text-neutral-500 font-mono">{device.rssi} dBm</Text>
-                              <ChevronRight size={14} color="#64748b" />
-                            </View>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    )}
+                  <Animated.View entering={FadeInRight} exiting={FadeOutLeft} className={themed('w-full')}>
+                    <DeviceConnectPanel connection={deviceConnection} />
                   </Animated.View>
                 )}
               </ScrollView>
 
               {!!errorMsg && (
-                <View className="flex-row items-center gap-2 mt-3">
+                <View className={themed('flex-row items-center gap-2 mt-3')}>
                   <CircleAlert size={12} color="#f87171" />
-                  <Text className="text-[10px] text-red-400 font-mono flex-1">{errorMsg}</Text>
+                  <Text className={themed('text-[10px] text-red-400 font-mono flex-1')}>{errorMsg}</Text>
                 </View>
               )}
 
@@ -971,7 +682,7 @@ const OnboardingScreen = ({ navigation }: any) => {
                   container it stretches the cross axis, so the button kept its
                   content width and stayed pinned to the left edge. */}
               <View
-                className="flex-row gap-4 mt-auto pt-6 border-t border-white/5"
+                className={themed('flex-row gap-4 mt-auto pt-6 border-t border-white/5')}
                 style={step === 1 ? { justifyContent: 'center' } : undefined}
               >
                 {step > 1 && (

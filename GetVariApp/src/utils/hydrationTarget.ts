@@ -33,10 +33,12 @@
 import AppConfigStore from '../config/appConfigStore';
 import type { UserProfile } from '../types';
 import type { ClimateBandConfig } from '../config/appConfigSchema';
-import { computePBWRBreakdown } from './pbwr';
+import { computePBWRBreakdown, isWithinCalibrationWindow } from './pbwr';
 
 export interface TargetInputs {
   weightKg: number;
+  /** The account's start, for §3: inside days 1–7 the target is PBWR only. */
+  accountCreatedAt?: string | null;
   /** Stage 1 scales the baseline by both, so neither is optional in practice. */
   gender?: string;
   age?: number;
@@ -177,6 +179,7 @@ export const computeTargetDailyMl = ({
   activityLevel,
   medicalConditions = [],
   physicianLimitMl,
+  accountCreatedAt,
 }: TargetInputs): number | null => {
   return computePBWRBreakdown(
     {
@@ -190,7 +193,8 @@ export const computeTargetDailyMl = ({
     },
     // No observed averages: the three telemetry-driven bands contribute
     // nothing. `PBWRService` is the caller that has seven days of history.
-    null
+    null,
+    { calibrating: isWithinCalibrationWindow(accountCreatedAt) }
   ).finalTarget;
 };
 
@@ -206,6 +210,7 @@ export const targetFromProfile = (
     activityLevel: profile.activityLevel,
     medicalConditions: profile.medicalConditions,
     physicianLimitMl: profile.physicianLimitMl,
+    accountCreatedAt: profile.accountCreatedAt,
   });
 
 /** Whether a stored profile owes the app a doctor's number. */

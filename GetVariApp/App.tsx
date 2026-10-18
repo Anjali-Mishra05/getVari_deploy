@@ -1,5 +1,5 @@
-import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { NativeModules, StyleSheet, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -12,10 +12,12 @@ import LoginScreen from './src/screens/LoginScreen';
 import OtpScreen from './src/screens/OtpScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import HomeScreen from './src/screens/HomeScreen';
+import InfoScreen from './src/screens/InfoScreen';
 import PermissionGateScreen from './src/screens/PermissionGateScreen';
 
 import usePermissionGate from './src/hooks/usePermissionGate';
-import { allPermissionsGranted } from './src/utils/permissionRequirements';
+import { shouldShowPermissionGate } from './src/utils/permissionRequirements';
+import { ThemeScope, loadThemeMode, tone, useThemeMode } from './src/theme/theme';
 
 const Stack = createStackNavigator();
 
@@ -43,16 +45,45 @@ const Stack = createStackNavigator();
 function App(): React.JSX.Element {
   const { snapshot, checking, armed, refresh } = usePermissionGate();
 
+  // The saved dark/light choice is restored once, at launch, and nothing is
+  // drawn until it has been: a launch straight into a full-screen reminder
+  // would otherwise show the default dark for a moment to someone who chose
+  // light. The read is a single local key, far quicker than the JS bundle
+  // load that precedes it. Dark when nothing was ever saved.
+  const themeMode = useThemeMode();
+  const [themeReady, setThemeReady] = useState(false);
+  useEffect(() => {
+    loadThemeMode().finally(() => setThemeReady(true));
+  }, []);
+
+  // The native window is all there is on screen until JS has loaded, so it is
+  // told the mode too and paints itself to match on the next launch (see
+  // `FullScreenReminderModule.applySavedAppearance`). The mode itself still
+  // lives in one place — `theme.ts`; this only passes it on.
+  useEffect(() => {
+    if (!themeReady) return;
+    try {
+      NativeModules.FullScreenReminderModule?.setAppearance?.(themeMode);
+    } catch (error) {
+      console.warn('[Theme] Could not pass the appearance to the native window:', error);
+    }
+  }, [themeMode, themeReady]);
+
   // `armed` holds the gate back until the onboarding wizard's last step — the
   // BLE pairing screen — has been completed, so the grants are asked for
   // between that screen and the dashboard rather than over the login.
   // `checking` covers the first read only: showing the gate before it lands
   // would flash a permission wall on every launch at users who granted
   // everything long ago.
-  const blocked = armed && !checking && snapshot !== null && !allPermissionsGranted(snapshot);
+  const blocked = shouldShowPermissionGate({ armed, checking, snapshot });
+
+  // Transparent, so the native window — already in the saved mode — shows.
+  if (!themeReady) return <View style={{ flex: 1 }} />;
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+      {/* Every screen follows the shared mode. */}
+      <ThemeScope.Provider value>
       <SafeAreaProvider>
         {/* Onboarding finishing is a navigation, not an app-state change, so
             the resume listener in `usePermissionGate` never sees it. Re-reading
@@ -65,7 +96,7 @@ function App(): React.JSX.Element {
             initialRouteName="Splash"
             screenOptions={{
               headerShown: false,
-              cardStyle: { backgroundColor: '#02050e' }
+              cardStyle: { backgroundColor: tone('#02050e', '#f5f5f3') }
             }}
           >
             <Stack.Screen name="Splash" component={SplashScreen} />
@@ -74,6 +105,8 @@ function App(): React.JSX.Element {
             <Stack.Screen name="OtpVerification" component={OtpScreen} />
             <Stack.Screen name="Onboarding" component={OnboardingScreen} />
             <Stack.Screen name="Home" component={HomeScreen} />
+            {/* Terms & Conditions, Privacy Policy and Help & Support. */}
+            <Stack.Screen name="Info" component={InfoScreen} />
           </Stack.Navigator>
         </NavigationContainer>
 
@@ -83,6 +116,7 @@ function App(): React.JSX.Element {
           </View>
         )}
       </SafeAreaProvider>
+      </ThemeScope.Provider>
     </GestureHandlerRootView>
   );
 }

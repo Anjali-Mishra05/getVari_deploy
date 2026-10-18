@@ -189,7 +189,8 @@ describe('A reminder stays answerable', () => {
   });
 
   test('a reminder older than the staleness ceiling is dropped, not shown', async () => {
-    jest.useFakeTimers();
+    // The clock stays at DAYTIME (beforeEach): re-installing fake timers here
+    // would reset it to the real time of day.
     const now = Date.now();
     jest.setSystemTime(now);
 
@@ -205,7 +206,8 @@ describe('A reminder stays answerable', () => {
 
 describe('Swiping the notification away does not lose the reminder', () => {
   test('a dismissal becomes a snooze rather than an answer', async () => {
-    jest.useFakeTimers();
+    // The clock stays at DAYTIME (beforeEach): re-installing fake timers here
+    // would reset it to the real time of day.
     const now = Date.now();
     jest.setSystemTime(now);
 
@@ -223,7 +225,8 @@ describe('Swiping the notification away does not lose the reminder', () => {
   });
 
   test('a dismissal queues the notification that brings it back', async () => {
-    jest.useFakeTimers();
+    // The clock stays at DAYTIME (beforeEach): re-installing fake timers here
+    // would reset it to the real time of day.
     const now = Date.now();
     jest.setSystemTime(now);
 
@@ -236,7 +239,8 @@ describe('Swiping the notification away does not lose the reminder', () => {
   });
 
   test('the snooze nudge survives the cadence rebuild a foreground triggers', async () => {
-    jest.useFakeTimers();
+    // The clock stays at DAYTIME (beforeEach): re-installing fake timers here
+    // would reset it to the real time of day.
     const now = Date.now();
     jest.setSystemTime(now);
 
@@ -254,7 +258,8 @@ describe('Swiping the notification away does not lose the reminder', () => {
 
 describe('Snooze and reschedule', () => {
   test('the shade’s snooze button pushes the reminder back without opening the app', async () => {
-    jest.useFakeTimers();
+    // The clock stays at DAYTIME (beforeEach): re-installing fake timers here
+    // would reset it to the real time of day.
     const now = Date.now();
     jest.setSystemTime(now);
 
@@ -288,7 +293,8 @@ describe('Snooze and reschedule', () => {
   });
 
   test('each snooze replaces the previous nudge instead of stacking', async () => {
-    jest.useFakeTimers();
+    // The clock stays at DAYTIME (beforeEach): re-installing fake timers here
+    // would reset it to the real time of day.
     const now = Date.now();
     jest.setSystemTime(now);
 
@@ -306,8 +312,8 @@ describe('Snooze and reschedule', () => {
 
   test('a reschedule into the past or into the sleep window is refused', async () => {
     jest.useFakeTimers();
-    // 22:00, an hour before the default 23:00 bedtime.
-    const now = new Date(2026, 8, 1, 22, 0, 0).getTime();
+    // 21:00, an hour before Good Night (22:00) under the default 23:00 bedtime.
+    const now = new Date(2026, 8, 1, 21, 0, 0).getTime();
     jest.setSystemTime(now);
     await ActiveReminder.raise('hydration-reminder-1@1000', now);
 
@@ -318,9 +324,14 @@ describe('Snooze and reschedule', () => {
       await NotificationService.rescheduleReminderAt(new Date(2026, 8, 2, 1, 0, 0).getTime())
     ).toBe(false);
 
-    // 22:30 is still awake, so this one is honoured.
+    // 22:30 is awake but after Good Night (22:00): the silence window.
     expect(
       await NotificationService.rescheduleReminderAt(new Date(2026, 8, 1, 22, 30, 0).getTime())
+    ).toBe(false);
+
+    // 21:30 is before Good Night, so this one is honoured.
+    expect(
+      await NotificationService.rescheduleReminderAt(new Date(2026, 8, 1, 21, 30, 0).getTime())
     ).toBe(true);
   });
 
@@ -466,5 +477,32 @@ describe('The snooze options the UI offers', () => {
     }
     // Ascending, so the list reads as a scale rather than a jumble.
     expect([...SNOOZE_OPTIONS_MIN]).toEqual([...SNOOZE_OPTIONS_MIN].sort((a, b) => a - b));
+  });
+});
+
+describe('The amounts the full-screen reminder offers', () => {
+  const readSource = (file: string): string =>
+    require('fs').readFileSync(require('path').join(__dirname, '..', file), 'utf8');
+
+  test('the shipped presets are 250 ml, 500 ml, 750 ml and 1 litre', () => {
+    expect(quickLogAmounts().map(amount => amount.ml)).toEqual([250, 500, 750, 1000]);
+  });
+
+  test('the reminder and the "Log water" sheet draw the one shared picker and Log label', () => {
+    // Behaviour of the picker itself is covered in quickLogPicker.test.ts;
+    // this pins that both surfaces use it rather than a copy of it.
+    for (const file of ['src/components/ReminderFullScreen.tsx', 'src/components/QuickLogSheet.tsx']) {
+      const source = readSource(file);
+      expect(source).toContain('<QuickLogAmounts');
+      expect(source).toContain('useQuickLogSelection(');
+      expect(source).toContain('quickLogButtonLabel(selection');
+    }
+    expect(readSource('src/components/ReminderFullScreen.tsx')).not.toContain('QuickFluidLogStation');
+  });
+
+  test('the dashboard keeps its own two-preset deck', () => {
+    const home = readSource('src/screens/HomeScreen.tsx');
+    expect(home).toContain('<QuickFluidLogStation onSelectAmount={openConfirmation} disabled={savingLog} />');
+    expect(readSource('src/components/dashboard/QuickFluidLogStation.tsx')).toContain('.slice(0, 2)');
   });
 });

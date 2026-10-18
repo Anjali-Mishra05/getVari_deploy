@@ -232,6 +232,9 @@ describe('formatting', () => {
     expect(formatMl(750)).toBe('750 ml');
     expect(formatMl(1000)).toBe('1 L');
     expect(formatMl(1750)).toBe('1.75 L');
+    expect(formatMl(2000)).toBe('2 L');
+    expect(formatMl(1500)).toBe('1.5 L');
+    expect(formatMl(250)).toBe('250 ml');
   });
 
   it('renders the daily pair', () => {

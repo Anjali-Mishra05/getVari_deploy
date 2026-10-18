@@ -139,10 +139,16 @@ describe('the daily messages are placed from the sleep window', () => {
   const minuteOf = (m: any, schedule: any) => dailyMessageMinute(m, schedule);
   const morning = DAILY_MESSAGES.find(m => m.key === 'morning')!;
   const night = DAILY_MESSAGES.find(m => m.key === 'night')!;
+  const water = DAILY_MESSAGES.find(m => m.key === 'water')!;
 
-  it('puts the greeting an hour after wake-up', () => {
-    expect(minuteOf(morning, { sleepStart: '23:00', wakeUp: '07:00' })).toBe(8 * 60);
-    expect(minuteOf(morning, { sleepStart: '01:00', wakeUp: '09:30' })).toBe(10 * 60 + 30);
+  it('puts the greeting half an hour after wake-up', () => {
+    expect(minuteOf(morning, { sleepStart: '23:00', wakeUp: '07:00' })).toBe(7 * 60 + 30);
+    expect(minuteOf(morning, { sleepStart: '01:00', wakeUp: '09:30' })).toBe(10 * 60);
+  });
+
+  it('puts the Daily Water Requirement an hour after wake-up', () => {
+    expect(minuteOf(water, { sleepStart: '23:00', wakeUp: '07:00' })).toBe(8 * 60);
+    expect(minuteOf(water, { sleepStart: '01:00', wakeUp: '09:30' })).toBe(10 * 60 + 30);
   });
 
   it('puts the wind-down an hour before bedtime', () => {
@@ -154,13 +160,14 @@ describe('the daily messages are placed from the sleep window', () => {
     // Bed at 00:30 means the wind-down belongs at 23:30 the evening before,
     // not at 00:00 — which is a time nothing should ever be sent.
     expect(minuteOf(night, { sleepStart: '00:30', wakeUp: '08:00' })).toBe(23 * 60 + 30);
-    // And waking at 23:30 puts the greeting just after midnight.
-    expect(minuteOf(morning, { sleepStart: '10:00', wakeUp: '23:30' })).toBe(30);
+    // And waking at 23:45 puts the greeting just after midnight.
+    expect(minuteOf(morning, { sleepStart: '10:00', wakeUp: '23:45' })).toBe(15);
+    expect(minuteOf(water, { sleepStart: '10:00', wakeUp: '23:30' })).toBe(30);
   });
 
   it('falls back to the default window rather than midnight when unparseable', () => {
     const broken = { sleepStart: 'nonsense', wakeUp: '' } as any;
-    expect(minuteOf(morning, broken)).toBe(8 * 60); // default wake 07:00 + 1h
+    expect(minuteOf(morning, broken)).toBe(7 * 60 + 30); // default wake 07:00 + 30 min
     expect(minuteOf(night, broken)).toBe(22 * 60); // default bed 23:00 − 1h
     expect(minuteOf(morning, broken)).not.toBe(0);
   });

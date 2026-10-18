@@ -8,10 +8,14 @@ interface ChartCorrelationProps {
 }
 
 const ChartCorrelation: React.FC<ChartCorrelationProps> = ({ users, loading }) => {
-  const points = users.map(u => ({
+  // A user with no score or no goal has no place on either axis; plotting
+  // them at zero would read as "hydrated" or "drank nothing".
+  const points = users
+    .filter(u => u.riskScore !== null && u.targetDailyMl !== null && u.targetDailyMl > 0)
+    .map(u => ({
     label: u.name,
     // X-axis: Intake % of goal (0-100%)
-    x: `${Math.min(100, (u.waterIntakeMl / u.targetDailyMl) * 100)}%`,
+    x: `${Math.min(100, (Math.max(0, u.waterIntakeMl) / (u.targetDailyMl as number)) * 100)}%`,
     // Y-axis: Risk Score (0-100%, bottom is 0, so risk 80 is 80% from bottom)
     y: `${u.riskScore}%`,
     color: u.status === 'Critical' ? 'bg-red-500' :

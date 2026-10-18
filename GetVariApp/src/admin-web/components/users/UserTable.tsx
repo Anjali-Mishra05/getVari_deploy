@@ -48,6 +48,9 @@ const UserTable: React.FC<UserTableProps> = ({ users, onUserClick }) => {
                     <div className="flex flex-col">
                       <span className="font-bold text-sm text-slate-900 tracking-tight">{u.name}</span>
                       <span className="text-xs font-medium text-slate-400 mt-1 uppercase tracking-wider">{u.id} | {u.workload}</span>
+                      {u.duplicateRowCount > 0 && (
+                        <span className="text-[10px] font-bold text-amber-600">+{u.duplicateRowCount} row(s) with this phone</span>
+                      )}
                     </div>
                   </td>
                   <td className="px-6 py-5 align-middle">
@@ -56,14 +59,15 @@ const UserTable: React.FC<UserTableProps> = ({ users, onUserClick }) => {
                         variant={
                           u.status === 'Critical' ? 'red' :
                           u.status === 'High Risk' ? 'amber' :
-                          u.status === 'Mild Risk' ? 'cyan' : 'emerald'
+                          u.status === 'Mild Risk' ? 'cyan' :
+                          u.status === 'Hydrated' ? 'emerald' : 'neutral'
                         }
                         dot
                         className="px-2.5 py-1 text-[11px]"
                       >
                         {u.status}
                       </Badge>
-                      <span className="text-[10px] font-bold text-slate-500">{u.riskScore}</span>
+                      <span className="text-[10px] font-bold text-slate-500">{u.riskScore !== null ? Math.round(u.riskScore) : '--'}</span>
                     </div>
                   </td>
                   <td className="px-6 py-5 align-middle">
@@ -77,7 +81,7 @@ const UserTable: React.FC<UserTableProps> = ({ users, onUserClick }) => {
                   <td className="px-6 py-5 align-middle">
                     <div className="flex flex-col gap-1.5">
                       <span className="text-sm font-bold text-blue-600 tracking-tight">{u.waterIntakeMl} ML</span>
-                      <span className="text-xs font-medium text-slate-500">Target: {u.targetDailyMl} ML</span>
+                      <span className="text-xs font-medium text-slate-500">Target: {u.targetDailyMl !== null ? `${u.targetDailyMl} ML` : 'Not stated'}</span>
                     </div>
                   </td>
                   <td className="px-6 py-5 align-middle">

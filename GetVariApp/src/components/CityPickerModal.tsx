@@ -3,6 +3,7 @@ import { ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-nativ
 import { Check, Search } from 'lucide-react-native';
 
 import Sheet from './ui/Sheet';
+import { useScopedTheme } from '../theme/theme';
 import { INDIAN_CITIES } from '../data/indianCities';
 
 interface CityPickerModalProps {
@@ -26,6 +27,7 @@ const CityPickerModal: React.FC<CityPickerModalProps> = ({
   onSelect,
   onClose,
 }) => {
+  const { cls, pick } = useScopedTheme();
   const [query, setQuery] = useState('');
 
   const dismiss = () => {
@@ -47,11 +49,11 @@ const CityPickerModal: React.FC<CityPickerModalProps> = ({
       subtitle="CLIMATE BASELINE"
       heightFraction={0.85}
     >
-      <View className="px-6 pt-4 pb-2">
-        <View className="flex-row items-center bg-white/[0.03] border border-white/10 rounded-[24px] px-5 py-2">
+      <View className={cls('px-6 pt-4 pb-2')}>
+        <View className={cls('flex-row items-center bg-white/[0.03] border border-white/10 rounded-[24px] px-5 py-2')}>
           <Search size={20} color="#64748b" />
           <TextInput
-            className="flex-1 ml-3 text-white text-[16px] font-medium h-12"
+            className={cls('flex-1 ml-3 text-white text-[16px] font-medium h-12')}
             placeholder="Search Indian cities..."
             placeholderTextColor="#475569"
             value={query}
@@ -66,14 +68,14 @@ const CityPickerModal: React.FC<CityPickerModalProps> = ({
               accessibilityRole="button"
               accessibilityLabel="Clear search"
             >
-              <Text className="text-[#64748b] font-bold px-2">Clear</Text>
+              <Text className={cls('text-[#64748b] font-bold px-2')}>Clear</Text>
             </TouchableOpacity>
           )}
         </View>
       </View>
 
           <ScrollView
-            className="flex-1 px-4"
+            className={cls('flex-1 px-4')}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
@@ -84,39 +86,39 @@ const CityPickerModal: React.FC<CityPickerModalProps> = ({
                   onSelect(c.city, c.lat, c.lon);
                   setQuery('');
                 }}
-                className={`p-5 mb-2 rounded-[24px] flex-row justify-between items-center ${
+                className={cls(`p-5 mb-2 rounded-[24px] flex-row justify-between items-center ${
                   selectedCity === c.city
                     ? 'bg-[#00f2fe]/10 border border-[#00f2fe]/30'
                     : 'bg-white/[0.02] border border-white/5'
-                }`}
+                }`)}
               >
                 <View>
                   <Text
-                    className={`text-[15px] font-bold ${
+                    className={cls(`text-[15px] font-bold ${
                       selectedCity === c.city ? 'text-[#00f2fe]' : 'text-neutral-200'
-                    }`}
+                    }`)}
                   >
                     {c.city}
                   </Text>
-                  <Text className="text-[10px] text-neutral-500 font-mono mt-0.5 uppercase tracking-widest">
+                  <Text className={cls('text-[10px] text-neutral-500 font-mono mt-0.5 uppercase tracking-widest')}>
                     {c.state}
                   </Text>
                 </View>
-                {selectedCity === c.city && <Check size={18} color="#00f2fe" />}
+                {selectedCity === c.city && <Check size={18} color={pick('#00f2fe', '#0891b2')} />}
               </TouchableOpacity>
             ))}
 
             {matches.length === 0 && (
-              <View className="py-20 items-center">
-                <Text className="text-neutral-500 text-sm text-center">
+              <View className={cls('py-20 items-center')}>
+                <Text className={cls('text-neutral-500 text-sm text-center')}>
                   No cities found matching your search
                 </Text>
-                <Text className="text-neutral-700 text-xs mt-2 italic">
+                <Text className={cls('text-neutral-700 text-xs mt-2 italic')}>
                   Try searching for the state or a nearby hub
                 </Text>
               </View>
             )}
-        <View className="h-10" />
+        <View className={cls('h-10')} />
       </ScrollView>
     </Sheet>
   );

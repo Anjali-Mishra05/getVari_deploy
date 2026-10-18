@@ -430,6 +430,70 @@ describe('clearing', () => {
   });
 });
 
+describe('history is kept per account', () => {
+  const ACCOUNT_KEY = 'getvari_notification_schedule_owner';
+  const signIn = (userId: string) => mockStore.set(ACCOUNT_KEY, userId);
+
+  it('User A keeps their history across logout and sees it again on signing back in', async () => {
+    signIn('user-a');
+    await NotificationHistory.recordDelivery(reminder(1, 1_000) as any, 1_000);
+    await NotificationHistory.recordDelivery(reminder(2, 2_000) as any, 2_000);
+    const before = await NotificationHistory.list();
+
+    await NotificationHistory.keepForAccount('user-a'); // logout
+    signIn('user-a'); // back in
+    expect(await NotificationHistory.list()).toEqual(before);
+  });
+
+  it('User B never sees User A’s history, and A’s comes back when A signs in again', async () => {
+    signIn('user-a');
+    await NotificationHistory.recordDelivery(reminder(1, 1_000) as any, 1_000);
+    const aHistory = await NotificationHistory.list();
+
+    signIn('user-b');
+    expect(await NotificationHistory.list()).toEqual([]);
+    expect(await NotificationHistory.unseenCount()).toBe(0);
+    await NotificationHistory.recordDelivery(reminder(9, 9_000) as any, 9_000);
+    expect((await NotificationHistory.list()).map(e => e.id)).toEqual(['hydration-reminder-9@9000']);
+
+    signIn('user-a');
+    expect(await NotificationHistory.list()).toEqual(aHistory);
+  });
+
+  it('the bell badge is per account', async () => {
+    signIn('user-a');
+    await NotificationHistory.recordDelivery(reminder(1, 1_000) as any, 1_000);
+    await NotificationHistory.markAllSeen(5_000);
+    signIn('user-b');
+    await NotificationHistory.recordDelivery(reminder(2, 2_000) as any, 2_000);
+    expect(await NotificationHistory.unseenCount()).toBe(1);
+    signIn('user-a');
+    expect(await NotificationHistory.unseenCount()).toBe(0);
+  });
+
+  it('history written before accounts were tracked is kept, unchanged, for the signed-in account', async () => {
+    const legacy = JSON.stringify([
+      { id: 'x@1', title: 'old', body: 'b', kind: 'local', deliveredAt: 1, pressedAt: null, supersededAt: null, answeredAt: null, answeredMl: null },
+    ]);
+    mockStore.set('getvari_notification_history', legacy);
+    signIn('user-a');
+    expect((await NotificationHistory.list()).map(e => e.id)).toEqual(['x@1']);
+    expect(mockStore.get('getvari_notification_history:user-a')).toBe(legacy);
+    expect(mockStore.has('getvari_notification_history')).toBe(false);
+    signIn('user-b');
+    expect(await NotificationHistory.list()).toEqual([]);
+  });
+
+  it('with no account recorded, logout hands the history to the account signing out only', async () => {
+    await NotificationHistory.recordDelivery(reminder(1, 1_000) as any, 1_000);
+    await NotificationHistory.keepForAccount('user-a'); // logout
+    signIn('user-b');
+    expect(await NotificationHistory.list()).toEqual([]);
+    signIn('user-a');
+    expect((await NotificationHistory.list()).map(e => e.id)).toEqual(['hydration-reminder-1@1000']);
+  });
+});
+
 describe('change notifications', () => {
   it('announces writes so an open list can re-read', async () => {
     await NotificationHistory.recordDelivery(reminder(1, 1_000) as any, 1_000);

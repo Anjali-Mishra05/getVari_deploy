@@ -26,7 +26,7 @@ const AdminLoginPage: React.FC = () => {
 
     if (signInError) {
       setError(signInError.message);
-    } else if (data.user && data.user.user_metadata?.is_admin !== true) {
+    } else if (data.user && data.user.app_metadata?.is_admin !== true) {
       setError('Access denied: This account does not have administrator privileges.');
       await supabase.auth.signOut();
     }

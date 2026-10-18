@@ -4,6 +4,7 @@ import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { Check, ChevronDown } from 'lucide-react-native';
 
 import Sheet from './ui/Sheet';
+import { useScopedTheme } from '../theme/theme';
 
 import { formatClock, formatClockLabel } from '../utils/sleepWindow';
 
@@ -16,25 +17,26 @@ const TIME_ROW_HEIGHT = 56;
 
 /** Read-only field that opens a list of times — no native picker dependency. */
 const TimeField = ({ label, caption, value, onChange, icon: Icon }: any) => {
+  const { cls, pick } = useScopedTheme();
   const [open, setOpen] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const selectedIndex = Math.max(0, TIME_OPTIONS.indexOf(value));
 
   return (
-    <View className="mb-5">
-      <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">{label}</Text>
+    <View className={cls('mb-5')}>
+      <Text className={cls('text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2')}>{label}</Text>
       <TouchableOpacity
         onPress={() => setOpen(true)}
         activeOpacity={0.7}
-        className="bg-white/5 border border-white/10 rounded-2xl px-4 py-4 flex-row items-center justify-between"
+        className={cls('bg-white/5 border border-white/10 rounded-2xl px-4 py-4 flex-row items-center justify-between')}
       >
-        <View className="flex-row items-center gap-3">
-          <Icon size={16} color="#00f2fe" />
-          <Text className="text-white text-[15px] font-black">{formatClockLabel(value)}</Text>
+        <View className={cls('flex-row items-center gap-3')}>
+          <Icon size={16} color={pick('#00f2fe', '#0891b2')} />
+          <Text className={cls('text-white text-[15px] font-black')}>{formatClockLabel(value)}</Text>
         </View>
         <ChevronDown size={14} color="#64748b" />
       </TouchableOpacity>
-      {!!caption && <Text className="text-neutral-500 text-[10px] mt-2 leading-relaxed">{caption}</Text>}
+      {!!caption && <Text className={cls('text-neutral-500 text-[10px] mt-2 leading-relaxed')}>{caption}</Text>}
 
       <Sheet
         visible={open}
@@ -45,7 +47,7 @@ const TimeField = ({ label, caption, value, onChange, icon: Icon }: any) => {
       >
             <ScrollView
               ref={scrollRef}
-              className="flex-1 px-4"
+              className={cls('flex-1 px-4')}
               showsVerticalScrollIndicator={false}
               // Opening on the current answer rather than at midnight saves the
               // user a long scroll every time they reopen the picker.
@@ -64,17 +66,17 @@ const TimeField = ({ label, caption, value, onChange, icon: Icon }: any) => {
                     setOpen(false);
                   }}
                   style={{ height: TIME_ROW_HEIGHT - 8, marginBottom: 8 }}
-                  className={`px-5 rounded-[20px] flex-row justify-between items-center ${
+                  className={cls(`px-5 rounded-[20px] flex-row justify-between items-center ${
                     option === value ? 'bg-[#00f2fe]/10 border border-[#00f2fe]/30' : 'bg-white/[0.02] border border-white/5'
-                  }`}
+                  }`)}
                 >
-                  <Text className={`text-[15px] font-bold ${option === value ? 'text-[#00f2fe]' : 'text-neutral-200'}`}>
+                  <Text className={cls(`text-[15px] font-bold ${option === value ? 'text-[#00f2fe]' : 'text-neutral-200'}`)}>
                     {formatClockLabel(option)}
                   </Text>
-                  {option === value && <Check size={18} color="#00f2fe" />}
+                  {option === value && <Check size={18} color={pick('#00f2fe', '#0891b2')} />}
                 </TouchableOpacity>
               ))}
-          <View className="h-10" />
+          <View className={cls('h-10')} />
         </ScrollView>
       </Sheet>
     </View>

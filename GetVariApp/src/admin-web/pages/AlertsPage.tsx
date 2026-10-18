@@ -1,21 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { ShieldAlert, Droplets, Clock } from 'lucide-react';
 import AlertCategory from '../components/alerts/AlertCategory';
-import { User } from '../types';
-import { SupabaseAdminService } from '../services/SupabaseAdminService';
+import BroadcastNotificationCard from '../components/alerts/BroadcastNotificationCard';
+import useAdminUsers from '../hooks/useAdminUsers';
+import DataStatus from '../components/shared/DataStatus';
 
 const AlertsPage: React.FC = () => {
-  const [users, setUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const loadData = async () => {
-      const data = await SupabaseAdminService.fetchAllUsers();
-      setUsers(data);
-      setLoading(false);
-    };
-    loadData();
-  }, []);
+  const { users, loading, error, loadedAt, refresh } = useAdminUsers();
 
   const criticalAlerts = users
     .filter(u => u.status === 'Critical')
@@ -35,25 +26,34 @@ const AlertsPage: React.FC = () => {
       desc: `Daily fluid intake is significantly below dynamic target.`
     }));
 
+  // The app sends no wearable heartbeat, so "quiet" is the most the panel can
+  // say: no profile save and no logged entry for an hour.
   const offlineAlerts = users
-    .filter(u => u.lastSyncedMinutes >= 60)
+    .filter(u => u.lastSyncedMinutes === null || u.lastSyncedMinutes >= 60)
     .map(u => ({
       id: `off_${u.id}`,
       user: u.name,
-      score: 'OFFLINE',
-      desc: `Wearable sync lost. No telemetry received recently.`,
+      score: 'QUIET',
+      desc: `No logged water or profile change in the last hour.`,
       time: u.lastSynced
     }));
 
-  if (loading) {
+  if (loading && loadedAt === null) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-slate-400 font-mono text-sm animate-pulse">MONITORING FLEET ANOMALIES...</div>
-      </div>
+      <DataStatus loading loadingLabel="MONITORING FLEET ANOMALIES..." error={null} loadedAt={null} onRefresh={refresh} />
     );
   }
 
   return (
+    <>
+    <DataStatus
+      loading={loading}
+      loadingLabel="MONITORING FLEET ANOMALIES..."
+      error={error}
+      loadedAt={loadedAt}
+      onRefresh={refresh}
+    />
+    <BroadcastNotificationCard />
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 items-stretch">
       <AlertCategory
         title="Critical Hazards"
@@ -70,12 +70,13 @@ const AlertsPage: React.FC = () => {
       />
 
       <AlertCategory
-        title="Node Disconnections"
+        title="No Recent Activity"
         icon={<Clock size={16} />}
         color="neutral"
         alerts={offlineAlerts}
       />
     </div>
+    </>
   );
 };
 

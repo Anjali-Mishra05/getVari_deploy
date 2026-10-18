@@ -1,13 +1,16 @@
 package com.getvariapp
 
+import android.app.Activity
 import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.WindowManager
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -62,6 +65,20 @@ class FullScreenReminderModule(reactContext: ReactApplicationContext) :
     override fun getName(): String = "FullScreenReminderModule"
 
     /**
+     * `isDebugBuild`: Gradle's own debug/release flag. `__DEV__` cannot stand
+     * in for it — the debug APK packages its JS bundle with dev off (see
+     * `debuggableVariants` in app/build.gradle), so `__DEV__` is false there
+     * whenever Metro is not serving.
+     *
+     * `internalVersion`: the 0.1.DD.MM version fixed when the APK was built
+     * (see `INTERNAL_VERSION` in app/build.gradle).
+     */
+    override fun getConstants(): Map<String, Any> = mapOf(
+        "isDebugBuild" to BuildConfig.DEBUG,
+        "internalVersion" to BuildConfig.INTERNAL_VERSION,
+    )
+
+    /**
      * True when a reminder posted right now would actually take over the
      * screen.
      *
@@ -82,14 +99,18 @@ class FullScreenReminderModule(reactContext: ReactApplicationContext) :
                 as? NotificationManager
 
         if (manager == null) {
-            // Nothing to read. Reporting true keeps the app from nagging about
-            // a permission it cannot verify — the reminder still degrades to a
-            // banner on its own if the grant is in fact missing.
-            promise.resolve(true)
+            // Nothing to read. `null` means "not verified" — the JS side keeps
+            // the permission step up rather than treating it as granted.
+            promise.resolve(null)
             return
         }
 
-        promise.resolve(manager.canUseFullScreenIntent())
+        try {
+            promise.resolve(manager.canUseFullScreenIntent())
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Could not read full-screen intent state: ${e.message}")
+            promise.resolve(null)
+        }
     }
 
     /**
@@ -244,8 +265,125 @@ class FullScreenReminderModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Turns showing over the lock screen on or off for the running activity.
+     *
+     * JS turns it off once no reminder is outstanding, so the lock screen
+     * comes back and the rest of the app needs an unlock. Resolves false when
+     * there is no activity to change.
+     */
+    @ReactMethod
+    fun setShowOverLockScreen(enabled: Boolean, promise: Promise) {
+        val activity = reactApplicationContext.currentActivity
+        if (activity == null) {
+            promise.resolve(false)
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                applyShowOverLockScreen(activity, enabled)
+                promise.resolve(true)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Could not change lock-screen display: ${e.message}")
+                promise.resolve(false)
+            }
+        }
+    }
+
+    /* -------------------------------------------------------------- *
+     * Appearance of the native window
+     * -------------------------------------------------------------- */
+
+    /**
+     * Remembers the app's dark/light mode for the native side and repaints
+     * the running window in it.
+     *
+     * The mode is chosen and kept in JS. It is copied here only because the
+     * window is drawn before JS has loaded: on a launch from a reminder's
+     * full-screen intent there is nothing else on screen at that point, and
+     * the window must already be in the mode the user chose.
+     */
+    @ReactMethod
+    fun setAppearance(mode: String) {
+        try {
+            reactApplicationContext
+                .getSharedPreferences(APPEARANCE_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(APPEARANCE_KEY, if (mode == "light") "light" else "dark")
+                .apply()
+            val activity = reactApplicationContext.currentActivity ?: return
+            activity.runOnUiThread { applySavedAppearance(activity) }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Could not store the appearance: ${e.message}")
+        }
+    }
+
     companion object {
         private const val TAG = "FullScreenReminder"
+
+        private const val APPEARANCE_PREFS = "getvari_appearance"
+        private const val APPEARANCE_KEY = "theme_mode"
+
+        /** The page colours of the two modes, as `theme.ts` draws them. */
+        private const val DARK_WINDOW = 0xFF02050E.toInt()
+        private const val LIGHT_WINDOW = 0xFFF5F5F3.toInt()
+
+        /**
+         * Paints the window in the saved mode. Called by `MainActivity` before
+         * anything is drawn, so no launch — a reminder's included — shows the
+         * other mode while JS loads. Does nothing until a mode has been saved.
+         */
+        @JvmStatic
+        fun applySavedAppearance(activity: Activity) {
+            try {
+                val mode =
+                    activity
+                        .getSharedPreferences(APPEARANCE_PREFS, Context.MODE_PRIVATE)
+                        .getString(APPEARANCE_KEY, null) ?: return
+                activity.window.setBackgroundDrawable(
+                    ColorDrawable(if (mode == "light") LIGHT_WINDOW else DARK_WINDOW)
+                )
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Could not apply the saved appearance: ${e.message}")
+            }
+        }
+
+        /**
+         * Called by `MainActivity` on every launch (`onCreate`) and relaunch
+         * (`onNewIntent`). When the phone is locked or its screen is off at
+         * that moment, the launch is a hydration reminder's full-screen intent
+         * — the only thing that starts this activity without an unlock — so
+         * the activity is allowed to wake the screen and show over the
+         * keyguard.
+         *
+         * Deliberately runtime rather than `android:showWhenLocked` in the
+         * manifest: a static flag would put the whole app over the lock screen
+         * every time. The keyguard is not dismissed either; a PIN-protected
+         * phone still needs its PIN to leave the reminder for the rest of the
+         * app, and JS turns this off again once the reminder is answered.
+         */
+        @JvmStatic
+        fun showOverLockScreenIfLocked(activity: Activity) {
+            val power = activity.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val keyguard = activity.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            val locked = keyguard?.isKeyguardLocked ?: false
+            val screenOff = !(power?.isInteractive ?: true)
+            if (locked || screenOff) applyShowOverLockScreen(activity, true)
+        }
+
+        @JvmStatic
+        fun applyShowOverLockScreen(activity: Activity, enabled: Boolean) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                activity.setShowWhenLocked(enabled)
+                activity.setTurnScreenOn(enabled)
+            } else {
+                @Suppress("DEPRECATION")
+                val flags =
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                if (enabled) activity.window.addFlags(flags) else activity.window.clearFlags(flags)
+            }
+        }
 
         /** Marks the launch as a reminder's, for anything that inspects the intent. */
         const val EXTRA_FROM_REMINDER = "getvari.fromReminder"

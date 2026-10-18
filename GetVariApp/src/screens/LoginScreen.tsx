@@ -7,11 +7,13 @@ import {
   TouchableWithoutFeedback,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ActivityIndicator,
   Dimensions,
   Keyboard,
 } from 'react-native';
+// Not React Native's own SafeAreaView: that is a plain View on Android and
+// leaves the content under the system bars. This one applies the real insets.
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
@@ -23,6 +25,7 @@ import Button from '../components/ui/Button';
 import { AlertTriangle, Cpu } from 'lucide-react-native';
 import { cssInterop } from 'react-native-css-interop';
 import GlassCard from '../components/GlassCard';
+import { themed, tone, useThemeMode } from '../theme/theme';
 
 // Add CSS Interop for Lucide icons to support className in NativeWind v4
 cssInterop(AlertTriangle, {
@@ -46,7 +49,8 @@ cssInterop(Cpu, {
 
 const { width } = Dimensions.get('window');
 
-const LoginScreen = ({ navigation }: any) => {
+const LoginScreen = ({ navigation }: any) => {
+  useThemeMode();
   const [phoneNumber, setPhoneNumber] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [error, setError] = useState('');
@@ -125,8 +129,8 @@ const LoginScreen = ({ navigation }: any) => {
   };
 
   return (
-    <View className="flex-1 bg-[#01040a]">
-      <View className="absolute inset-0">
+    <View className={themed('flex-1 bg-[#01040a]')}>
+      <View className={themed('absolute inset-0')}>
         <Svg height="100%" width="100%">
           <Defs>
             <RadialGradient
@@ -139,8 +143,8 @@ const LoginScreen = ({ navigation }: any) => {
               fy="50%"
               gradientUnits="userSpaceOnUse"
             >
-              <Stop offset="0%" stopColor="#0b2133" stopOpacity="0.2" />
-              <Stop offset="100%" stopColor="#01040a" stopOpacity="1" />
+              <Stop offset="0%" stopColor={tone('#0b2133', '#ffffff')} stopOpacity="0.2" />
+              <Stop offset="100%" stopColor={tone('#01040a', '#f5f5f3')} stopOpacity="1" />
             </RadialGradient>
           </Defs>
           <SvgRect x="0" y="0" width="100%" height="100%" fill="url(#grad)" />
@@ -148,21 +152,21 @@ const LoginScreen = ({ navigation }: any) => {
       </View>
 
       <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-        <SafeAreaView className="flex-1 items-center justify-center pt-4">
+        <SafeAreaView className={themed('flex-1 items-center justify-center pt-4')}>
           <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            className="flex-1 w-full items-center justify-center px-4"
+            className={themed('flex-1 w-full items-center justify-center px-4')}
           >
             <Animated.View
               entering={FadeInUp.duration(1000).springify()}
-              className="w-full items-center"
+              className={themed('w-full items-center')}
             >
-              <GlassCard
-                className="items-center p-0 pt-8 pb-8 px-5 rounded-[32px] bg-black/40 border-white/10 shadow-2xl"
+              <GlassCard adaptive
+                className={themed('items-center p-0 pt-8 pb-8 px-5 rounded-[32px] bg-black/40 border-white/10 shadow-2xl')}
                 style={{ width: Math.min(width - 30, 360) }}
               >
 
-              <View className="flex-row items-baseline justify-center mb-4">
+              <View className={themed('flex-row items-baseline justify-center mb-4')}>
                 <View
                   style={{
                     width: 11,
@@ -182,7 +186,7 @@ const LoginScreen = ({ navigation }: any) => {
                   style={{
                     fontSize: 28,
                     fontFamily: Platform.OS === 'android' ? 'sans-serif-thin' : 'HelveticaNeue-Thin',
-                    color: '#a3b3cc',
+                    color: tone('#a3b3cc', '#52525b'),
                     letterSpacing: -0.8,
                   }}
                 >
@@ -192,7 +196,7 @@ const LoginScreen = ({ navigation }: any) => {
                   style={{
                     fontSize: 34,
                     fontWeight: '900',
-                    color: '#ffffff',
+                    color: tone('#ffffff', '#18181b'),
                     letterSpacing: -1.2,
                     marginLeft: 4,
                   }}
@@ -201,29 +205,29 @@ const LoginScreen = ({ navigation }: any) => {
                 </Text>
               </View>
 
-              <Text className="w-[280px] text-[13px] text-neutral-400 text-center mt-1 leading-5 font-sans mb-8">
+              <Text className={themed('w-[280px] text-[13px] text-neutral-400 text-center mt-1 leading-5 font-sans mb-8')}>
                 Verify your mobile number to validate session telemetry.
               </Text>
 
               {error ? (
-                <View className="flex-row bg-red-500/10 border border-red-500/20 p-4 rounded-2xl mb-8 items-start w-full">
-                  <AlertTriangle color="#f87171" size={16} className="mt-0.5" />
-                  <View className="ml-3 flex-1">
-                    <Text className="text-[12px] font-bold text-red-200">Access Denied</Text>
-                    <Text className="text-[11px] text-red-200 mt-0.5 leading-snug">{error}</Text>
+                <View className={themed('flex-row bg-red-500/10 border border-red-500/20 p-4 rounded-2xl mb-8 items-start w-full')}>
+                  <AlertTriangle color="#f87171" size={16} className={themed('mt-0.5')} />
+                  <View className={themed('ml-3 flex-1')}>
+                    <Text className={themed('text-[12px] font-bold text-red-200')}>Access Denied</Text>
+                    <Text className={themed('text-[11px] text-red-200 mt-0.5 leading-snug')}>{error}</Text>
                   </View>
                 </View>
               ) : null}
 
-              <View className="w-full">
-                <View className="flex-row gap-2.5 items-center mb-4">
-                  <View className="bg-[#0a101a] border border-white/10 rounded-[20px] px-3.5 flex-row items-center justify-center min-w-[90px] h-[46px]">
-                    <Text className="text-[13px] font-black text-neutral-300 font-mono">IN +91</Text>
+              <View className={themed('w-full')}>
+                <View className={themed('flex-row gap-2.5 items-center mb-4')}>
+                  <View className={themed('bg-[#0a101a] border border-white/10 rounded-[20px] px-3.5 flex-row items-center justify-center min-w-[90px] h-[46px]')}>
+                    <Text className={themed('text-[13px] font-black text-neutral-300 font-mono')}>IN +91</Text>
                   </View>
                   <TextInput
-                    className={`flex-1 h-[46px] bg-[#0a101a] rounded-[20px] px-4 text-white text-[14px] font-semibold font-mono border ${phoneFocused ? 'border-cyan-400/75' : 'border-white/10'}`}
+                    className={themed(`flex-1 h-[46px] bg-[#0a101a] rounded-[20px] px-4 text-white text-[14px] font-semibold font-mono border ${phoneFocused ? 'border-cyan-400/75' : 'border-white/10'}`)}
                     placeholder="Enter mobile number"
-                    placeholderTextColor="#2b313d"
+                    placeholderTextColor={tone('#2b313d', '#a1a1aa')}
                     keyboardType="phone-pad"
                     maxLength={10}
                     value={phoneNumber}
@@ -250,17 +254,17 @@ const LoginScreen = ({ navigation }: any) => {
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     accessibilityRole="button"
                     accessibilityLabel="Use a number from this phone's SIM"
-                    className="flex-row items-center gap-2 mb-4 self-start"
+                    className={themed('flex-row items-center gap-2 mb-4 self-start')}
                   >
-                    {pickingNumber && <ActivityIndicator size="small" color="#00f2fe" />}
-                    <Text className="text-[11px] font-black uppercase tracking-wider text-[#00f2fe]">
+                    {pickingNumber && <ActivityIndicator size="small" color={tone('#00f2fe', '#0891b2')} />}
+                    <Text className={themed('text-[11px] font-black uppercase tracking-wider text-[#00f2fe]')}>
                       {pickingNumber ? 'Opening…' : "Use this phone's number"}
                     </Text>
                   </TouchableOpacity>
                 )}
 
                 <TouchableOpacity
-                  className="flex-row items-center bg-black/30 p-3.5 rounded-[20px] border border-white/[0.04] mb-5"
+                  className={themed('flex-row items-center bg-black/30 p-3.5 rounded-[20px] border border-white/[0.04] mb-5')}
                   activeOpacity={0.7}
                   onPress={() => {
                     setError('');
@@ -273,19 +277,19 @@ const LoginScreen = ({ navigation }: any) => {
                       height: 20,
                       borderRadius: 5,
                       borderWidth: 1,
-                      borderColor: 'rgba(255,255,255,0.2)',
-                      backgroundColor: agreeTerms ? '#ffffff' : 'transparent',
+                      borderColor: tone('rgba(255,255,255,0.2)', 'rgba(24,24,27,0.24)'),
+                      backgroundColor: agreeTerms ? tone('#ffffff', '#0891b2') : 'transparent',
                       justifyContent: 'center',
                       alignItems: 'center',
                       marginRight: 12,
                     }}
                   >
                     {agreeTerms && (
-                      <View style={{ width: 10, height: 10, backgroundColor: '#020617', borderRadius: 5 }} />
+                      <View style={{ width: 10, height: 10, backgroundColor: tone('#020617', '#ffffff'), borderRadius: 5 }} />
                     )}
                   </View>
-                  <Text className="text-[13px] text-neutral-300 font-semibold">
-                    I agree to the <Text className="text-[#00f2fe]">Terms & Conditions</Text>
+                  <Text className={themed('text-[13px] text-neutral-300 font-semibold')}>
+                    I agree to the <Text className={themed('text-[#00f2fe]')}>Terms & Conditions</Text>
                   </Text>
                 </TouchableOpacity>
 
@@ -305,18 +309,18 @@ const LoginScreen = ({ navigation }: any) => {
                   }}
                 />
 
-                <View className="mt-7 bg-black/60 p-4 rounded-[22px] border border-white/[0.05]">
-                  <View className="flex-row items-center gap-2 mb-3">
-                    <Cpu color="#00f2fe" size={14} />
-                    <Text className="text-[10px] text-[#00f2fe] font-black uppercase font-mono tracking-[0.18em]">DEMO / INVESTOR TESTING KEY</Text>
+                <View className={themed('mt-7 bg-black/60 p-4 rounded-[22px] border border-white/[0.05]')}>
+                  <View className={themed('flex-row items-center gap-2 mb-3')}>
+                    <Cpu color={tone('#00f2fe', '#0891b2')} size={14} />
+                    <Text className={themed('text-[10px] text-[#00f2fe] font-black uppercase font-mono tracking-[0.18em]')}>DEMO / INVESTOR TESTING KEY</Text>
                   </View>
-                  <Text className="text-[11px] text-neutral-500 leading-6 font-medium">
-                    Enter any Indian mobile number, check the Terms & Conditions checkbox, and submit. The demo verification passcode is <Text className="text-[#00f2fe] font-black">{DEMO_PASSCODE}</Text>.
+                  <Text className={themed('text-[11px] text-neutral-500 leading-6 font-medium')}>
+                    Enter any Indian mobile number, check the Terms & Conditions checkbox, and submit. The demo verification passcode is <Text className={themed('text-[#00f2fe] font-black')}>{DEMO_PASSCODE}</Text>.
                   </Text>
                 </View>
               </View>
 
-              <View className="mt-8 items-center">
+              <View className={themed('mt-8 items-center')}>
 
               </View>
               </GlassCard>

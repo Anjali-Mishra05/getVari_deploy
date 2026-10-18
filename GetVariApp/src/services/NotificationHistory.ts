@@ -23,6 +23,54 @@ import type { NotificationKind, NotificationRecord } from '../types';
 const HISTORY_KEY = 'getvari_notification_history';
 const SEEN_KEY = 'getvari_notification_history_seen_at';
 const HISTORY_CHANGED_EVENT = 'getvari:notification-history-changed';
+/**
+ * The account last signed in on this device, recorded by
+ * `NotificationService.adoptAccount` at every sign-in and kept across a
+ * logout. Named here rather than imported: NotificationService imports this
+ * module.
+ */
+const ACCOUNT_KEY = 'getvari_notification_schedule_owner';
+
+/**
+ * The history is kept per account: logging out leaves it in place, the same
+ * account signing back in sees it again, and a different account only ever
+ * sees its own. With no account recorded yet, the unscoped keys are used.
+ */
+const scopedKey = (base: string, userId: string) => `${base}:${userId}`;
+
+/**
+ * Rows written under the unscoped keys (before history was kept per account)
+ * are moved, unchanged, to `userId`'s keys — unless that account already has
+ * its own history, which is never overwritten.
+ */
+const claimUnscoped = async (userId: string): Promise<void> => {
+  const [legacyHistory, legacySeen, own] = await Promise.all([
+    AsyncStorage.getItem(HISTORY_KEY),
+    AsyncStorage.getItem(SEEN_KEY),
+    AsyncStorage.getItem(scopedKey(HISTORY_KEY, userId)),
+  ]);
+  if (legacyHistory === null && legacySeen === null) return;
+  if (own === null) {
+    if (legacyHistory !== null) await AsyncStorage.setItem(scopedKey(HISTORY_KEY, userId), legacyHistory);
+    if (legacySeen !== null) await AsyncStorage.setItem(scopedKey(SEEN_KEY, userId), legacySeen);
+  }
+  await AsyncStorage.removeItem(HISTORY_KEY);
+  await AsyncStorage.removeItem(SEEN_KEY);
+};
+
+/** The storage keys for the account whose history is showing. */
+const currentKeys = async (): Promise<{ history: string; seen: string }> => {
+  let userId: string | null = null;
+  try {
+    userId = await AsyncStorage.getItem(ACCOUNT_KEY);
+    if (userId) await claimUnscoped(userId);
+  } catch (error) {
+    console.error('[Notifications] Failed to resolve the history account:', error);
+  }
+  return userId
+    ? { history: scopedKey(HISTORY_KEY, userId), seen: scopedKey(SEEN_KEY, userId) }
+    : { history: HISTORY_KEY, seen: SEEN_KEY };
+};
 
 /** Entries kept, newest first. Older deliveries fall off the end. */
 export const HISTORY_LIMIT = 100;
@@ -54,7 +102,7 @@ const normalise = (value: any): NotificationRecord => ({
 
 const readAll = async (): Promise<NotificationRecord[]> => {
   try {
-    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const raw = await AsyncStorage.getItem((await currentKeys()).history);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter(isRecord).map(normalise) : [];
@@ -69,7 +117,7 @@ const writeAll = async (entries: NotificationRecord[]): Promise<NotificationReco
   const ordered = [...entries]
     .sort((a, b) => b.deliveredAt - a.deliveredAt)
     .slice(0, HISTORY_LIMIT);
-  await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(ordered));
+  await AsyncStorage.setItem((await currentKeys()).history, JSON.stringify(ordered));
   DeviceEventEmitter.emit(HISTORY_CHANGED_EVENT);
   return ordered;
 };
@@ -310,7 +358,7 @@ export const NotificationHistory = {
     try {
       const [entries, raw] = await Promise.all([
         readAll(),
-        AsyncStorage.getItem(SEEN_KEY),
+        currentKeys().then(keys => AsyncStorage.getItem(keys.seen)),
       ]);
       const seenAt = Number(raw);
       if (!Number.isFinite(seenAt) || seenAt <= 0) return entries.length;
@@ -324,7 +372,7 @@ export const NotificationHistory = {
   /** Called when the bell menu is opened; clears the badge. */
   async markAllSeen(seenAt: number = Date.now()): Promise<void> {
     try {
-      await AsyncStorage.setItem(SEEN_KEY, String(seenAt));
+      await AsyncStorage.setItem((await currentKeys()).seen, String(seenAt));
       DeviceEventEmitter.emit(HISTORY_CHANGED_EVENT);
     } catch (error) {
       console.error('[Notifications] Failed to mark history seen:', error);
@@ -334,10 +382,27 @@ export const NotificationHistory = {
   async clear(): Promise<void> {
     return serialise(async () => {
       try {
-        await AsyncStorage.removeItem(HISTORY_KEY);
+        await AsyncStorage.removeItem((await currentKeys()).history);
         DeviceEventEmitter.emit(HISTORY_CHANGED_EVENT);
       } catch (error) {
         console.error('[Notifications] Failed to clear history:', error);
+      }
+    });
+  },
+
+  /**
+   * At logout, before any account has been recorded on this device (a
+   * session from a build that did not record one): the unscoped history is
+   * handed to the account signing out, so it is theirs again when they sign
+   * back in and never shown to anyone else.
+   */
+  async keepForAccount(userId: string): Promise<void> {
+    return serialise(async () => {
+      try {
+        if (await AsyncStorage.getItem(ACCOUNT_KEY)) return;
+        await claimUnscoped(userId);
+      } catch (error) {
+        console.error('[Notifications] Failed to keep history for the account:', error);
       }
     });
   },

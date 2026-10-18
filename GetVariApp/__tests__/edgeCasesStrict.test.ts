@@ -139,8 +139,10 @@ jest.mock('../src/services/NotificationService', () => ({
     // and the scheduled reminder's — so it reads this shared stamp rather than
     // only its own state. Infinity is "nothing has been shown yet".
     msSinceLastNotification: (...args: any[]) => mockMsSinceLastNotification.apply(null, args as []),
+    msSinceLastDynamicNotification: (...args: any[]) => mockMsSinceLastNotification.apply(null, args as []),
     noteNotificationShown: () => Promise.resolve(),
     noteIntakeLogged: () => Promise.resolve(),
+    noteConditionSnapshot: () => Promise.resolve(),
   },
 }));
 

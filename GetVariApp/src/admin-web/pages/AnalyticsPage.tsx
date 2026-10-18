@@ -1,39 +1,33 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import ChartDistribution from '../components/analytics/ChartDistribution';
 import ChartTrends from '../components/analytics/ChartTrends';
 import ChartCorrelation from '../components/analytics/ChartCorrelation';
-import { SupabaseAdminService } from '../services/SupabaseAdminService';
-import { User } from '../types';
+import useAdminUsers from '../hooks/useAdminUsers';
+import DataStatus from '../components/shared/DataStatus';
 
 const AnalyticsPage: React.FC = () => {
-  const [loading, setLoading] = useState(true);
-  const [users, setUsers] = useState<User[]>([]);
+  const { users, loading, error, loadedAt, refresh } = useAdminUsers();
 
-  useEffect(() => {
-    const loadData = async () => {
-      const [_, userData] = await Promise.all([
-        SupabaseAdminService.fetchAllHydrationLogs(),
-        SupabaseAdminService.fetchAllUsers()
-      ]);
-      setUsers(userData);
-      setLoading(false);
-    };
-    loadData();
-  }, []);
-
-  if (loading) {
+  if (loading && loadedAt === null) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-slate-400 font-mono text-sm animate-pulse">GENERATING BIO-ANALYTICS...</div>
-      </div>
+      <DataStatus loading loadingLabel="GENERATING BIO-ANALYTICS..." error={null} loadedAt={null} onRefresh={refresh} />
     );
   }
 
   return (
     <div className="space-y-12 animate-fadeIn">
+      <DataStatus
+        loading={loading}
+        loadingLabel="GENERATING BIO-ANALYTICS..."
+        error={error}
+        loadedAt={loadedAt}
+        onRefresh={refresh}
+        isEmpty={users.length === 0}
+        emptyLabel="No user profiles yet."
+      />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
-        <ChartDistribution />
-        <ChartTrends />
+        <ChartDistribution users={users} />
+        <ChartTrends users={users} />
         <ChartCorrelation users={users} loading={loading} />
       </div>
     </div>

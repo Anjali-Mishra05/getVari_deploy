@@ -27,6 +27,7 @@ import {
   sleepDurationMinutes,
 } from '../utils/sleepWindow';
 import type { UserProfile } from '../types';
+import { accent, onAccent, themed, tone } from '../theme/theme';
 
 interface ProfileEditSheetProps {
   visible: boolean;
@@ -36,8 +37,6 @@ interface ProfileEditSheetProps {
   /** Called with the saved blob so the dashboard can update without a refetch. */
   onSaved: (profile: UserProfile) => void;
 }
-
-const ACCENT = '#00f2fe';
 
 const GENDERS = ['Female', 'Male', 'Non-Binary'];
 
@@ -50,13 +49,13 @@ const GENDERS = ['Female', 'Male', 'Non-Binary'];
 const looksLikeEmail = (value: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
 
 const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <Text className="text-[10px] text-neutral-500 font-mono uppercase tracking-[2px] mb-3 mt-2">
+  <Text className={themed('text-[10px] text-neutral-500 font-mono uppercase tracking-[2px] mb-3 mt-2')}>
     {children}
   </Text>
 );
 
 const FieldLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">
+  <Text className={themed('text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2')}>
     {children}
   </Text>
 );
@@ -254,23 +253,23 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
           >
             <SectionLabel>Identity</SectionLabel>
 
-            <View className="mb-5">
+            <View className={themed('mb-5')}>
               <FieldLabel>Full Name</FieldLabel>
               <TextInput
-                className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                className={themed('bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold')}
                 placeholder="e.g. John Doe"
-                placeholderTextColor="#475569"
+                placeholderTextColor={tone('#475569', '#a1a1aa')}
                 value={fullName}
                 onChangeText={setFullName}
               />
             </View>
 
-            <View className="mb-6">
+            <View className={themed('mb-6')}>
               <FieldLabel>Email Address</FieldLabel>
               <TextInput
-                className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold"
+                className={themed('bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold')}
                 placeholder="e.g. john@example.com"
-                placeholderTextColor="#475569"
+                placeholderTextColor={tone('#475569', '#a1a1aa')}
                 value={email}
                 onChangeText={setEmail}
                 keyboardType="email-address"
@@ -283,19 +282,19 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
             <NumberField label="Age" unit="years" min={14} max={90} value={age} onChange={setAge} />
 
             <FieldLabel>Gender</FieldLabel>
-            <View className="flex-row gap-2 mb-7">
+            <View className={themed('flex-row gap-2 mb-7')}>
               {GENDERS.map(g => (
                 <TouchableOpacity
                   key={g}
                   onPress={() => setGender(g)}
-                  className={`flex-1 py-3 rounded-xl border items-center ${
+                  className={themed(`flex-1 py-3 rounded-xl border items-center ${
                     gender === g ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'
-                  }`}
+                  }`)}
                 >
                   <Text
-                    className={`text-[11px] font-bold ${
+                    className={themed(`text-[11px] font-bold ${
                       gender === g ? 'text-[#00f2fe]' : 'text-neutral-400'
-                    }`}
+                    }`)}
                   >
                     {g}
                   </Text>
@@ -315,16 +314,16 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
 
             <SectionLabel>Location (Climate Tracking)</SectionLabel>
 
-            <View className="flex-row gap-2 mb-6">
+            <View className={themed('flex-row gap-2 mb-6')}>
               <TouchableOpacity
                 onPress={() => setShowCityPicker(true)}
                 activeOpacity={0.7}
-                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 flex-row items-center justify-between"
+                className={themed('flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 flex-row items-center justify-between')}
               >
                 <Text
-                  className={`text-[13px] font-bold ${
+                  className={themed(`text-[13px] font-bold ${
                     selectedCity ? 'text-white' : 'text-neutral-500'
-                  }`}
+                  }`)}
                 >
                   {selectedCity || 'Select City'}
                 </Text>
@@ -334,10 +333,10 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
               <TouchableOpacity
                 onPress={detectLocation}
                 disabled={isLocating}
-                className="flex-row items-center gap-2 px-4 py-3 rounded-xl border border-[#00f2fe]/30 bg-[#00f2fe]/10"
+                className={themed('flex-row items-center gap-2 px-4 py-3 rounded-xl border border-[#00f2fe]/30 bg-[#00f2fe]/10')}
               >
-                <MapPin size={14} color={ACCENT} />
-                <Text className="text-[11px] font-black uppercase text-[#00f2fe]">
+                <MapPin size={14} color={accent()} />
+                <Text className={themed('text-[11px] font-black uppercase text-[#00f2fe]')}>
                   {isLocating ? 'Locating...' : 'Detect'}
                 </Text>
               </TouchableOpacity>
@@ -350,46 +349,46 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
                 key={cond.id}
                 onPress={() => toggleCondition(cond.id)}
                 activeOpacity={0.7}
-                className={`w-full p-4 rounded-2xl border mb-2.5 flex-row items-center justify-between ${
+                className={themed(`w-full p-4 rounded-2xl border mb-2.5 flex-row items-center justify-between ${
                   medicalConditions.includes(cond.id)
                     ? 'bg-[#00f2fe]/5 border-[#00f2fe]/50'
                     : 'bg-white/[0.02] border-white/5'
-                }`}
+                }`)}
               >
-                <Text className="text-white font-bold text-[13px] flex-1 pr-4">{cond.title}</Text>
+                <Text className={themed('text-white font-bold text-[13px] flex-1 pr-4')}>{cond.title}</Text>
                 <View
-                  className={`w-6 h-6 rounded-lg border items-center justify-center ${
+                  className={themed(`w-6 h-6 rounded-lg border items-center justify-center ${
                     medicalConditions.includes(cond.id)
                       ? 'bg-[#00f2fe] border-[#00f2fe]'
                       : 'border-white/20'
-                  }`}
+                  }`)}
                 >
                   {medicalConditions.includes(cond.id) && (
-                    <Check size={14} color="#01040a" strokeWidth={4} />
+                    <Check size={14} color={onAccent()} strokeWidth={4} />
                   )}
                 </View>
               </TouchableOpacity>
             ))}
 
-            <View className="mt-4" />
+            <View className={themed('mt-4')} />
             <SectionLabel>Daily Activity Strain</SectionLabel>
 
-            <View className="flex-row flex-wrap gap-2 mb-6">
+            <View className={themed('flex-row flex-wrap gap-2 mb-6')}>
               {activityLevels.map(opt => (
                 <TouchableOpacity
                   key={opt.id}
                   onPress={() => setActivityLevel(opt.id)}
                   activeOpacity={0.7}
-                  className={`px-4 py-3 rounded-xl border ${
+                  className={themed(`px-4 py-3 rounded-xl border ${
                     activityLevel === opt.id
                       ? 'bg-[#00f2fe]/10 border-[#00f2fe]'
                       : 'bg-white/5 border-white/5'
-                  }`}
+                  }`)}
                 >
                   <Text
-                    className={`text-[11px] font-bold ${
+                    className={themed(`text-[11px] font-bold ${
                       activityLevel === opt.id ? 'text-[#00f2fe]' : 'text-neutral-400'
-                    }`}
+                    }`)}
                   >
                     {opt.title}
                   </Text>
@@ -398,10 +397,10 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
             </View>
 
             <SectionLabel>Work Environment</SectionLabel>
-            <View className="flex-row flex-wrap gap-2 mb-6">
+            <View className={themed('flex-row flex-wrap gap-2 mb-6')}>
               {workEnvironments.map((env) => (
-                <TouchableOpacity key={env.id} onPress={() => setWorkEnvironment(env.id as any)} className={`px-4 py-3 rounded-xl border items-center ${workEnvironment === env.id ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`}>
-                  <Text className={`text-[11px] font-bold ${workEnvironment === env.id ? 'text-[#00f2fe]' : 'text-neutral-400'}`}>{env.label}</Text>
+                <TouchableOpacity key={env.id} onPress={() => setWorkEnvironment(env.id as any)} className={themed(`px-4 py-3 rounded-xl border items-center ${workEnvironment === env.id ? 'bg-[#00f2fe]/10 border-[#00f2fe]' : 'bg-white/5 border-white/5'}`)}>
+                  <Text className={themed(`text-[11px] font-bold ${workEnvironment === env.id ? 'text-[#00f2fe]' : 'text-neutral-400'}`)}>{env.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -410,17 +409,17 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
                 the condition in the admin config, not a list of ids repeated
                 on every screen that asks. */}
             {ConfigService.requiresPhysicianLimit(medicalConditions) && (
-              <View className="mb-6">
+              <View className={themed('mb-6')}>
                 <FieldLabel>Physician Daily Limit (ml) — optional</FieldLabel>
                 <TextInput
-                  className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold mb-1"
+                  className={themed('bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-[13px] font-bold mb-1')}
                   placeholder="e.g. 2000"
-                  placeholderTextColor="#475569"
+                  placeholderTextColor={tone('#475569', '#a1a1aa')}
                   value={physicianLimit}
                   onChangeText={setPhysicianLimit}
                   keyboardType="numeric"
                 />
-                <Text className="text-[9px] text-amber-500 italic">Optional. Your goal will never go above this limit.</Text>
+                <Text className={themed('text-[9px] text-amber-500 italic')}>Optional. Your goal will never go above this limit.</Text>
               </View>
             )}
 
@@ -443,31 +442,31 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
             />
 
             {sleepHours < 3 && (
-              <View className="flex-row items-center gap-2 mb-4">
-                <CircleAlert size={12} color="#f59e0b" />
-                <Text className="text-[10px] text-amber-500 font-mono flex-1">
+              <View className={themed('flex-row items-center gap-2 mb-4')}>
+                <CircleAlert size={12} color={tone('#f59e0b', '#b45309')} />
+                <Text className={themed('text-[10px] text-amber-500 font-mono flex-1')}>
                   That is under 3 hours of rest. Adjust it if the times were picked by mistake.
                 </Text>
               </View>
             )}
 
             {/* Recalculated goal */}
-            <View className="w-full p-4 rounded-2xl border border-[#00f2fe]/20 bg-[#00f2fe]/[0.04] mt-2">
-              <View className="flex-row items-center gap-2 mb-2">
-                <Target size={14} color={ACCENT} />
-                <Text className="text-[10px] text-neutral-400 font-mono uppercase tracking-[2px]">
+            <View className={themed('w-full p-4 rounded-2xl border border-[#00f2fe]/20 bg-[#00f2fe]/[0.04] mt-2')}>
+              <View className={themed('flex-row items-center gap-2 mb-2')}>
+                <Target size={14} color={accent()} />
+                <Text className={themed('text-[10px] text-neutral-400 font-mono uppercase tracking-[2px]')}>
                   Recalculated Daily Goal
                 </Text>
               </View>
-              <View className="flex-row items-baseline gap-2">
-                <Text className="text-[#00f2fe] text-[22px] font-black font-mono">
+              <View className={themed('flex-row items-baseline gap-2')}>
+                <Text className={themed('text-[#00f2fe] text-[22px] font-black font-mono')}>
                   {projectedTargetMl === null ? '—' : projectedTargetMl}
                 </Text>
-                <Text className="text-neutral-500 text-[11px] font-mono">ml / day</Text>
+                <Text className={themed('text-neutral-500 text-[11px] font-mono')}>ml / day</Text>
                 {!!currentTargetMl && targetDelta !== null && targetDelta !== 0 && (
                   <Text
-                    className="text-[11px] font-mono font-black ml-auto"
-                    style={{ color: targetDelta > 0 ? '#34d399' : '#f59e0b' }}
+                    className={themed('text-[11px] font-mono font-black ml-auto')}
+                    style={{ color: targetDelta > 0 ? tone('#34d399', '#047857') : tone('#f59e0b', '#b45309') }}
                   >
                     {targetDelta > 0 ? '+' : ''}
                     {targetDelta} ml
@@ -478,7 +477,7 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
                   from three different places: a doctor's restriction, the
                   formula, or nothing at all. Saying "derived from your weight
                   and climate" over a physician-set limit would be false. */}
-              <Text className="text-neutral-500 text-[10px] mt-2 leading-relaxed">
+              <Text className={themed('text-neutral-500 text-[10px] mt-2 leading-relaxed')}>
                 {projectedTargetMl === null
                   ? 'Your diagnosis needs your doctor’s daily limit before the app can pace your intake.'
                   : ConfigService.requiresPhysicianLimit(medicalConditions)
@@ -488,15 +487,15 @@ const ProfileEditSheet: React.FC<ProfileEditSheetProps> = ({
             </View>
 
             {!!errorMsg && (
-              <View className="flex-row items-center gap-2 mt-4">
+              <View className={themed('flex-row items-center gap-2 mt-4')}>
                 <CircleAlert size={12} color="#f87171" />
-                <Text className="text-[10px] text-red-400 font-mono flex-1">{errorMsg}</Text>
+                <Text className={themed('text-[10px] text-red-400 font-mono flex-1')}>{errorMsg}</Text>
               </View>
             )}
           </ScrollView>
 
       {/* Actions */}
-      <View className="flex-row gap-3 px-5 pt-4 pb-7 border-t border-white/5">
+      <View className={themed('flex-row gap-3 px-5 pt-4 pb-7 border-t border-white/5')}>
         <Button
           label="Cancel"
           onPress={onClose}

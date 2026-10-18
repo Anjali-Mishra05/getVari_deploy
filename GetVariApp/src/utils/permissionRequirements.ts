@@ -132,6 +132,24 @@ export const missingRequirements = (
 export const allPermissionsGranted = (snapshot: PermissionSnapshot | null): boolean =>
   snapshot !== null && missingRequirements(snapshot).length === 0;
 
+/**
+ * Whether the permission screen shows, from Android's current state only.
+ *
+ * Not before onboarding has finished (`armed`), not before the first read of
+ * the real grants has landed (`checking`) — so it never flashes at a user who
+ * granted everything — and not when every grant is in place: a permission
+ * already granted is skipped, however long ago or in whatever way it was.
+ */
+export const shouldShowPermissionGate = ({
+  armed,
+  checking,
+  snapshot,
+}: {
+  armed: boolean;
+  checking: boolean;
+  snapshot: PermissionSnapshot | null;
+}): boolean => armed && !checking && snapshot !== null && !allPermissionsGranted(snapshot);
+
 /** The one to point the user at, or null when nothing is missing. */
 export const firstMissing = (
   snapshot: PermissionSnapshot | null

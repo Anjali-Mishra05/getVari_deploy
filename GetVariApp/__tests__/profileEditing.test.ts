@@ -173,10 +173,44 @@ describe('computeTargetDailyMl', () => {
     expect(computeTargetDailyMl({ weightKg: 25, gender: 'Female', age: 65 })).toBe(1500);
     // A heavy frame is capped: 140 × 56.9 = 7966, healthy male ceiling 4500.
     expect(computeTargetDailyMl({ weightKg: 140, gender: 'Male', age: 30 })).toBe(4500);
-    // Declaring high strain raises the ceiling to the §6 Gym row, 5000.
+    // A self-declared activity level never raises the ceiling (§3).
     expect(
       computeTargetDailyMl({ weightKg: 140, gender: 'Male', age: 30, activityLevel: 'elite' })
-    ).toBe(5000);
+    ).toBe(4500);
+  });
+
+  it('is PBWR only inside the account’s first 7 days', () => {
+    const inputs = { weightKg: 60, gender: 'Female', age: 30, workEnvironment: 'outdoor', medicalConditions: ['diabetes'] };
+    const daysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
+    expect(computeTargetDailyMl({ ...inputs, accountCreatedAt: daysAgo(2) })).toBe(2946); // 60 × 49.1
+    expect(computeTargetDailyMl({ ...inputs, accountCreatedAt: daysAgo(30) })).toBe(2946 + 750 + 400);
+  });
+});
+
+describe('account start date (calibration window)', () => {
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
+
+  it('an old account is not put back into days 1–7 by a profile edit', async () => {
+    // A row created 60 days ago whose blob was never stamped (onboarding
+    // saves it without one).
+    mockProfileRow = { profile: { ...mockProfileRow.profile, accountCreatedAt: undefined }, created_at: daysAgo(60) };
+    await updateProfile({ weightKg: 61 });
+    expect(Date.parse(savedProfile().accountCreatedAt)).toBeLessThan(Date.now() - 59 * 86400000);
+  });
+
+  it('a stamp written by a later edit is corrected to the row’s creation date on read', async () => {
+    const { fetchProfileResult } = require('../src/services/ProfileService');
+    mockProfileRow = { profile: { ...mockProfileRow.profile, accountCreatedAt: daysAgo(1) }, created_at: daysAgo(45) };
+    const { profile } = await fetchProfileResult('user-1');
+    expect(Date.parse(profile.accountCreatedAt)).toBeLessThan(Date.now() - 44 * 86400000);
+  });
+
+  it('a new account (row created today) is inside the window', async () => {
+    const { fetchProfileResult } = require('../src/services/ProfileService');
+    const { isWithinCalibrationWindow } = require('../src/utils/pbwr');
+    mockProfileRow = { profile: { ...mockProfileRow.profile, accountCreatedAt: undefined }, created_at: daysAgo(0.1) };
+    const { profile } = await fetchProfileResult('user-1');
+    expect(isWithinCalibrationWindow(profile.accountCreatedAt)).toBe(true);
   });
 });
 

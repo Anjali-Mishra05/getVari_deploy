@@ -41,8 +41,8 @@ const DeviceTable: React.FC<DeviceTableProps> = ({ users, onUpdate }) => {
                       <Cpu size={20} />
                     </div>
                     <div className="flex min-w-0 flex-col gap-1.5">
-                      <span className="font-bold text-sm text-slate-900 tracking-tight">GetVari Core ESP32</span>
-                      <code className="block w-full max-w-full truncate whitespace-nowrap text-[10px] font-mono font-bold text-slate-400 bg-slate-50 px-1.5 py-1 rounded border border-slate-100 uppercase tracking-wide">MAC_{u.id}_F8</code>
+                      <span className="font-bold text-sm text-slate-900 tracking-tight">Simulated in app</span>
+                      <code className="block w-full max-w-full truncate whitespace-nowrap text-[10px] font-mono font-bold text-slate-400 bg-slate-50 px-1.5 py-1 rounded border border-slate-100 uppercase tracking-wide">No device registered</code>
                     </div>
                   </div>
                 </td>
@@ -72,8 +72,8 @@ const DeviceTable: React.FC<DeviceTableProps> = ({ users, onUpdate }) => {
                 </td>
                 <td className="px-4 py-4 align-middle">
                   <div className="flex flex-col gap-1.5">
-                    <span className="text-sm font-bold text-slate-800 font-mono">{u.firmwareVersion}</span>
-                    {u.firmwareVersion !== 'v1.4.2' && (
+                    <span className="text-sm font-bold text-slate-800 font-mono">{u.firmwareVersion ?? 'Not reported'}</span>
+                    {u.firmwareVersion !== null && u.firmwareVersion !== 'v1.4.2' && (
                       <div className="flex items-center gap-2 mt-1.5 whitespace-nowrap">
                          <RefreshCw size={12} className="text-amber-600 animate-spin-slow" />
                          <span className="whitespace-nowrap text-[10px] text-amber-600 font-bold uppercase tracking-tight">Update Available</span>
@@ -83,7 +83,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({ users, onUpdate }) => {
                 </td>
                 <td className="px-5 py-4 align-middle text-left">
                   <div className="flex justify-start">
-                    {u.firmwareVersion !== 'v1.4.2' ? (
+                    {u.firmwareVersion !== null && u.firmwareVersion !== 'v1.4.2' ? (
                       <button
                         onClick={() => onUpdate(u.id, u.name)}
                         className="whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] px-4 py-2 rounded-lg transition-all uppercase tracking-wider shadow-md shadow-blue-100 border border-blue-700 active:scale-95"
@@ -91,7 +91,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({ users, onUpdate }) => {
                         Push OTA Update
                       </button>
                     ) : (
-                      <Badge variant="neutral" className="bg-slate-50 text-slate-400 border-slate-100 text-xs">STABLE BUILD</Badge>
+                      <Badge variant="neutral" className="bg-slate-50 text-slate-400 border-slate-100 text-xs">{u.firmwareVersion === null ? 'NO DEVICE' : 'STABLE BUILD'}</Badge>
                     )}
                   </div>
                 </td>

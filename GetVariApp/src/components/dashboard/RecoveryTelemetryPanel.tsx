@@ -1,11 +1,12 @@
 import React from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
-import { Cpu, Moon } from 'lucide-react-native';
+import { ChevronDown, ChevronUp, Cpu, Moon } from 'lucide-react-native';
 
 import GlassCard from '../GlassCard';
 import { cardStyle } from './cardTheme';
 import { ABSORBED_POOL_CAP_ML, STOMACH_CAPACITY_ML } from '../../hooks/useHydrationTelemetry';
 import { ACCENT } from './riskTheme';
+import { accent, themed, tone } from '../../theme/theme';
 
 interface RecoveryTelemetryPanelProps {
   stomachVolume: number;
@@ -64,25 +65,25 @@ const Metric: React.FC<MetricProps> = ({
   label,
   value,
   unit,
-  valueColor = '#ffffff',
+  valueColor = tone('#ffffff', '#18181b'),
   fillPercent,
   fillColor = ACCENT,
   caption,
 }) => (
-  <View className="flex-1 bg-white/[0.02] p-3.5 rounded-2xl border border-white/5">
-    <Text className="text-[8.5px] uppercase tracking-wider text-neutral-400 font-mono leading-[13px]">
+  <View className={themed('flex-1 bg-white/[0.02] p-3.5 rounded-2xl border border-white/5')}>
+    <Text className={themed('text-[8.5px] uppercase tracking-wider text-neutral-400 font-mono leading-[13px]')}>
       {label}
     </Text>
-    <View className="flex-row items-baseline gap-1 mt-1.5">
-      <Text className="text-[19px] font-black font-mono" style={{ color: valueColor }}>
+    <View className={themed('flex-row items-baseline gap-1 mt-1.5')}>
+      <Text className={themed('text-[19px] font-black font-mono')} style={{ color: valueColor }}>
         {value}
       </Text>
-      <Text className="text-[9.5px] text-neutral-500 font-mono">{unit}</Text>
+      <Text className={themed('text-[9.5px] text-neutral-500 font-mono')}>{unit}</Text>
     </View>
-    <View className="w-full h-1 rounded-full bg-white/5 overflow-hidden mt-2">
+    <View className={themed('w-full h-1 rounded-full bg-white/5 overflow-hidden mt-2')}>
       {fillPercent !== undefined && (
         <View
-          className="h-full rounded-full"
+          className={themed('h-full rounded-full')}
           style={{
             width: `${Math.max(0, Math.min(100, fillPercent))}%`,
             backgroundColor: fillColor,
@@ -90,7 +91,7 @@ const Metric: React.FC<MetricProps> = ({
         />
       )}
     </View>
-    <Text className="text-[9px] text-neutral-400 leading-[13px] mt-1.5">{caption}</Text>
+    <Text className={themed('text-[9px] text-neutral-400 leading-[13px] mt-1.5')}>{caption}</Text>
   </View>
 );
 
@@ -115,22 +116,6 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
   expanded,
   onToggle,
 }) => {
-  if (!expanded) {
-    return (
-      <TouchableOpacity
-        onPress={onToggle}
-        activeOpacity={0.8}
-        accessibilityRole="button"
-        accessibilityLabel="Expand recovery engine telemetry"
-        className="w-full py-3 mb-4 bg-white/[0.02] border border-white/5 rounded-2xl items-center"
-      >
-        <Text className="text-[10px] font-mono font-black text-cyan-400">
-          [Expand Recovery Engine Telemetry]
-        </Text>
-      </TouchableOpacity>
-    );
-  }
-
   const gut = finite(stomachVolume);
   const absorbed = finite(absorbedHydration);
   const inBody = gut + absorbed;
@@ -143,25 +128,40 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
   const paceMlPerHour = finite(targetMlPerAwakeHour, 0);
 
   return (
-    <GlassCard className="bg-cyan-950/5 border-cyan-500/10" style={cardStyle}>
-      <View className="flex-row items-center justify-between pb-3 mb-3.5 border-b border-white/5">
-        <View className="flex-row items-center gap-2">
-          <Cpu color={ACCENT} size={16} />
-          <Text className="text-[10px] uppercase tracking-[0.18em] font-black text-white/80">
+    <GlassCard adaptive className={themed('bg-cyan-950/5 border-cyan-500/10')} style={cardStyle}>
+      {/* The header is the control: the whole row toggles, and the chevron at
+          its end is what says so — down when there is more to open, up when
+          it can be folded away. */}
+      <TouchableOpacity
+        onPress={onToggle}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={`Recovery engine telemetry, ${expanded ? 'expanded' : 'collapsed'}`}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        className={themed('flex-row items-center justify-between gap-2')}
+      >
+        <View className={themed('flex-row items-center gap-2 flex-1')}>
+          <Cpu color={accent()} size={16} />
+          <Text
+            className={themed('text-[10px] uppercase tracking-[0.1em] font-black text-white/80 flex-1')}
+            numberOfLines={1}
+          >
             Recovery Engine Telemetry
           </Text>
         </View>
-        <TouchableOpacity
-          onPress={onToggle}
-          accessibilityRole="button"
-          accessibilityLabel="Collapse recovery engine telemetry"
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Text className="text-[10px] font-mono text-neutral-400">[Collapse]</Text>
-        </TouchableOpacity>
-      </View>
+        <View className={themed('w-7 h-7 rounded-full bg-white/5 items-center justify-center')}>
+          {expanded ? (
+            <ChevronUp color={accent()} size={18} strokeWidth={2.5} />
+          ) : (
+            <ChevronDown color={accent()} size={18} strokeWidth={2.5} />
+          )}
+        </View>
+      </TouchableOpacity>
 
-      <View className="flex-row gap-2.5">
+      {expanded && (
+      <View className={themed('pt-3 mt-3 border-t border-white/5')}>
+      <View className={themed('flex-row gap-2.5')}>
         <Metric
           label="Water Awaiting Absorption"
           value={String(Math.round(gut))}
@@ -179,12 +179,12 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
         />
       </View>
 
-      <View className="flex-row gap-2.5 mt-2.5">
+      <View className={themed('flex-row gap-2.5 mt-2.5')}>
         <Metric
           label="Absorption Speed"
           value={`+${finite(absorptionRate).toFixed(1)}`}
           unit="ml / min"
-          valueColor={ACCENT}
+          valueColor={tone(ACCENT, '#0e7490')}
           caption="Affected by exertion stress factor."
         />
         <Metric
@@ -196,47 +196,49 @@ const RecoveryTelemetryPanel: React.FC<RecoveryTelemetryPanelProps> = ({
         />
       </View>
 
-      <View className="pt-3.5 mt-3.5 border-t border-white/5 gap-2">
-        <View className="flex-row items-center justify-between">
-          <Text className="text-[10px] text-neutral-400 font-mono">Absorption Status:</Text>
-          <Text className="text-[10px] text-white font-mono font-black">
+      <View className={themed('pt-3.5 mt-3.5 border-t border-white/5 gap-2')}>
+        <View className={themed('flex-row items-center justify-between')}>
+          <Text className={themed('text-[10px] text-neutral-400 font-mono')}>Absorption Status:</Text>
+          <Text className={themed('text-[10px] text-white font-mono font-black')}>
             {gut > 0 && absorbedPercent !== null
               ? `${absorbedPercent}% absorbed`
               : 'Gut empty / idle'}
           </Text>
         </View>
-        <View className="flex-row items-center justify-between">
-          <Text className="text-[10px] text-neutral-400 font-mono">Water Needed For Target:</Text>
+        <View className={themed('flex-row items-center justify-between')}>
+          <Text className={themed('text-[10px] text-neutral-400 font-mono')}>Water Needed For Target:</Text>
           <Text
-            className="text-[10px] font-mono font-black"
-            style={{ color: remainingMl === 0 ? '#34d399' : ACCENT }}
+            className={themed('text-[10px] font-mono font-black')}
+            style={{ color: remainingMl === 0 ? tone('#34d399', '#047857') : tone(ACCENT, '#0e7490') }}
           >
             {remainingMl === null ? 'Loading…' : `${remainingMl} ml`}
           </Text>
         </View>
         {paceMlPerHour > 0 && (
-          <View className="flex-row items-center justify-between">
-            <Text className="text-[10px] text-neutral-400 font-mono">
+          <View className={themed('flex-row items-center justify-between')}>
+            <Text className={themed('text-[10px] text-neutral-400 font-mono')}>
               Pace / Waking Hour
               {Number.isFinite(awakeHoursPerDay) && (awakeHoursPerDay as number) > 0
                 ? ` (${(awakeHoursPerDay as number).toFixed(0)}h awake)`
                 : ''}
               :
             </Text>
-            <Text className="text-[10px] text-white font-mono font-black">
+            <Text className={themed('text-[10px] text-white font-mono font-black')}>
               {Math.round(paceMlPerHour)} ml / h
             </Text>
           </View>
         )}
         {isSleeping && (
-          <View className="flex-row items-center gap-2 mt-1">
+          <View className={themed('flex-row items-center gap-2 mt-1')}>
             <Moon color="#818cf8" size={12} />
-            <Text className="text-[10px] text-indigo-300 font-mono flex-1">
+            <Text className={themed('text-[10px] text-indigo-300 font-mono flex-1')}>
               Sleep window open — alerts paused, and these hours are left out of your averages.
             </Text>
           </View>
         )}
       </View>
+      </View>
+      )}
     </GlassCard>
   );
 };

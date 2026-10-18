@@ -6,8 +6,13 @@
     HydrationRiskDetails
   } from '../types';
   import {
+    DROP_INDEX_ALERT_THRESHOLD,
+    HIGH_HUMIDITY_MIN_PCT,
+    HIGH_TEMP_RANGE_C,
     NOTIFICATION_COOLDOWNS,
-    RISK_THRESHOLDS
+    NOTIFICATION_SIMULATION,
+    RISK_THRESHOLDS,
+    SIGNIFICANT_MOTION_ACTIVITY_LOAD
   } from '../config/edgeCaseConfig';
 
   import {
@@ -15,10 +20,7 @@
   } from '../utils/sleepWindow';
   import { DEFAULT_SLEEP_SCHEDULE, awakeHoursPerDay, lastWakeUpAt } from '../utils/sleepWindow';
   import NotificationService from './NotificationService';
-  import {
-    calculateCDI,
-    calculateFDI,
-  } from '../utils/focusCognitiveDrop';
+  import { calculateCDI, calculateFDI } from '../utils/focusCognitiveDrop';
   import buildNotificationContent from '../utils/notificationContent';
 
   const ALERT_STATE_KEY = 'getvari_notification_engine_state';
@@ -42,6 +44,7 @@
     | 'low_battery'
     | 'fully_charged'
     | 'morning_msg'
+    | 'daily_water_requirement'
     | 'night_msg'
     | 'weekly_summary'
     | 'focus_slipping'
@@ -77,6 +80,13 @@
     profile: UserProfile;
     todayLogs: HydrationLog[];
     solvedRisk: HydrationRiskDetails;
+    /**
+     * Focus (FDI) and Cognitive (CDI) drop indices, when the caller has them.
+     * Only read while simulation is off. CDI falls back to one derived from
+     * the risk solve; FDI needs motion data and is skipped when absent
+     * ("Missing != Zero").
+     */
+    indexScores?: { fdi?: number | null; cdi?: number | null };
   }
 
   interface EnginePersistentState {
@@ -99,9 +109,14 @@
      */
     lastDeliveredAt: number;
     pendingTriggers: NotificationTrigger[];
-    /** Exact FDI/CDI slot associated with a deferred scheduled alert. */
-    pendingSlotKeys: Partial<Record<NotificationTrigger, string>>;
+    /** Set when a risk alert is delivered; Risk Improved may only follow it. */
     riskAlertActive: boolean;
+    /**
+     * Last reading with significant motion (activity load at or above
+     * SIGNIFICANT_MOTION_ACTIVITY_LOAD); FDI's time-since-motion input.
+     * Null until one is seen, which leaves FDI missing rather than zero.
+     */
+    lastSignificantMotionAt: number | null;
     pendingDay: string;
   }
 
@@ -203,20 +218,28 @@
     private sessionStartedAt = 0;
 
     /**
-     * Called when the dashboard opens after login or a cold start. For the
-     * next LOGIN_QUIET_MS nothing but a high risk alert is delivered: the
-     * dashboard is on screen, and conditions that are still true are sent
-     * later, one at a time, instead of greeting the user with a burst.
+     * Called whenever the app is opened: after login, on a cold start, and on
+     * a return to the foreground. For the next LOGIN_QUIET_MS nothing at all
+     * is delivered — risk alerts included. Conditions that are still true
+     * afterwards are sent later, one at a time, instead of as a burst.
+     *
+     * Also starts the same quiet period in `NotificationService`, which gates
+     * the OS-scheduled notifications, so both paths keep one clock.
      */
     markSessionStart(now: number = Date.now()): void {
       this.sessionStartedAt = now;
-      // Clear stale pending triggers from previous sessions to prevent catch-up bursts on app open
-      void this.getPersistentState().then(state => {
+      NotificationService.markAppOpened(now);
+      // Stale pending triggers from an earlier session are not delivered as a
+      // catch-up burst. Queued behind any running evaluation so the two never
+      // overwrite each other's saved state.
+      const run = this.evaluationQueue.then(async () => {
+        const state = await this.getPersistentState();
         state.pendingTriggers = state.pendingTriggers.filter(
           t => t === 'high_risk' || t === 'elevated_risk'
         );
-        return this.savePersistentState(state);
+        await this.savePersistentState(state);
       });
+      this.evaluationQueue = run.catch(() => undefined);
     }
 
     private async evaluateNow(evalData: NotificationEvaluation): Promise<NotificationOutcome> {
@@ -242,24 +265,89 @@
       // disagree, because there is only one of them.
       const asleep = await this.isUserAsleep(profile, now);
 
+      if (sensorData.activityLoad !== null && sensorData.activityLoad >= SIGNIFICANT_MOTION_ACTIVITY_LOAD) {
+        state.lastSignificantMotionAt = now;
+      }
+
       const triggers: NotificationTrigger[] = [];
-      const triggerSlotKeys: Partial<Record<NotificationTrigger, string>> = {};
+      /** Why each trigger was raised, for the delivery log. */
+      const reasons: Partial<Record<NotificationTrigger, string>> = {};
+      const raise = (trigger: NotificationTrigger, reason: string) => {
+        triggers.push(trigger);
+        reasons[trigger] = reason;
+      };
 
       /**
-       * The FDI and CDI readings behind whichever focus/cognitive triggers fired.
-       *
-       * Kept so the message can state the forecast those indices imply rather
-       * than the fixed sentence the table used to carry. Only written when the
-       * matching trigger is raised, so a score that crossed nothing is never
-       * used to time a warning the user is not being sent.
+       * While the temporary simulation is on, these four come from the fixed
+       * daily timeline in `NotificationService` and must not also be raised
+       * from live data here, or the user would get each twice.
        */
-      const indexScores: { focus?: number; cognitive?: number } = {};
+      const liveRiskAndIndexAlerts = !NOTIFICATION_SIMULATION.ENABLED;
+      const score = solvedRisk.score;
 
       // --- Risk Notifications ---
-      // Rule: Critical high_risk alerts bypass quiet hours (per spec).
-      if (solvedRisk.score !== null && solvedRisk.score >= RISK_THRESHOLDS.HIGH) {
+      // Raised here even inside the sleep window so the outcome reports them,
+      // but never delivered then: the sleep window has no exceptions.
+      if (score !== null && score >= RISK_THRESHOLDS.HIGH) {
         if (this.canSend(now, lastAlerts, 'high_risk')) {
-          triggers.push('high_risk');
+          raise('high_risk', `risk score ${score}`);
+        }
+      } else if (
+        liveRiskAndIndexAlerts &&
+        score !== null &&
+        score >= RISK_THRESHOLDS.ELEVATED &&
+        this.canSend(now, lastAlerts, 'elevated_risk')
+      ) {
+        raise('elevated_risk', `risk score ${score} (60-79)`);
+      }
+
+      // Risk Improved: only after a delivered risk alert, and only once the
+      // score has actually fallen below 40.
+      if (
+        liveRiskAndIndexAlerts &&
+        state.riskAlertActive &&
+        score !== null &&
+        score < RISK_THRESHOLDS.RECOVERY
+      ) {
+        raise('risk_improved', `risk score ${score} fell below ${RISK_THRESHOLDS.RECOVERY} after a risk alert`);
+      }
+
+      // --- Focus (FDI) and Priority (CDI) indices ---
+      // From the existing formulas, with the risk score as the dehydration
+      // load. Missing inputs leave an index missing, never zero.
+      const fdi =
+        evalData.indexScores?.fdi ??
+        (score !== null && state.lastSignificantMotionAt !== null
+          ? calculateFDI(score, (now - state.lastSignificantMotionAt) / 60000)
+          : null);
+      const cdi =
+        evalData.indexScores?.cdi ??
+        (score !== null
+          ? calculateCDI(score, solvedRisk.temperatureLoad, solvedRisk.humidityLoad, new Date(now))
+          : null);
+
+      // Handed to the notification layer so the fixed-time Risk Improved,
+      // Focus and Priority slots can check their condition when they fire.
+      try {
+        await NotificationService.noteConditionSnapshot({
+          at: now,
+          riskScore: score,
+          fdi: typeof fdi === 'number' && Number.isFinite(fdi) ? fdi : null,
+          cdi: typeof cdi === 'number' && Number.isFinite(cdi) ? cdi : null,
+        });
+      } catch (error) {
+        console.error('[NotificationEngine] Could not record the condition snapshot:', error);
+      }
+
+      // --- Focus (FDI) and Priority (CDI) alerts ---
+      if (liveRiskAndIndexAlerts) {
+        if (typeof fdi === 'number' && Number.isFinite(fdi) && fdi >= DROP_INDEX_ALERT_THRESHOLD &&
+            this.canSend(now, lastAlerts, 'focus_alert')) {
+          raise('focus_alert', `FDI ${fdi}`);
+        }
+        if (typeof cdi === 'number' && Number.isFinite(cdi) && cdi >= DROP_INDEX_ALERT_THRESHOLD &&
+            this.canSend(now, lastAlerts, 'priority_alert')) {
+          raise('priority_alert', `CDI ${cdi}`);
         }
       }
 
@@ -303,40 +391,57 @@
           typeof profile.targetDailyMl === 'number' && profile.targetDailyMl > 0
             ? profile.targetDailyMl
             : null;
-        const date = new Date();
-        const hour = date.getHours();
         const sleepSchedule = profile.sleepSchedule ?? DEFAULT_SLEEP_SCHEDULE;
+        /**
+         * Once-daily notifications reset at the user's wake-up, not at
+         * midnight. For someone who sleeps at 01:00 the calendar day turns
+         * over while they are still up, and a midnight reset let the same
+         * "once a day" alert fire again at 00:30.
+         */
+        const awakeDayStart = lastWakeUpAt(sleepSchedule, now);
         const midpointOfAwakeDay =
-          lastWakeUpAt(sleepSchedule, now) + (awakeHoursPerDay(sleepSchedule) / 2) * 60 * 60 * 1000;
+          awakeDayStart + (awakeHoursPerDay(sleepSchedule) / 2) * 60 * 60 * 1000;
+        /**
+         * `todayLogs` covers the calendar day, so it is the whole awake day's
+         * intake only when the awake day began today. After midnight on a late
+         * night the day's earlier drinks are missing from it, and "below 50%"
+         * would be a false statement.
+         */
+        const logsCoverAwakeDay = awakeDayStart >= new Date(now).setHours(0, 0, 0, 0);
 
-        // Goal achieved (Once per day)
-        if (goalMl !== null && totalMl >= goalMl && !this.wasSentToday(lastAlerts, 'goal_achieved')) {
-          triggers.push('goal_achieved');
+        // Goal achieved (once per day, whenever it is reached)
+        if (goalMl !== null && totalMl >= goalMl && !this.sentSince(lastAlerts, 'goal_achieved', awakeDayStart)) {
+          raise('goal_achieved', `intake ${totalMl} mL reached goal ${goalMl} mL`);
         }
 
-        // Low intake is evaluated from the midpoint of the user's awake day,
-        // not from a fixed wall-clock hour. The once-per-day state lets a later
-        // telemetry tick deliver it if the app was not open at the exact point.
+        // Low intake: from the midpoint of the user's actual awake day, below
+        // half the goal, once per day.
         if (
           goalMl !== null &&
+          logsCoverAwakeDay &&
           now >= midpointOfAwakeDay &&
           totalMl < goalMl * 0.5 &&
-          !this.wasSentToday(lastAlerts, 'low_intake_12pm')
+          !this.sentSince(lastAlerts, 'low_intake_12pm', awakeDayStart)
         ) {
-          triggers.push('low_intake_12pm');
+          raise('low_intake_12pm', `intake ${totalMl} mL < 50% of ${goalMl} mL at awake-day midpoint`);
         }
 
-        // Environmental alerts are once per hydration day.
-        if (sensorData.temperature !== null) {
-          if (sensorData.temperature >= 30 && sensorData.temperature < 35 &&
-              !this.wasSentToday(lastAlerts, 'high_temp')) {
-            triggers.push('high_temp');
-          }
+        // Environmental alerts: from the actual reading, once per day.
+        if (
+          sensorData.temperature !== null &&
+          sensorData.temperature >= HIGH_TEMP_RANGE_C.min &&
+          sensorData.temperature < HIGH_TEMP_RANGE_C.maxExclusive &&
+          !this.sentSince(lastAlerts, 'high_temp', awakeDayStart)
+        ) {
+          raise('high_temp', `temperature ${sensorData.temperature}°C`);
         }
 
-        if (sensorData.humidity !== null && sensorData.humidity >= 70 &&
-            !this.wasSentToday(lastAlerts, 'high_humidity')) {
-          triggers.push('high_humidity');
+        if (
+          sensorData.humidity !== null &&
+          sensorData.humidity >= HIGH_HUMIDITY_MIN_PCT &&
+          !this.sentSince(lastAlerts, 'high_humidity', awakeDayStart)
+        ) {
+          raise('high_humidity', `humidity ${sensorData.humidity}%`);
         }
       }
 
@@ -363,28 +468,24 @@
       state.pendingTriggers = state.pendingTriggers.filter(
         trigger => triggers.includes(trigger) || validPending.includes(trigger)
       );
-      for (const trigger of Object.keys(state.pendingSlotKeys) as NotificationTrigger[]) {
-        if (!state.pendingTriggers.includes(trigger)) delete state.pendingSlotKeys[trigger];
-      }
 
       const eligible = [...validPending, ...triggers];
+      // The quiet period after opening holds everything back, risk alerts
+      // included; what is held stays pending and is re-checked later. There is
+      // no 30-minute gap between these alerts: a Dynamic notification goes out
+      // at its own time, however recently another one did.
       const quietBlocked = now - this.sessionStartedAt < NOTIFICATION_COOLDOWNS.LOGIN_QUIET_MS;
-      const sinceAnyNotification = Math.min(
-        await NotificationService.msSinceLastNotification(),
-        now - (state.lastDeliveredAt || 0)
-      );
-      const gapBlocked = sinceAnyNotification < NOTIFICATION_COOLDOWNS.MIN_GAP_BETWEEN_ALERTS;
-      const toDeliver = eligible.filter(trigger => (!gapBlocked || trigger === 'high_risk') && (!quietBlocked || trigger === 'high_risk'));
+      const toDeliver = quietBlocked ? [] : eligible;
 
       if (!asleep) {
         for (const trigger of toDeliver.slice(0, 1)) {
           // Only actually deliver if permission is granted
           if (hasPermission) {
-            const didDeliver = await this.sendNotification(trigger, profile, {
-              riskScore: solvedRisk.score,
-              riskStatus: solvedRisk.status,
-              indexScores,
-            });
+            const didDeliver = await this.sendNotification(
+              trigger,
+              profile,
+              reasons[trigger] ?? 'condition still true (pending)'
+            );
             if (didDeliver === false) continue;
             delivered.push(trigger);
             state.pendingTriggers = state.pendingTriggers.filter(item => item !== trigger);
@@ -399,9 +500,6 @@
             }
             if (trigger === 'high_risk' || trigger === 'elevated_risk') state.riskAlertActive = true;
             if (trigger === 'risk_improved') state.riskAlertActive = false;
-            const slotKey = state.pendingSlotKeys[trigger] ?? triggerSlotKeys[trigger] ?? this.scheduledSlotKey(trigger, now);
-            if (slotKey) state.lastAlerts[slotKey] = now;
-            delete state.pendingSlotKeys[trigger];
           } else {
             console.log(`[NotificationEngine] Suppressed ${trigger} - Permission Denied`);
           }
@@ -418,9 +516,10 @@
         if (!delivered.includes(trigger) && !state.pendingTriggers.includes(trigger)) {
           // Do NOT store simulated/routine fixed-time notifications in pendingTriggers.
           // Those are managed as native AlarmManager scheduled notifications.
+          // Focus and Priority alerts are forecasts about the next 15 minutes;
+          // they are re-raised from live data, never replayed later.
           if (trigger !== 'regular_reminder' && trigger !== 'focus_alert' && trigger !== 'priority_alert') {
             state.pendingTriggers.push(trigger);
-            if (triggerSlotKeys[trigger]) state.pendingSlotKeys[trigger] = triggerSlotKeys[trigger];
           }
         }
       }
@@ -461,14 +560,9 @@
       return now - lastSent >= cooldown;
     }
 
-    /**
-     * Whether the 3-hourly focus/cognitive check is due: none of those
-     * notifications in the last FOCUS_COGNITIVE_ALERT window.
-     */
-    private wasSentToday(lastAlerts: Record<string, number>, trigger: string): boolean {
-      const lastSent = lastAlerts[trigger] || 0;
-      const startOfToday = new Date().setHours(0, 0, 0, 0);
-      return lastSent >= startOfToday;
+    /** Whether `trigger` was delivered at or after `since` (the awake day's start). */
+    private sentSince(lastAlerts: Record<string, number>, trigger: string, since: number): boolean {
+      return (lastAlerts[trigger] || 0) >= since;
     }
 
     private getCooldownFor(trigger: NotificationTrigger): number {
@@ -488,36 +582,6 @@
         default:
           return 0;
       }
-    }
-
-    private scheduledSlotKey(trigger: NotificationTrigger, at: number): string | null {
-      const d = new Date(at);
-      const year = d.getFullYear();
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      const dateStr = `${year}-${month}-${day}`;
-      const h = d.getHours();
-      const m = d.getMinutes();
-
-      if (trigger === 'focus_alert') {
-        if (h > 16 || (h === 16 && m >= 0)) {
-          return `focus_alert:${dateStr}:16:0`;
-        }
-        if (h > 12 || (h === 12 && m >= 30)) {
-          return `focus_alert:${dateStr}:12:30`;
-        }
-        return null;
-      }
-      if (trigger === 'priority_alert') {
-        if (h > 18 || (h === 18 && m >= 30)) {
-          return `priority_alert:${dateStr}:18:30`;
-        }
-        if (h > 14 || (h === 14 && m >= 30)) {
-          return `priority_alert:${dateStr}:14:30`;
-        }
-        return null;
-      }
-      return `${trigger}:${dateStr}:${h}:${m}`;
     }
 
     private isPendingTriggerStillValid(
@@ -545,18 +609,14 @@
         return goalMl !== null && totalMl >= goalMl;
       }
       if (trigger === 'high_temp') {
-        return sensorData.temperature !== null && sensorData.temperature >= 30 && sensorData.temperature < 35;
+        return (
+          sensorData.temperature !== null &&
+          sensorData.temperature >= HIGH_TEMP_RANGE_C.min &&
+          sensorData.temperature < HIGH_TEMP_RANGE_C.maxExclusive
+        );
       }
       if (trigger === 'high_humidity') {
-        return sensorData.humidity !== null && sensorData.humidity >= 70;
-      }
-      if (trigger === 'focus_alert') {
-        const fdiSlotKey = state.pendingSlotKeys.focus_alert ?? this.scheduledSlotKey('focus_alert', Date.now());
-        return fdiSlotKey !== null && !this.wasSentToday(state.lastAlerts, fdiSlotKey);
-      }
-      if (trigger === 'priority_alert') {
-        const cdiSlotKey = state.pendingSlotKeys.priority_alert ?? this.scheduledSlotKey('priority_alert', Date.now());
-        return cdiSlotKey !== null && !this.wasSentToday(state.lastAlerts, cdiSlotKey);
+        return sensorData.humidity !== null && sensorData.humidity >= HIGH_HUMIDITY_MIN_PCT;
       }
       return false;
     }
@@ -588,7 +648,7 @@
     private async sendNotification(
       trigger: NotificationTrigger,
       profile: UserProfile,
-      context: NotificationContext = {}
+      reason: string
     ): Promise<boolean> {
       const centralContent = buildNotificationContent(trigger, profile.fullName);
       // High risk is the sole non-Excel emergency path retained for the
@@ -611,6 +671,8 @@
       if (title && body) {
         return NotificationService.displayNotification(title, body, undefined, 'local', {
           notificationKey: trigger,
+          source: 'event',
+          reason,
         });
       }
       return false;
@@ -621,12 +683,19 @@
       const stored = raw ? JSON.parse(raw) : {};
       // Spread over defaults so a state blob written by an older build — which
       // has no `activitySessionAlerts` — still loads with a usable shape.
+      const { pendingSlotKeys: _legacySlotKeys, ...current } = stored;
+      // Older builds wrote one `trigger:date:h:m` key per delivery into
+      // `lastAlerts` and never removed them; drop them on load.
+      const lastAlerts: Record<string, number> = {};
+      for (const [key, at] of Object.entries(stored.lastAlerts ?? {})) {
+        if (!key.includes(':') && typeof at === 'number') lastAlerts[key] = at;
+      }
       return {
-        lastAlerts: {},
         activeStartTimestamp: null,
         inactiveStartTimestamp: null,
         lastDeliveredAt: 0,
-        ...stored,
+        ...current,
+        lastAlerts,
         activitySessionAlerts: Array.isArray(stored.activitySessionAlerts) ? stored.activitySessionAlerts : [],
         pendingTriggers: Array.isArray(stored.pendingTriggers)
           ? stored.pendingTriggers.filter((trigger: string) =>
@@ -634,11 +703,9 @@
                 'cognitive_decline', 'cognitive_impairment', 'focus_steady', 'cognitive_steady'].includes(trigger)
             )
           : [],
-        pendingSlotKeys:
-          stored.pendingSlotKeys && typeof stored.pendingSlotKeys === 'object'
-            ? stored.pendingSlotKeys
-            : {},
         riskAlertActive: stored.riskAlertActive === true,
+        lastSignificantMotionAt:
+          typeof stored.lastSignificantMotionAt === 'number' ? stored.lastSignificantMotionAt : null,
         pendingDay: typeof stored.pendingDay === 'string' ? stored.pendingDay : new Date().toISOString().slice(0, 10),
       };
     }

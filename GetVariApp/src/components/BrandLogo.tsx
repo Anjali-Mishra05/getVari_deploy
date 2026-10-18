@@ -8,6 +8,8 @@ import Animated, {
   Easing
 } from 'react-native-reanimated';
 
+import { useScopedTheme } from '../theme/theme';
+
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
 interface BrandLogoProps {
@@ -26,6 +28,10 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
   animated = false
 }) => {
   const progress = useSharedValue(0);
+  // The mark and wordmark are white, for a dark background. On a light one
+  // (only inside a screen that follows the mode) they are drawn in charcoal;
+  // the shape and the cyan fill are the same in both.
+  const { pick } = useScopedTheme();
 
   useEffect(() => {
     if (animated) {
@@ -71,7 +77,7 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
 
           <Path
             d="M 28.5,15 L 50,56 L 71.5,15 Z"
-            fill="rgba(6, 182, 212, 0.08)"
+            fill={pick('rgba(6, 182, 212, 0.08)', 'rgba(8, 145, 178, 0.14)')}
           />
 
           <G clipPath="url(#vessel-clip)">
@@ -86,7 +92,7 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
 
           <Path
             d="M 15,15 L 50,85 L 85,15 L 71.5,15 L 50,56 L 28.5,15 Z"
-            fill="#ffffff"
+            fill={pick('#ffffff', '#18181b')}
           />
         </Svg>
       </View>
@@ -101,7 +107,7 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
               width: current.dot * 2.6,
               height: current.dot * 2.6,
               borderRadius: current.dot * 1.3,
-              backgroundColor: 'rgba(0, 242, 254, 0.18)',
+              backgroundColor: pick('rgba(0, 242, 254, 0.18)', 'rgba(8, 145, 178, 0.18)'),
               marginRight: current.gap,
               alignItems: 'center',
               justifyContent: 'center',
@@ -112,8 +118,8 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
                 width: current.dot,
                 height: current.dot,
                 borderRadius: current.dot / 2,
-                backgroundColor: '#00f2fe',
-                shadowColor: '#00f2fe',
+                backgroundColor: pick('#00f2fe', '#0891b2'),
+                shadowColor: pick('#00f2fe', '#0891b2'),
                 shadowOffset: { width: 0, height: 0 },
                 shadowOpacity: 0.9,
                 shadowRadius: 6,
@@ -125,7 +131,7 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
             style={{
               fontSize: current.get,
               fontFamily: Platform.OS === 'android' ? 'sans-serif-thin' : 'HelveticaNeue-Thin',
-              color: '#a3b3cc',
+              color: pick('#a3b3cc', '#3f3f46'),
               letterSpacing: -0.5,
             }}
           >
@@ -135,7 +141,7 @@ const BrandLogo: React.FC<BrandLogoProps> = ({
             style={{
               fontSize: current.vari,
               fontWeight: '900',
-              color: '#ffffff',
+              color: pick('#ffffff', '#18181b'),
               letterSpacing: -1,
               marginLeft: 4,
             }}

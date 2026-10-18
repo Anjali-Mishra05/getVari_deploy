@@ -15,6 +15,9 @@ import Animated, {
   Easing
 } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
+import { themed, tone, useThemeMode } from '../theme/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { footerBottomPadding } from '../utils/navLayout';
 
 const { width, height } = Dimensions.get('window');
 
@@ -39,12 +42,16 @@ const LoadingDot = ({ delay }: { delay: number }) => {
   return (
     <Animated.View
       style={animatedStyle}
-      className="w-1 h-1 rounded-full bg-[#00f2fe] mx-1"
+      className={themed('w-1 h-1 rounded-full bg-[#00f2fe] mx-1')}
     />
   );
 };
 
 const LoadingScreen = ({ navigation }: any) => {
+  // The footer line is pinned to the bottom of the screen, which Android's
+  // navigation shares (see `navLayout`).
+  const insets = useSafeAreaInsets();
+  useThemeMode();
   useEffect(() => {
     // This screen already holds the user for a couple of seconds, so spend
     // that time on the two things that would otherwise make them wait later:
@@ -79,9 +86,9 @@ const LoadingScreen = ({ navigation }: any) => {
   };
 
   return (
-    <View className="flex-1 bg-[#01040a]">
+    <View className={themed('flex-1 bg-[#01040a]')}>
       {/* Deep Immersive Radial Gradient Background */}
-      <View className="absolute inset-0">
+      <View className={themed('absolute inset-0')}>
         <Svg height="100%" width="100%">
           <Defs>
             <RadialGradient
@@ -94,22 +101,22 @@ const LoadingScreen = ({ navigation }: any) => {
                 fy="50%"
                 gradientUnits="userSpaceOnUse"
               >
-                <Stop offset="0%" stopColor="#0b2133" stopOpacity="0.35" />
-                <Stop offset="100%" stopColor="#01040a" stopOpacity="1" />
+                <Stop offset="0%" stopColor={tone('#0b2133', '#ffffff')} stopOpacity="0.35" />
+                <Stop offset="100%" stopColor={tone('#01040a', '#f5f5f3')} stopOpacity="1" />
               </RadialGradient>
           </Defs>
           <SvgRect x="0" y="0" width="100%" height="100%" fill="url(#grad)" />
         </Svg>
       </View>
 
-      <SafeAreaView className="flex-1 justify-center items-center">
+      <SafeAreaView className={themed('flex-1 justify-center items-center')}>
         <Animated.View
           entering={FadeIn.duration(1200)}
           exiting={FadeOut.duration(800)}
-          className="items-center w-full"
+          className={themed('items-center w-full')}
         >
           {/* Logo Section - Compressed Spacing Match */}
-          <View className="flex-row items-baseline justify-center mb-1">
+          <View className={themed('flex-row items-baseline justify-center mb-1')}>
             <View
               style={{
                 width: 7,
@@ -129,7 +136,7 @@ const LoadingScreen = ({ navigation }: any) => {
               style={{
                 fontSize: 34,
                 fontFamily: Platform.OS === 'android' ? 'sans-serif-thin' : 'HelveticaNeue-Thin',
-                color: '#a3b3cc',
+                color: tone('#a3b3cc', '#52525b'),
                 letterSpacing: -0.5,
               }}
             >
@@ -139,7 +146,7 @@ const LoadingScreen = ({ navigation }: any) => {
               style={{
                 fontSize: 40,
                 fontWeight: '900',
-                color: '#ffffff',
+                color: tone('#ffffff', '#18181b'),
                 letterSpacing: -1,
                 marginLeft: 2,
               }}
@@ -148,11 +155,11 @@ const LoadingScreen = ({ navigation }: any) => {
             </Text>
           </View>
 
-          <View className="items-center">
+          <View className={themed('items-center')}>
             <Text
               style={{
                 fontSize: 10,
-                color: '#00f2fe',
+                color: tone('#00f2fe', '#0891b2'),
                 fontWeight: '800',
                 letterSpacing: 4.5,
                 textTransform: 'uppercase',
@@ -161,11 +168,11 @@ const LoadingScreen = ({ navigation }: any) => {
               HYDRATION INTELLIGENCE
             </Text>
 
-            <View className="mt-14 items-center">
+            <View className={themed('mt-14 items-center')}>
               <Text
                 style={{
                   fontSize: 10,
-                  color: '#475569',
+                  color: tone('#475569', '#a1a1aa'),
                   letterSpacing: 0.8,
                   marginBottom: 14,
                 }}
@@ -173,7 +180,7 @@ const LoadingScreen = ({ navigation }: any) => {
                 Powering bio-cellular loop...
               </Text>
 
-              <View className="flex-row justify-center items-center">
+              <View className={themed('flex-row justify-center items-center')}>
                 <LoadingDot delay={0} />
                 <LoadingDot delay={200} />
                 <LoadingDot delay={400} />
@@ -183,11 +190,15 @@ const LoadingScreen = ({ navigation }: any) => {
         </Animated.View>
 
         {/* Footer Section - Precise Prototype Match */}
-        <View className="absolute bottom-10 items-center w-full">
+        {/* Its usual 40px (`bottom-10`), or just above a 3-button bar. */}
+        <View
+          className={themed('absolute bottom-10 items-center w-full')}
+          style={{ bottom: footerBottomPadding(40, insets.bottom) }}
+        >
           <Text
             style={{
               fontSize: 8.5,
-              color: '#334155',
+              color: tone('#334155', '#d4d4d8'),
               fontFamily: Platform.OS === 'android' ? 'monospace' : 'Courier',
               letterSpacing: 1.5,
             }}

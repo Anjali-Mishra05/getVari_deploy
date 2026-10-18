@@ -4,6 +4,7 @@ import { Droplet, Info, AlertTriangle } from 'lucide-react-native';
 import { PBWRBreakdown } from '../../services/PBWRService';
 import GlassCard from '../GlassCard';
 import { cardStyle } from './cardTheme';
+import { tone } from '../../theme/theme';
 
 /**
  * Millilitres as litres, to two places.
@@ -25,14 +26,15 @@ interface Props {
 }
 
 const PBWRBreakdownCard: React.FC<Props> = ({ breakdown, hasPhysicianLimit, isPhysicianGated }) => {
+  const styles = makeStyles();
   return (
-    <GlassCard style={styles.container}>
+    <GlassCard adaptive style={styles.container}>
       <View style={styles.header}>
         <View style={styles.titleRow}>
-          <Droplet size={20} color="#38bdf8" />
+          <Droplet size={20} color={tone('#38bdf8', '#0891b2')} />
           <Text style={styles.title}>Personalized Water Target</Text>
         </View>
-        <Info size={18} color="#94a3b8" />
+        <Info size={18} color={tone('#94a3b8', '#71717a')} />
       </View>
 
       {isPhysicianGated && !hasPhysicianLimit && (
@@ -76,7 +78,9 @@ const PBWRBreakdownCard: React.FC<Props> = ({ breakdown, hasPhysicianLimit, isPh
   );
 };
 
-const PipelineItem = ({ label, value, isAdj, isBold, subLabel }: any) => (
+const PipelineItem = ({ label, value, isAdj, isBold, subLabel }: any) => {
+  const styles = makeStyles();
+  return (
   <View style={styles.pipelineItem}>
     <View>
       <Text style={[styles.itemLabel, isBold && styles.boldText]}>{label}</Text>
@@ -84,9 +88,11 @@ const PipelineItem = ({ label, value, isAdj, isBold, subLabel }: any) => (
     </View>
     <Text style={[styles.itemValue, isAdj && styles.adjText, isBold && styles.boldText]}>{value}</Text>
   </View>
-);
+  );
+};
 
-const styles = StyleSheet.create({
+/** Built per render: the text colours follow the dark/light mode. */
+const makeStyles = () => StyleSheet.create({
   // The one card that used to set its own horizontal margin, on top of the
   // scroll view's padding — so it stood 16px narrower on each side than
   // everything above and below it.
@@ -105,7 +111,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#f8fafc',
+    color: tone('#f8fafc', '#18181b'),
   },
   cautionBanner: {
     flexDirection: 'row',
@@ -119,7 +125,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(251, 191, 36, 0.3)',
   },
   cautionText: {
-    color: '#fbbf24',
+    color: tone('#fbbf24', '#b45309'),
     fontSize: 12,
     flex: 1,
   },
@@ -133,26 +139,26 @@ const styles = StyleSheet.create({
   },
   itemLabel: {
     fontSize: 14,
-    color: '#94a3b8',
+    color: tone('#94a3b8', '#3f3f46'),
   },
   subLabel: {
     fontSize: 10,
-    color: '#64748b',
+    color: tone('#64748b', '#71717a'),
   },
   itemValue: {
     fontSize: 14,
-    color: '#f1f5f9',
+    color: tone('#f1f5f9', '#18181b'),
   },
   adjText: {
-    color: '#38bdf8',
+    color: tone('#38bdf8', '#0e7490'),
   },
   boldText: {
     fontWeight: '700',
-    color: '#fff',
+    color: tone('#fff', '#18181b'),
   },
   divider: {
     height: 1,
-    backgroundColor: '#334155',
+    backgroundColor: tone('#334155', '#e4e4e7'),
     marginVertical: 4,
   },
   finalRow: {
@@ -160,31 +166,33 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: 8,
-    backgroundColor: 'rgba(56, 189, 248, 0.1)',
+    backgroundColor: tone('rgba(56, 189, 248, 0.1)', '#fafafa'),
+    borderWidth: tone(0, 1),
+    borderColor: tone('transparent', '#e4e4e7'),
     padding: 12,
     borderRadius: 12,
   },
   finalLabel: {
     fontSize: 12,
-    color: '#38bdf8',
+    color: tone('#38bdf8', '#0e7490'),
     marginBottom: 2,
   },
   finalValue: {
     fontSize: 24,
     fontWeight: '800',
-    color: '#fff',
+    color: tone('#fff', '#18181b'),
   },
   remainingBox: {
     alignItems: 'flex-end',
   },
   remainingLabel: {
     fontSize: 10,
-    color: '#94a3b8',
+    color: tone('#94a3b8', '#3f3f46'),
   },
   remainingValue: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#38bdf8',
+    color: tone('#38bdf8', '#0e7490'),
   },
 });
 

@@ -1,6 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Keyboard,
   Modal,
+  Platform,
   ScrollView,
   StatusBar,
   Text,
@@ -12,11 +14,43 @@ import { Check, Clock, Droplets, MessageCircle } from 'lucide-react-native';
 
 import Button from './ui/Button';
 import { SNOOZE_OPTIONS_MIN } from '../services/ActiveReminder';
-import { primaryQuickAmount, quickLogAmounts } from '../utils/hydrationAmounts';
+import QuickLogAmounts, {
+  quickLogButtonAccessibilityLabel,
+  quickLogButtonLabel,
+  useQuickLogSelection,
+} from './QuickLogAmounts';
 import { formatMl } from '../utils/hydrationFormat';
+import { accent, accentFill, tone, useThemeMode } from '../theme/theme';
 
-const ACCENT = '#00f2fe';
-const BACKDROP = '#02050e';
+/**
+ * The screen's colours in the current dark/light mode.
+ *
+ * Read during render, from the one shared mode every other screen follows:
+ * the reminder is opened by a notification, often with nothing else of the
+ * app on screen, and it must still look like the app the user set up. The
+ * dark column is what this screen has always drawn.
+ */
+const palette = () => ({
+  backdrop: tone('#02050e', '#f5f5f3'),
+  /** The accent as text or an icon. */
+  accent: accent(),
+  /** The accent as a fill or a selection outline. */
+  accentFill: accentFill(),
+  accentTint: tone('rgba(0,242,254,0.10)', 'rgba(8,145,178,0.08)'),
+  accentTintBorder: tone('rgba(0,242,254,0.28)', 'rgba(8,145,178,0.30)'),
+  title: tone('#ffffff', '#18181b'),
+  strong: tone('#e2e8f0', '#27272a'),
+  value: tone('#cbd5e1', '#3f3f46'),
+  body: tone('#94a3b8', '#52525b'),
+  muted: tone('#64748b', '#71717a'),
+  faint: tone('#475569', '#71717a'),
+  surface: tone('rgba(255,255,255,0.03)', '#ffffff'),
+  surfaceRaised: tone('rgba(255,255,255,0.04)', '#ffffff'),
+  border: tone('rgba(255,255,255,0.08)', '#e4e4e7'),
+  borderSoft: tone('rgba(255,255,255,0.07)', '#e4e4e7'),
+  divider: tone('rgba(255,255,255,0.06)', '#e4e4e7'),
+  track: tone('rgba(255,255,255,0.06)', '#e4e4e7'),
+});
 
 /**
  * The screen's spacing, in two numbers.
@@ -159,23 +193,56 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
   riskStatus,
   hoursSinceDrink,
 }) => {
-  const [selectedMl, setSelectedMl] = useState<number>(() => primaryQuickAmount().ml);
+  /** True while a snooze or a skip is being recorded. */
   const [saving, setSaving] = useState(false);
-  const [logged, setLogged] = useState(false);
+  /** The amount being written, and the amount written — as the "Log water" sheet tracks them. */
+  const [savingMl, setSavingMl] = useState<number | null>(null);
+  const [loggedMl, setLoggedMl] = useState<number | null>(null);
   const [failed, setFailed] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
+
+  const logged = loggedMl !== null;
+  const busy = saving || savingMl !== null || logged;
+  // The app's own picker, so the amounts, the highlight and the custom field
+  // work exactly as they do in the "Log water" sheet.
+  const selection = useQuickLogSelection(busy, () => setFailed(false));
+  const { selectedMl, reset } = selection;
 
   // Every opening starts from the pre-selected amount, so a previous failure,
   // a previous choice or a stale tick is never inherited.
   useEffect(() => {
     if (!visible) return;
-    setSelectedMl(primaryQuickAmount().ml);
+    reset();
     setSaving(false);
-    setLogged(false);
+    setSavingMl(null);
+    setLoggedMl(null);
     setFailed(false);
     setSnoozeOpen(false);
     setNow(Date.now());
+  }, [visible, reset]);
+
+  // A full-screen Modal's window does not resize for the keyboard either, so
+  // the actions are lifted by its height and the custom field scrolled into
+  // view while it is in use.
+  useEffect(() => {
+    if (!visible) {
+      setKeyboardHeight(0);
+      return;
+    }
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, e => {
+      setKeyboardHeight(e.endCoordinates.height);
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
   }, [visible]);
 
   // Close on a delay so the confirmation is actually seen. Tied to `logged`
@@ -196,24 +263,25 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
   }, [visible, logged]);
 
   const commit = useCallback(async () => {
-    if (saving || logged) return;
-    setSaving(true);
+    if (selectedMl === null || busy) return;
+    Keyboard.dismiss();
+    setSavingMl(selectedMl);
     setFailed(false);
     try {
       const ok = await onLog(selectedMl);
-      if (ok) setLogged(true);
+      if (ok) setLoggedMl(selectedMl);
       else setFailed(true);
     } catch (error) {
       console.error('[Reminders] Full-screen log failed:', error);
       setFailed(true);
     } finally {
-      setSaving(false);
+      setSavingMl(null);
     }
-  }, [saving, logged, onLog, selectedMl]);
+  }, [busy, onLog, selectedMl]);
 
   const snooze = useCallback(
     async (minutes: number) => {
-      if (saving || logged) return;
+      if (busy) return;
       setSaving(true);
       try {
         await onSnooze(minutes);
@@ -223,11 +291,11 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
         setSaving(false);
       }
     },
-    [saving, logged, onSnooze]
+    [busy, onSnooze]
   );
 
   const skip = useCallback(async () => {
-    if (saving || logged) return;
+    if (busy) return;
     setSaving(true);
     try {
       await onSkip();
@@ -236,12 +304,13 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
     } finally {
       setSaving(false);
     }
-  }, [saving, logged, onSkip]);
+  }, [busy, onSkip]);
 
-  const busy = saving || logged;
-  // Read during render rather than memoised: the admin config can arrive after
-  // this module is imported, and the list is four items long.
-  const amounts = quickLogAmounts();
+  // Follows the shared mode, and re-renders if it changes while this is up.
+  const light = useThemeMode() === 'light';
+  const colors = palette();
+
+  const keyboardOpen = keyboardHeight > 0;
   const age = describeAge(firedAt, now);
   const progress =
     targetMl && targetMl > 0 ? Math.min(1, Math.max(0, totalMl / targetMl)) : null;
@@ -261,8 +330,8 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
         if (!busy) void snooze(SNOOZE_OPTIONS_MIN[0]);
       }}
     >
-      <StatusBar barStyle="light-content" backgroundColor={BACKDROP} />
-      <SafeAreaView style={{ flex: 1, backgroundColor: BACKDROP }}>
+      <StatusBar barStyle={light ? 'dark-content' : 'light-content'} backgroundColor={colors.backdrop} />
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.backdrop }}>
         {/*
           Only what can be read scrolls; what has to be *pressed* does not.
 
@@ -276,6 +345,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
           takes whatever room is left.
         */}
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={{
             flexGrow: 1,
             paddingHorizontal: GUTTER,
@@ -284,6 +354,9 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
             justifyContent: 'center',
           }}
           showsVerticalScrollIndicator={false}
+          // A quick amount must take the tap that the open keyboard would
+          // otherwise swallow.
+          keyboardShouldPersistTaps="handled"
         >
           {/* -------------------------------------------------- Header */}
           <View style={{ alignItems: 'center', marginBottom: GUTTER }}>
@@ -294,22 +367,22 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
                 borderRadius: 30,
                 alignItems: 'center',
                 justifyContent: 'center',
-                backgroundColor: 'rgba(0,242,254,0.10)',
+                backgroundColor: colors.accentTint,
                 borderWidth: 1,
-                borderColor: 'rgba(0,242,254,0.28)',
+                borderColor: colors.accentTintBorder,
                 marginBottom: 18,
               }}
             >
               {logged ? (
-                <Check color={ACCENT} size={40} strokeWidth={3} />
+                <Check color={colors.accent} size={40} strokeWidth={3} />
               ) : (
-                <Droplets color={ACCENT} size={38} strokeWidth={2.2} />
+                <Droplets color={colors.accent} size={38} strokeWidth={2.2} />
               )}
             </View>
 
             <Text
               style={{
-                color: '#ffffff',
+                color: colors.title,
                 fontSize: 30,
                 fontWeight: '900',
                 letterSpacing: -1,
@@ -321,7 +394,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
 
             <Text
               style={{
-                color: '#94a3b8',
+                color: colors.body,
                 fontSize: 14,
                 fontWeight: '600',
                 textAlign: 'center',
@@ -330,14 +403,14 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
               }}
             >
               {logged
-                ? `${formatMl(selectedMl)} added to today.`
+                ? `${formatMl(loggedMl ?? 0)} added to today.`
                 : 'Drink some water and record it — it takes one tap.'}
             </Text>
 
             {!!age && !logged && (
               <Text
                 style={{
-                  color: '#475569',
+                  color: colors.faint,
                   fontSize: 10,
                   fontWeight: '800',
                   letterSpacing: 1.3,
@@ -387,7 +460,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
                     RISK {Math.round(riskScore)}
                   </Text>
                   {!!riskStatus && (
-                    <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '700' }}>
+                    <Text style={{ color: colors.body, fontSize: 10, fontWeight: '700' }}>
                       {riskStatus}
                     </Text>
                   )}
@@ -395,7 +468,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
               )}
 
               {typeof hoursSinceDrink === 'number' && (
-                <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '700' }}>
+                <Text style={{ color: colors.muted, fontSize: 11, fontWeight: '700' }}>
                   {describeDrinkGap(hoursSinceDrink)}
                 </Text>
               )}
@@ -407,8 +480,8 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
             style={{
               borderRadius: 22,
               borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.07)',
-              backgroundColor: 'rgba(255,255,255,0.03)',
+              borderColor: colors.borderSoft,
+              backgroundColor: colors.surface,
               paddingHorizontal: 18,
               paddingVertical: 14,
               marginBottom: GAP,
@@ -416,12 +489,12 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
           >
             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
               <Text
-                style={{ color: '#64748b', fontSize: 10, fontWeight: '800', letterSpacing: 1.3 }}
+                style={{ color: colors.muted, fontSize: 10, fontWeight: '800', letterSpacing: 1.3 }}
               >
                 TODAY
               </Text>
               <Text
-                style={{ color: '#cbd5e1', fontSize: 11, fontWeight: '900', letterSpacing: 0.5 }}
+                style={{ color: colors.value, fontSize: 11, fontWeight: '900', letterSpacing: 0.5 }}
               >
                 {targetMl === null
                   ? formatMl(totalMl)
@@ -434,7 +507,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
                 style={{
                   height: 6,
                   borderRadius: 3,
-                  backgroundColor: 'rgba(255,255,255,0.06)',
+                  backgroundColor: colors.track,
                   marginTop: 10,
                   overflow: 'hidden',
                 }}
@@ -444,7 +517,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
                     width: `${progress * 100}%`,
                     height: '100%',
                     borderRadius: 3,
-                    backgroundColor: ACCENT,
+                    backgroundColor: colors.accentFill,
                   }}
                 />
               </View>
@@ -452,64 +525,19 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
           </View>
 
           {/* ------------------------------------------------- Amounts */}
+          {/*
+            The app's own water-logging picker, shared with the "Log water"
+            sheet: every configured amount (250 ml, 500 ml, 750 ml, 1 L) with
+            the selected one highlighted, and the Custom Amount field. A tap
+            picks the amount; the Log button below writes it.
+          */}
           {!logged && (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: TIGHT }}>
-              {amounts.map(amount => {
-                const isSelected = selectedMl === amount.ml;
-                return (
-                  <TouchableOpacity
-                    key={amount.ml}
-                    onPress={() => {
-                      setFailed(false);
-                      setSelectedMl(amount.ml);
-                    }}
-                    disabled={busy}
-                    activeOpacity={0.8}
-                    accessibilityRole="radio"
-                    accessibilityState={{ checked: isSelected, disabled: busy }}
-                    accessibilityLabel={`${amount.label}, ${amount.caption}${
-                      isSelected ? ', selected' : ''
-                    }`}
-                    style={{
-                      flexGrow: 1,
-                      flexBasis: '45%',
-                      borderRadius: 22,
-                      paddingVertical: 16,
-                      paddingHorizontal: 16,
-                      alignItems: 'center',
-                      backgroundColor: isSelected
-                        ? 'rgba(0,242,254,0.10)'
-                        : 'rgba(255,255,255,0.03)',
-                      borderWidth: isSelected ? 2 : 1,
-                      borderColor: isSelected ? ACCENT : 'rgba(255,255,255,0.08)',
-                      opacity: busy ? 0.5 : 1,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: isSelected ? '#ffffff' : '#e2e8f0',
-                        fontSize: 19,
-                        fontWeight: '900',
-                        letterSpacing: -0.5,
-                      }}
-                    >
-                      {amount.label}
-                    </Text>
-                    <Text
-                      style={{
-                        color: isSelected ? ACCENT : '#64748b',
-                        fontSize: 9,
-                        fontWeight: '800',
-                        letterSpacing: 1.2,
-                        marginTop: 4,
-                      }}
-                    >
-                      {amount.caption.toUpperCase()}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            <QuickLogAmounts
+              selection={selection}
+              busy={busy}
+              savingMl={savingMl}
+              loggedMl={loggedMl}
+            />
           )}
         </ScrollView>
 
@@ -519,10 +547,10 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
             style={{
               paddingHorizontal: GUTTER,
               paddingTop: GAP,
-              paddingBottom: GUTTER,
+              paddingBottom: keyboardOpen ? keyboardHeight + GAP : GUTTER,
               borderTopWidth: 1,
-              borderTopColor: 'rgba(255,255,255,0.06)',
-              backgroundColor: BACKDROP,
+              borderTopColor: colors.divider,
+              backgroundColor: colors.backdrop,
             }}
           >
             {failed && (
@@ -538,17 +566,21 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
                 Couldn't save that entry. Check your connection and try again.
               </Text>
             )}
+            {/* Labelled and enabled by the same rules as the sheet's button. */}
             <Button
-              label={`Log ${formatMl(selectedMl)}`}
+              label={quickLogButtonLabel(selection, logged)}
               onPress={commit}
               size="lg"
               fullWidth
-              loading={saving && !snoozeOpen}
-              disabled={busy}
+              loading={savingMl !== null}
+              disabled={busy || selectedMl === null}
+              accessibilityLabel={quickLogButtonAccessibilityLabel(selection)}
               testID="reminder-log"
             />
 
-            {snoozeOpen ? (
+            {/* While a custom amount is being typed only "Log" stays above
+                the keyboard, so the field itself is not pushed off screen. */}
+            {keyboardOpen ? null : snoozeOpen ? (
               <View style={{ marginTop: TIGHT, gap: TIGHT }}>
                 {[
                   ...SNOOZE_OPTIONS_MIN.map(minutes => ({
@@ -571,14 +603,14 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
                       gap: 8,
                       paddingVertical: 14,
                       borderRadius: 18,
-                      backgroundColor: 'rgba(255,255,255,0.04)',
+                      backgroundColor: colors.surfaceRaised,
                       borderWidth: 1,
-                      borderColor: 'rgba(255,255,255,0.08)',
+                      borderColor: colors.border,
                       opacity: busy ? 0.5 : 1,
                     }}
                   >
-                    <Clock color="#94a3b8" size={15} />
-                    <Text style={{ color: '#cbd5e1', fontSize: 13, fontWeight: '800' }}>
+                    <Clock color={colors.body} size={15} />
+                    <Text style={{ color: colors.value, fontSize: 13, fontWeight: '800' }}>
                       {option.label}
                     </Text>
                   </TouchableOpacity>
@@ -602,13 +634,13 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
                 size="lg"
                 fullWidth
                 disabled={busy}
-                icon={<Clock color="#cbd5e1" size={16} />}
+                icon={<Clock color={colors.value} size={16} />}
                 style={{ marginTop: TIGHT }}
                 testID="reminder-snooze"
               />
             )}
 
-            {!snoozeOpen && (
+            {!snoozeOpen && !keyboardOpen && (
               <Button
                 label="Ask Vari instead"
                 onPress={() => {
@@ -619,7 +651,7 @@ const ReminderFullScreen: React.FC<ReminderFullScreenProps> = ({
                 size="md"
                 fullWidth
                 disabled={busy}
-                icon={<MessageCircle color="#94a3b8" size={15} />}
+                icon={<MessageCircle color={colors.body} size={15} />}
                 style={{ marginTop: TIGHT }}
                 testID="reminder-ask-vari"
               />

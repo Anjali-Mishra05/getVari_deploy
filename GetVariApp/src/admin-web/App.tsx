@@ -11,6 +11,7 @@ import FeedbackPage from './pages/FeedbackPage';
 import JourneyPage from './pages/JourneyPage';
 import AppConfigPage from './pages/AppConfigPage';
 import AdminLoginPage from './pages/AdminLoginPage';
+import AdminErrorBoundary from './components/shared/AdminErrorBoundary';
 import { supabase } from '../services/SupabaseClient';
 
 const App: React.FC = () => {
@@ -36,39 +37,62 @@ const App: React.FC = () => {
     return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-sm font-black tracking-widest text-slate-400">LOADING ADMIN PORTAL...</div>;
   }
 
-  const isAdmin = session?.user?.user_metadata?.is_admin === true;
+  // `app_metadata` is set from the Supabase dashboard only; `user_metadata`
+  // can be edited by the account itself, so it is not proof of anything.
+  const isAdmin = session?.user?.app_metadata?.is_admin === true;
 
   if (!session || !isAdmin) {
     return <AdminLoginPage />;
   }
 
+  // Each page fails on its own: all of them stay mounted (hidden by CSS), so
+  // without a boundary one page's render error unmounted every page and left
+  // only the dark page background.
   return (
     <AdminLayout activeTab={activeTab} onTabChange={setActiveTab} user={session.user}>
       <div className={activeTab === 'dashboard' ? 'block' : 'hidden'}>
-        <DashboardPage />
+        <AdminErrorBoundary label="the dashboard">
+          <DashboardPage />
+        </AdminErrorBoundary>
       </div>
       <div className={activeTab === 'users' ? 'block' : 'hidden'}>
-        <UsersPage />
+        <AdminErrorBoundary label="the user directory">
+          <UsersPage />
+        </AdminErrorBoundary>
       </div>
       <div className={activeTab === 'journey' ? 'block' : 'hidden'}>
-        <JourneyPage />
+        <AdminErrorBoundary label="user journeys">
+          <JourneyPage />
+        </AdminErrorBoundary>
       </div>
       <div className={activeTab === 'devices' ? 'block' : 'hidden'}>
-        <DevicesPage />
+        <AdminErrorBoundary label="devices">
+          <DevicesPage />
+        </AdminErrorBoundary>
       </div>
       <div className={activeTab === 'alerts' ? 'block' : 'hidden'}>
-        <AlertsPage />
+        <AdminErrorBoundary label="alerts">
+          <AlertsPage />
+        </AdminErrorBoundary>
       </div>
       <div className={activeTab === 'analytics' ? 'block' : 'hidden'}>
-        <AnalyticsPage />
+        <AdminErrorBoundary label="analytics">
+          <AnalyticsPage />
+        </AdminErrorBoundary>
       </div>
       <div className={activeTab === 'feedback' ? 'block' : 'hidden'}>
-        <FeedbackPage />
+        <AdminErrorBoundary label="feedback">
+          <FeedbackPage />
+        </AdminErrorBoundary>
       </div>
       {/* Mounted only when open: the config editor holds unsaved edits, and a
           hidden-but-mounted copy would keep them across a tab switch and
           publish them the next time someone pressed Save. */}
-      {activeTab === 'config' && <AppConfigPage />}
+      {activeTab === 'config' && (
+        <AdminErrorBoundary label="the app configuration">
+          <AppConfigPage />
+        </AdminErrorBoundary>
+      )}
     </AdminLayout>
   );
 };

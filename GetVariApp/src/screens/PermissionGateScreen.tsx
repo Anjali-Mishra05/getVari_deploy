@@ -1,5 +1,8 @@
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, SafeAreaView, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
+// Not React Native's own SafeAreaView: that is a plain View on Android and
+// leaves the content under the system bars. This one applies the real insets.
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { BellRing, Check, ShieldAlert } from 'lucide-react-native';
 
 import Button from '../components/ui/Button';
@@ -12,8 +15,7 @@ import {
   type PermissionRequirement,
   type PermissionSnapshot,
 } from '../utils/permissionRequirements';
-
-const ACCENT = '#00f2fe';
+import { accent, themed, tone, useThemeMode } from '../theme/theme';
 
 /**
  * The screen that stands between the user and an app that cannot do its job.
@@ -79,42 +81,42 @@ const RequirementRow: React.FC<{
   onPress: () => void;
 }> = ({ requirement, granted, active, busy, onPress }) => (
   <View
-    className="rounded-3xl border px-4 py-4 mb-3"
+    className={themed('rounded-3xl border px-4 py-4 mb-3')}
     style={{
       borderColor: granted
         ? 'rgba(16,185,129,0.25)'
         : active
         ? 'rgba(0,242,254,0.30)'
-        : 'rgba(255,255,255,0.07)',
+        : tone('rgba(255,255,255,0.07)', 'rgba(24,24,27,0.11)'),
       backgroundColor: granted
         ? 'rgba(16,185,129,0.06)'
         : active
         ? 'rgba(0,242,254,0.05)'
-        : 'rgba(255,255,255,0.02)',
+        : tone('rgba(255,255,255,0.02)', 'rgba(24,24,27,0.02)'),
     }}
     accessibilityRole="summary"
     accessibilityLabel={`${requirement.title}. ${granted ? 'Granted.' : 'Not granted.'}`}
   >
-    <View className="flex-row items-start gap-3">
+    <View className={themed('flex-row items-start gap-3')}>
       <View
-        className="w-6 h-6 rounded-lg items-center justify-center mt-0.5"
+        className={themed('w-6 h-6 rounded-lg items-center justify-center mt-0.5')}
         style={{
-          backgroundColor: granted ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.05)',
+          backgroundColor: granted ? 'rgba(16,185,129,0.15)' : tone('rgba(255,255,255,0.05)', 'rgba(24,24,27,0.05)'),
           borderWidth: 1,
-          borderColor: granted ? 'rgba(16,185,129,0.35)' : 'rgba(255,255,255,0.10)',
+          borderColor: granted ? 'rgba(16,185,129,0.35)' : tone('rgba(255,255,255,0.10)', 'rgba(24,24,27,0.14)'),
         }}
       >
         {granted ? (
-          <Check size={13} color="#10b981" />
+          <Check size={13} color={tone('#10b981', '#047857')} />
         ) : (
-          <Text className="text-[11px] font-black text-neutral-500">—</Text>
+          <Text className={themed('text-[11px] font-black text-neutral-500')}>—</Text>
         )}
       </View>
 
-      <View className="flex-1">
+      <View className={themed('flex-1')}>
         <Text
-          className="text-[13px] font-black"
-          style={{ color: granted ? '#6ee7b7' : '#ffffff' }}
+          className={themed('text-[13px] font-black')}
+          style={{ color: granted ? '#6ee7b7' : tone('#ffffff', '#18181b') }}
         >
           {requirement.title}
         </Text>
@@ -122,12 +124,12 @@ const RequirementRow: React.FC<{
             justify the ask, and a justification for something already done is
             just noise on a screen the user wants to leave. */}
         {!granted && (
-          <Text className="text-[11.5px] text-neutral-400 leading-[17px] mt-1">
+          <Text className={themed('text-[11.5px] text-neutral-400 leading-[17px] mt-1')}>
             {requirement.body}
           </Text>
         )}
         {!granted && active && requirement.hint && (
-          <Text className="text-[10.5px] text-amber-300/90 leading-[15px] mt-2">
+          <Text className={themed('text-[10.5px] text-amber-300/90 leading-[15px] mt-2')}>
             {requirement.hint}
           </Text>
         )}
@@ -136,18 +138,18 @@ const RequirementRow: React.FC<{
             is never four blocks of instructions at once. */}
         {!granted && active && requirement.steps && (
           <View
-            className="mt-3 rounded-2xl px-3 py-2.5"
-            style={{ backgroundColor: 'rgba(255,255,255,0.03)' }}
+            className={themed('mt-3 rounded-2xl px-3 py-2.5')}
+            style={{ backgroundColor: tone('rgba(255,255,255,0.03)', 'rgba(24,24,27,0.03)') }}
           >
             {!!requirement.stepsIntro && (
-              <Text className="text-[10px] text-neutral-400 leading-[15px] mb-2">
+              <Text className={themed('text-[10px] text-neutral-400 leading-[15px] mb-2')}>
                 {requirement.stepsIntro}
               </Text>
             )}
             {requirement.steps.map((step, index) => (
-              <View key={step} className="flex-row gap-2 mb-1">
-                <Text className="text-[10px] font-black text-[#00f2fe] w-3">{index + 1}.</Text>
-                <Text className="text-[10px] text-neutral-300 leading-[15px] flex-1">{step}</Text>
+              <View key={step} className={themed('flex-row gap-2 mb-1')}>
+                <Text className={themed('text-[10px] font-black text-[#00f2fe] w-3')}>{index + 1}.</Text>
+                <Text className={themed('text-[10px] text-neutral-300 leading-[15px] flex-1')}>{step}</Text>
               </View>
             ))}
           </View>
@@ -158,7 +160,7 @@ const RequirementRow: React.FC<{
     {/* One button at a time. Four live buttons invite the user to open four
         settings pages at once and lose track of which they have done. */}
     {!granted && active && (
-      <View className="mt-3.5">
+      <View className={themed('mt-3.5')}>
         <Button
           label={requirement.action}
           onPress={onPress}
@@ -172,7 +174,8 @@ const RequirementRow: React.FC<{
   </View>
 );
 
-const PermissionGateScreen: React.FC<PermissionGateScreenProps> = ({ snapshot, onRecheck }) => {
+const PermissionGateScreen: React.FC<PermissionGateScreenProps> = ({ snapshot, onRecheck }) => {
+  useThemeMode();
   const [busy, setBusy] = useState(false);
   const outstanding = missingRequirements(snapshot);
   const next = firstMissing(snapshot);
@@ -199,35 +202,35 @@ const PermissionGateScreen: React.FC<PermissionGateScreenProps> = ({ snapshot, o
   );
 
   return (
-    <SafeAreaView className="flex-1 bg-[#02050e]">
+    <SafeAreaView className={themed('flex-1 bg-[#02050e]')}>
       <ScrollView
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 28, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
       >
         <View
-          className="w-12 h-12 rounded-2xl items-center justify-center mb-5"
+          className={themed('w-12 h-12 rounded-2xl items-center justify-center mb-5')}
           style={{ backgroundColor: 'rgba(0,242,254,0.10)', borderWidth: 1, borderColor: 'rgba(0,242,254,0.25)' }}
         >
-          <BellRing size={20} color={ACCENT} />
+          <BellRing size={20} color={accent()} />
         </View>
 
-        <Text className="text-[9px] uppercase font-mono tracking-[2px] text-[#00f2fe] mb-2">
+        <Text className={themed('text-[9px] uppercase font-mono tracking-[2px] text-[#00f2fe] mb-2')}>
           Before we start
         </Text>
-        <Text className="text-[24px] font-black text-white leading-[30px]">
+        <Text className={themed('text-[24px] font-black text-white leading-[30px]')}>
           GetVari needs a few permissions
         </Text>
-        <Text className="text-[12.5px] text-neutral-400 leading-[19px] mt-2.5">
+        <Text className={themed('text-[12.5px] text-neutral-400 leading-[19px] mt-2.5')}>
           Everything this app does, it does by reaching you at the right moment. Without these it
           can still record what you drink, but it cannot tell you when to.
         </Text>
 
         <View
-          className="flex-row items-center gap-2 mt-4 mb-6 px-3 py-2 rounded-xl"
-          style={{ backgroundColor: 'rgba(255,255,255,0.03)' }}
+          className={themed('flex-row items-center gap-2 mt-4 mb-6 px-3 py-2 rounded-xl')}
+          style={{ backgroundColor: tone('rgba(255,255,255,0.03)', 'rgba(24,24,27,0.03)') }}
         >
           <ShieldAlert size={13} color="#64748b" />
-          <Text className="text-[10.5px] text-neutral-500 flex-1">
+          <Text className={themed('text-[10.5px] text-neutral-500 flex-1')}>
             {grantedCount} of {PERMISSION_REQUIREMENTS.length} granted
           </Text>
         </View>
@@ -243,7 +246,7 @@ const PermissionGateScreen: React.FC<PermissionGateScreenProps> = ({ snapshot, o
           />
         ))}
 
-        <Text className="text-[10.5px] text-neutral-600 leading-[16px] mt-3 text-center">
+        <Text className={themed('text-[10.5px] text-neutral-600 leading-[16px] mt-3 text-center')}>
           This screen appears whenever one of these is switched off, including after you change it
           in Android’s App info.
         </Text>
@@ -254,8 +257,8 @@ const PermissionGateScreen: React.FC<PermissionGateScreenProps> = ({ snapshot, o
 
 /** The full-screen spinner shown while the first read is in flight. */
 export const PermissionGateLoading: React.FC = () => (
-  <View className="flex-1 bg-[#02050e] items-center justify-center">
-    <ActivityIndicator color={ACCENT} />
+  <View className={themed('flex-1 bg-[#02050e] items-center justify-center')}>
+    <ActivityIndicator color={accent()} />
   </View>
 );
 

@@ -79,8 +79,11 @@ export const UPPER_LIMITS = {
 /** §7 — no adult's target may fall below this, barring a doctor's restriction. */
 export const SAFETY_FLOOR_ML = 1500;
 
-/** §3 — days after sign-up during which the observed bands stay at zero. */
+/** §3 — days after sign-up during which the target is PBWR only. */
 export const CALIBRATION_DAYS = 7;
+
+/** §4/§6 — the observed Active/Gym step band, which qualifies the Gym/Active ceiling. */
+export const ACTIVE_GYM_MIN_STEPS = 10000;
 
 /** Everything the pipeline reads off a profile. */
 export interface PBWRInputs {
@@ -91,9 +94,9 @@ export interface PBWRInputs {
   medicalConditions?: string[] | null;
   physicianLimitMl?: number | null;
   /**
-   * Self-declared training load. Not an input to the activity *band* — §3 is
-   * explicit that no user-declared activity category is used there — but it
-   * is what qualifies a profile for the Gym/Active ceiling in §6.
+   * Self-declared training load. Not used: §3 is explicit that no
+   * user-declared activity category is used. The activity band and the
+   * Gym/Active ceiling both come from the observed 7-day step average.
    */
   activityLevel?: string;
 }
@@ -176,21 +179,33 @@ export const pbwrBaselineMl = (inputs: PBWRInputs): number => {
  */
 export const computePBWRBreakdown = (
   inputs: PBWRInputs,
-  observed?: ObservedAverages | null
+  observed?: ObservedAverages | null,
+  options: {
+    /**
+     * §3 — days 1–7: "daily target = PBWR only". Every adjustment is zero;
+     * the ceiling (a doctor's limit included) and the floor still apply.
+     */
+    calibrating?: boolean;
+  } = {}
 ): PBWRBreakdown => {
+  const calibrating = options.calibrating === true;
+  const bands = calibrating ? null : observed;
+
   // Stage 1
   const pbwrBaseline = pbwrBaselineMl(inputs);
 
   // Stage 3 — the observed bands
-  const activityAdj = bandAdjustment(STEP_BANDS, observed?.avgSteps);
-  const tempAdj = bandAdjustment(TEMP_BANDS, observed?.avgTemp);
-  const humidityAdj = bandAdjustment(HUMIDITY_BANDS, observed?.avgHumidity);
+  const activityAdj = bandAdjustment(STEP_BANDS, bands?.avgSteps);
+  const tempAdj = bandAdjustment(TEMP_BANDS, bands?.avgTemp);
+  const humidityAdj = bandAdjustment(HUMIDITY_BANDS, bands?.avgHumidity);
 
   // Stage 3 — the self-declared ones
-  const workEnvAdj = num(
-    AppConfigStore.current().workEnvironments.find(env => env.id === inputs.workEnvironment)
-      ?.pbwrAdjustmentMl
-  );
+  const workEnvAdj = calibrating
+    ? 0
+    : num(
+        AppConfigStore.current().workEnvironments.find(env => env.id === inputs.workEnvironment)
+          ?.pbwrAdjustmentMl
+      );
 
   const conditions = AppConfigStore.conditionsFor(inputs.medicalConditions);
   const isPhysicianGated = conditions.some(condition => condition.requiresPhysicianLimit);
@@ -205,7 +220,7 @@ export const computePBWRBreakdown = (
    * diabetes does not get diabetes' +400 ml added to a restricted intake.
    * The formula has no business raising a number a clinician has capped.
    */
-  const healthAdj = isPhysicianGated
+  const healthAdj = isPhysicianGated || calibrating
     ? 0
     : conditions.reduce((total, condition) => total + num(condition.pbwrAdjustmentMl), 0);
 
@@ -247,7 +262,10 @@ export const computePBWRBreakdown = (
       .filter((limit): limit is number => typeof limit === 'number' && limit > 0);
 
     const categoryLimits: number[] = [...conditionLimits];
-    if (inputs.activityLevel === 'active' || inputs.activityLevel === 'elite') {
+    // Gym Enthusiast / Active: the observed Active/Gym step band (§4), never
+    // the self-declared activity level (§3).
+    const avgSteps = bands?.avgSteps;
+    if (typeof avgSteps === 'number' && Number.isFinite(avgSteps) && avgSteps >= ACTIVE_GYM_MIN_STEPS) {
       categoryLimits.push(UPPER_LIMITS.Gym);
     }
     if (inputs.workEnvironment === 'outdoor') categoryLimits.push(UPPER_LIMITS.Outdoor);
@@ -295,6 +313,23 @@ export const computePBWRBreakdown = (
  * established — the stamp is written on first save, so only pre-existing rows
  * lack it, and those are long past day seven.
  */
+/**
+ * The account's start date for the §3 window: the profile row's server-set
+ * `created_at`, which is written once on insert and never changed by a login,
+ * a profile edit, onboarding or a reinstall. The date stamped on the profile
+ * blob is only a fallback for a row read without it — that stamp used to be
+ * written at the first profile edit, and read on its own it put accounts that
+ * had been in use for weeks back into days 1–7.
+ */
+export const accountStartDate = (
+  rowCreatedAt: unknown,
+  profileStamp?: string | null
+): string | undefined => {
+  const server = typeof rowCreatedAt === 'string' ? Date.parse(rowCreatedAt) : NaN;
+  if (Number.isFinite(server)) return new Date(server).toISOString();
+  return profileStamp ?? undefined;
+};
+
 export const isWithinCalibrationWindow = (accountCreatedAt?: string | null): boolean => {
   const createdAt = accountCreatedAt ? Date.parse(accountCreatedAt) : NaN;
   return Number.isFinite(createdAt) && Date.now() - createdAt < CALIBRATION_DAYS * 86400000;

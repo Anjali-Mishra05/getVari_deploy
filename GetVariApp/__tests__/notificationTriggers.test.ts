@@ -60,6 +60,8 @@ const mockIsSleeping = jest.fn((..._args: any[]) => Promise.resolve(false));
 // The factory runs while the hoisted imports resolve, i.e. before the `const`s
 // above are initialised — so every reference to them has to be lazy.
 const mockMsSinceLastNotification = jest.fn(() => Promise.resolve(Infinity));
+/** The live readings the engine hands over for the fixed-time conditions. */
+const mockNoteConditionSnapshot = jest.fn((..._args: any[]) => Promise.resolve());
 
 jest.mock('../src/services/NotificationService', () => ({
   __esModule: true,
@@ -72,8 +74,11 @@ jest.mock('../src/services/NotificationService', () => ({
     // and the scheduled reminder's — so it reads this shared stamp rather than
     // only its own state. Infinity is "nothing has been shown yet".
     msSinceLastNotification: (...args: any[]) => mockMsSinceLastNotification.apply(null, args as []),
+    msSinceLastDynamicNotification: (...args: any[]) => mockMsSinceLastNotification.apply(null, args as []),
     noteNotificationShown: () => Promise.resolve(),
     noteIntakeLogged: () => Promise.resolve(),
+    markAppOpened: () => {},
+    noteConditionSnapshot: (...args: any[]) => mockNoteConditionSnapshot.apply(null, args as []),
   },
 }));
 
@@ -100,6 +105,7 @@ import NotificationEngine, {
   NotificationOutcome,
   NotificationTrigger,
 } from '../src/services/NotificationEngine';
+import { NOTIFICATION_SIMULATION } from '../src/config/edgeCaseConfig';
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -362,10 +368,20 @@ describe('Notification triggers N1-N24', () => {
     expect(raised).not.toContain('risk_improved');
   });
 
-  test('N11: high_temp fires between 30 and 35 °C', async () => {
+  test('N11: high_temp fires for 30 <= t < 34 °C', async () => {
     const raised = await raise({ at: TUESDAY(14), sensor: { temperature: 31 }, logs: [logAt(1, 900)] });
     expect(raised).toContain('high_temp');
     expect(raised).not.toContain('extreme_heat');
+  });
+
+  test('N11b: high_temp band edges are 30 inclusive and 34 exclusive', async () => {
+    expect(await raise({ at: TUESDAY(14), sensor: { temperature: 30 }, logs: [logAt(1, 900)] })).toContain('high_temp');
+    mockStore.clear();
+    expect(await raise({ at: TUESDAY(14), sensor: { temperature: 33.9 }, logs: [logAt(1, 900)] })).toContain('high_temp');
+    mockStore.clear();
+    expect(await raise({ at: TUESDAY(14), sensor: { temperature: 34 }, logs: [logAt(1, 900)] })).not.toContain('high_temp');
+    mockStore.clear();
+    expect(await raise({ at: TUESDAY(14), sensor: { temperature: 29.9 }, logs: [logAt(1, 900)] })).not.toContain('high_temp');
   });
 
   test('N12: extreme_heat is not part of the current notification specification', async () => {
@@ -544,7 +560,7 @@ describe('Burst control', () => {
     expect(delivered[0]).toBe(raised[0]);
   });
 
-  test('right after login nothing but a high risk alert is delivered for 5 minutes', async () => {
+  test('for 5 minutes after opening the app nothing is delivered, high risk included', async () => {
     try {
       NotificationEngine.markSessionStart(TUESDAY(14).getTime());
       const atLogin = await evaluate(clump);
@@ -552,7 +568,11 @@ describe('Burst control', () => {
       expect(atLogin.delivered).toHaveLength(0);
 
       const critical = await evaluate({ ...clump, at: TUESDAY(14, 1), score: 90 });
-      expect(critical.delivered).toEqual(['high_risk']);
+      expect(critical.raised).toContain('high_risk');
+      expect(critical.delivered).toHaveLength(0);
+
+      const edge = await evaluate({ ...clump, at: new Date(TUESDAY(14).getTime() + 4 * 60_000 + 59_000) });
+      expect(edge.delivered).toHaveLength(0);
 
       mockStore.clear();
       const later = await evaluate({ ...clump, at: TUESDAY(14, 6) });
@@ -612,6 +632,210 @@ describe('Notification wording', () => {
     // Verify risk_improved was removed from state's pendingTriggers
     const state = JSON.parse(mockStore.get(ENGINE_STATE_KEY) || '{}');
     expect(state.pendingTriggers).not.toContain('risk_improved');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Specification: live (event-driven) triggers and once-daily rules
+// ---------------------------------------------------------------------------
+
+describe('Spec: live risk / FDI / CDI triggers (simulation off)', () => {
+  const withSimulation = async (enabled: boolean, body: () => Promise<void>) => {
+    const previous = NOTIFICATION_SIMULATION.ENABLED;
+    NOTIFICATION_SIMULATION.ENABLED = enabled;
+    try {
+      await body();
+    } finally {
+      NOTIFICATION_SIMULATION.ENABLED = previous;
+    }
+  };
+
+  const evalWith = (at: Date, score: number | null, indexScores?: { fdi?: number; cdi?: number }) => {
+    jest.setSystemTime(at);
+    mockDisplayNotification.mockClear();
+    return NotificationEngine.evaluate({
+      sensorData: baseSensor(),
+      profile: baseProfile(),
+      todayLogs: resolveLogs([logAt(1, 900)]),
+      solvedRisk: risk(score),
+      indexScores,
+    });
+  };
+
+  test('elevated_risk is raised for 60-79 only', () =>
+    withSimulation(false, async () => {
+      expect((await evalWith(TUESDAY(14), 59)).raised).not.toContain('elevated_risk');
+      mockStore.clear();
+      expect((await evalWith(TUESDAY(14), 60)).raised).toContain('elevated_risk');
+      mockStore.clear();
+      expect((await evalWith(TUESDAY(14), 79)).raised).toContain('elevated_risk');
+      mockStore.clear();
+      const high = await evalWith(TUESDAY(14), 80);
+      expect(high.raised).toContain('high_risk');
+      expect(high.raised).not.toContain('elevated_risk');
+    }));
+
+  test('elevated_risk is sent at most every 30 minutes', () =>
+    withSimulation(false, async () => {
+      expect((await evalWith(TUESDAY(14), 65)).delivered).toEqual(['elevated_risk']);
+      expect((await evalWith(TUESDAY(14, 20), 65)).raised).not.toContain('elevated_risk');
+      expect((await evalWith(TUESDAY(14, 30), 65)).delivered).toEqual(['elevated_risk']);
+    }));
+
+  test('risk_improved needs a prior risk alert and a score below 40, and fires once', () =>
+    withSimulation(false, async () => {
+      // No alert yet: a low score is not an "improvement".
+      expect((await evalWith(TUESDAY(13), 30)).raised).not.toContain('risk_improved');
+
+      mockStore.clear();
+      expect((await evalWith(TUESDAY(14), 70)).delivered).toEqual(['elevated_risk']);
+      // Dropped, but not below 40 yet.
+      expect((await evalWith(TUESDAY(14, 40), 45)).raised).not.toContain('risk_improved');
+      expect((await evalWith(TUESDAY(15, 10), 35)).delivered).toEqual(['risk_improved']);
+      // Already reported; it does not repeat while the score stays low.
+      expect((await evalWith(TUESDAY(15, 50), 30)).raised).not.toContain('risk_improved');
+    }));
+
+  test('focus_alert at FDI >= 60 and priority_alert at CDI >= 60', () =>
+    withSimulation(false, async () => {
+      expect((await evalWith(TUESDAY(14), null, { fdi: 59.9 })).raised).not.toContain('focus_alert');
+      mockStore.clear();
+      expect((await evalWith(TUESDAY(14), null, { fdi: 60 })).raised).toContain('focus_alert');
+      mockStore.clear();
+      expect((await evalWith(TUESDAY(14), null, { cdi: 59.9 })).raised).not.toContain('priority_alert');
+      mockStore.clear();
+      expect((await evalWith(TUESDAY(14), null, { cdi: 60 })).raised).toContain('priority_alert');
+    }));
+
+  test('a missing FDI is not treated as zero or as an alert', () =>
+    withSimulation(false, async () => {
+      expect((await evalWith(TUESDAY(14), null)).raised).not.toContain('focus_alert');
+    }));
+
+  test('while simulation is on, none of the four is raised from live data', () =>
+    withSimulation(true, async () => {
+      const outcome = await evalWith(TUESDAY(14), 65, { fdi: 90, cdi: 90 });
+      expect(outcome.raised).not.toContain('elevated_risk');
+      expect(outcome.raised).not.toContain('focus_alert');
+      expect(outcome.raised).not.toContain('priority_alert');
+    }));
+
+  test('risk alerts are never delivered in the sleep window', () =>
+    withSimulation(false, async () => {
+      const outcome = await evalWith(TUESDAY(2), 70);
+      expect(outcome.delivered).toHaveLength(0);
+      expect(mockDisplayNotification).not.toHaveBeenCalled();
+    }));
+
+  test('no 30-minute gap between Dynamic alerts: high_risk 10 minutes after high_humidity still goes out', async () => {
+    const first = await evaluate({ at: TUESDAY(14), sensor: { humidity: 80 }, logs: [logAt(1, 900)] });
+    expect(first.delivered).toEqual(['high_humidity']);
+    const risky = await evaluate({ at: TUESDAY(14, 10), score: 90, logs: [logAt(1, 900)] });
+    expect(risky.raised).toContain('high_risk');
+    expect(risky.delivered).toEqual(['high_risk']);
+  });
+});
+
+describe('Spec: live readings handed over for the fixed-time conditions', () => {
+  const lastSnapshot = () => {
+    const calls = mockNoteConditionSnapshot.mock.calls;
+    return calls[calls.length - 1][0] as { at: number; riskScore: number | null; fdi: number | null; cdi: number | null };
+  };
+
+  beforeEach(() => mockNoteConditionSnapshot.mockClear());
+
+  test('risk score, FDI (from time since significant motion) and CDI are recorded each evaluation', async () => {
+    await evaluate({ at: TUESDAY(14), score: 70, sensor: { activityLoad: 60 }, logs: [logAt(1, 900)] });
+    await evaluate({ at: TUESDAY(15, 10), score: 70, sensor: { activityLoad: 20 }, logs: [logAt(1, 900)] });
+
+    const s = lastSnapshot();
+    expect(s.at).toBe(TUESDAY(15, 10).getTime());
+    expect(s.riskScore).toBe(70);
+    // 70 min since motion -> TTL load 80; FDI = 0.6*70 + 0.4*80.
+    expect(s.fdi).toBe(74);
+    // CDI = 0.55*70 + 0.25*thermal(0) + 0.20*circadian(15:10 -> 60).
+    expect(s.cdi).toBe(50.5);
+  });
+
+  test('FDI is missing, not zero, until significant motion has been seen', async () => {
+    await evaluate({ at: TUESDAY(14), score: 70, sensor: { activityLoad: 20 }, logs: [logAt(1, 900)] });
+    expect(lastSnapshot().fdi).toBeNull();
+  });
+
+  test('with no risk score, FDI and CDI are missing too', async () => {
+    await evaluate({ at: TUESDAY(14), score: null, sensor: { activityLoad: 60 }, logs: [logAt(1, 900)] });
+    const s = lastSnapshot();
+    expect(s.riskScore).toBeNull();
+    expect(s.fdi).toBeNull();
+    expect(s.cdi).toBeNull();
+  });
+});
+
+describe('Spec: 07:00 Day Start sends nothing', () => {
+  test('the day-start reset raises nothing on its own', async () => {
+    const yesterday = new Date(2026, 7, 31, 15, 0).getTime();
+    const outcome = await evaluate({
+      at: TUESDAY(7, 0),
+      logs: [],
+      state: { lastAlerts: { high_temp: yesterday, goal_achieved: yesterday, low_intake_12pm: yesterday } },
+    });
+    expect(outcome.raised).toEqual([]);
+    expect(outcome.delivered).toEqual([]);
+  });
+});
+
+describe('Spec: once-daily rules follow the awake day', () => {
+  const lateSleeper = { sleepSchedule: { sleepStart: '01:00', wakeUp: '09:00' } };
+  const deliver = async (s: Scenario) => (await evaluate(s)).delivered;
+
+  test('high_temp sent at 23:00 is not sent again after midnight before sleep', async () => {
+    const evening = await deliver({ at: TUESDAY(23), profile: lateSleeper, sensor: { temperature: 31 }, logs: [logAt(1, 2000)] });
+    expect(evening).toContain('high_temp');
+    const afterMidnight = await raise({
+      at: new Date(2026, 8, 2, 0, 30),
+      profile: lateSleeper,
+      sensor: { temperature: 31 },
+      logs: [logAt(0.2, 100)],
+    });
+    expect(afterMidnight).not.toContain('high_temp');
+    // The next awake day (after 09:00) resets it.
+    const nextDay = await raise({
+      at: new Date(2026, 8, 2, 12, 0),
+      profile: lateSleeper,
+      sensor: { temperature: 31 },
+      logs: [logAt(1, 2000)],
+    });
+    expect(nextDay).toContain('high_temp');
+  });
+
+  test('low intake is not claimed after midnight, when earlier drinks are no longer in the log', async () => {
+    const raised = await raise({ at: new Date(2026, 8, 2, 0, 30), profile: lateSleeper, logs: [logAt(0.2, 100)] });
+    expect(raised).not.toContain('low_intake_12pm');
+  });
+
+  test('low intake fires from the awake-day midpoint (07:00-23:00 -> 15:00), once', async () => {
+    expect(await raise({ at: TUESDAY(14, 59), logs: [logAt(1, 500)] })).not.toContain('low_intake_12pm');
+    expect(await deliver({ at: TUESDAY(15, 0), logs: [logAt(1, 500)] })).toContain('low_intake_12pm');
+    expect(await raise({ at: TUESDAY(17, 0), logs: [logAt(1, 500)] })).not.toContain('low_intake_12pm');
+  });
+
+  test('low intake follows the actual wake time (10:00-02:00 -> 18:00)', async () => {
+    const profile = { sleepSchedule: { sleepStart: '02:00', wakeUp: '10:00' } };
+    expect(await raise({ at: TUESDAY(17, 30), profile, logs: [logAt(1, 500)] })).not.toContain('low_intake_12pm');
+    expect(await raise({ at: TUESDAY(18, 0), profile, logs: [logAt(1, 500)] })).toContain('low_intake_12pm');
+  });
+
+  test('goal_achieved fires the moment the goal is reached, and resets next day', async () => {
+    expect(await raise({ at: TUESDAY(10), logs: [logAt(1, 2400)] })).not.toContain('goal_achieved');
+    expect(await deliver({ at: TUESDAY(11), logs: [logAt(0.1, 2500)] })).toContain('goal_achieved');
+    expect(await raise({ at: TUESDAY(13), logs: [logAt(1, 3000)] })).not.toContain('goal_achieved');
+    expect(await raise({ at: new Date(2026, 8, 2, 11), logs: [logAt(1, 2600)] })).toContain('goal_achieved');
+  });
+
+  test('high_humidity is once per day at >= 70%', async () => {
+    expect(await raise({ at: TUESDAY(12), sensor: { humidity: 69.9 }, logs: [logAt(1, 2000)] })).not.toContain('high_humidity');
+    expect(await deliver({ at: TUESDAY(12, 30), sensor: { humidity: 70 }, logs: [logAt(1, 2000)] })).toContain('high_humidity');
+    expect(await raise({ at: TUESDAY(16), sensor: { humidity: 90 }, logs: [logAt(1, 2000)] })).not.toContain('high_humidity');
   });
 });
 

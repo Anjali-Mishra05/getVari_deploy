@@ -10,6 +10,8 @@ import {
   ViewStyle,
 } from 'react-native';
 
+import { useScopedTheme } from '../../theme/theme';
+
 /**
  * The app's one button.
  *
@@ -71,6 +73,24 @@ const VARIANTS: Record<ButtonVariant, { background: string; border: string; text
   },
 };
 
+/** The same intents on a light surface. */
+const LIGHT_VARIANTS: typeof VARIANTS = {
+  primary: { background: '#0891b2', border: '#0891b2', text: '#ffffff', spinner: '#ffffff' },
+  secondary: {
+    background: 'rgba(24,24,27,0.04)',
+    border: 'rgba(24,24,27,0.14)',
+    text: '#3f3f46',
+    spinner: '#3f3f46',
+  },
+  ghost: { background: 'transparent', border: 'transparent', text: '#52525b', spinner: '#52525b' },
+  danger: {
+    background: 'rgba(244,63,94,0.08)',
+    border: 'rgba(244,63,94,0.35)',
+    text: '#e11d48',
+    spinner: '#e11d48',
+  },
+};
+
 const styles = StyleSheet.create({
   base: {
     flexDirection: 'row',
@@ -100,7 +120,8 @@ const Button: React.FC<ButtonProps> = ({
   accessibilityLabel,
   testID,
 }) => {
-  const tone = VARIANTS[variant];
+  const { light } = useScopedTheme();
+  const tone = (light ? LIGHT_VARIANTS : VARIANTS)[variant];
   const metrics = SIZES[size];
   // One disabled treatment everywhere, rather than each screen inventing its
   // own opacity. A loading button is disabled too — a second tap on a request

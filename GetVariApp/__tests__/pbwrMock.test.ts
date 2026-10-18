@@ -67,6 +67,24 @@ describe('Automated Profile-Based PBWR Mock History', () => {
     mockCloudRows = [];
   });
 
+  test('PBWR averages the previous 7 full days: today is not in the window', async () => {
+    const day = (n: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() - n);
+      return d.toISOString().split('T')[0];
+    };
+    // Today reads 20,000 steps; the previous 7 days 4,000 each.
+    seedCloud([0, 1, 2, 3, 4, 5, 6, 7].map(n => ({
+      date: day(n), avgTemp: 20, avgHumidity: 30, totalSteps: n === 0 ? 20000 : 4000, avgHeartRate: 70,
+    })));
+
+    const window = await TelemetryHistoryService.getHistory('user123', mockProfile, 1);
+    expect(window.map(s => s.date)).toEqual([7, 6, 5, 4, 3, 2, 1].map(day));
+
+    const breakdown = await PBWRService.calculatePBWR(mockProfile, 0, 'user123');
+    expect(breakdown.activityAdj).toBe(300); // 4,000 steps: Light, not today's 20,000
+  });
+
   test('Empty history -> 7 mock days -> Day 8+ works', async () => {
     seedCloud([]);
 

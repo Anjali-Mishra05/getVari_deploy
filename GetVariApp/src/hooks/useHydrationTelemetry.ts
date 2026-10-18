@@ -4,17 +4,15 @@ import { HydrationLog, HydrationRiskDetails, SensorData, UserProfile } from '../
 import { toRiskDetails } from '../utils/hydrationModel';
 import {
   SleepSchedule,
-  awakeHoursBetween,
   awakeHoursPerDay,
   isAsleepAt,
   normaliseSleepSchedule,
 } from '../utils/sleepWindow';
 import TelemetryHistoryService from '../services/TelemetryHistoryService';
-import AppConfigStore from '../config/appConfigStore';
-import { climateBandFor } from '../utils/hydrationTarget';
 import { AuthService } from '../services/AuthService';
 import { HydrationRiskEngine } from '../utils/hydrationRiskEngine';
 import { shouldPublishRisk } from '../utils/riskPublication';
+import { MAX_GAP_HOURS, baselineReadingsFor, gapFromLogs } from '../utils/appRiskModel';
 
 /**
  * The physiological loop behind the home dashboard.
@@ -68,44 +66,14 @@ const NO_READINGS: SensorData = {
 };
 
 /**
- * The readings the stream settles around, for this user.
- *
- * They come from the profile rather than from a fixed set of numbers: the
- * activity band sets the resting heart rate and movement index, and the
- * climate band of the user's resolved city sets the ambient temperature and
- * humidity. That is what makes the dashboard reflect *where the user is* — a
- * profile in Chennai is modelled against Chennai's heat — and it is what makes
- * the documented use cases reproducible instead of landing on a different
- * score every time the screen is opened.
+ * The readings the stream settles around, for this user. The anchor values
+ * live in `utils/appRiskModel` so the admin panel solves over the same ones.
  */
-const baselineFor = (profile?: UserProfile): SensorData => {
-  const config = AppConfigStore.current();
-  const activity = config.activityLevels.find(level => level.id === profile?.activityLevel);
-  const band = climateBandFor(profile?.location ?? profile?.selectedCity);
-
-  return {
-    ...NO_READINGS,
-    heartRate: activity?.baselineHeartRate ?? 72,
-    activityLoad: activity?.baselineActivityIndex ?? 15,
-    temperature: band?.ambientTempC ?? 24,
-    humidity: band?.ambientHumidity ?? 50,
-    sweatGSR: 2.0,
-    batteryLevel: 84,
-    rssi: -58,
-    lastUpdated: new Date().toISOString(),
-  };
-};
-
-
-/**
- * Hours to assume since the last drink when the user has logged nothing today.
- * Two hours puts them at the top of the engine's 1-2h band rather than in its
- * worst one, so an empty day reads as "you should drink" and not "critical".
- */
-const NO_LOG_ASSUMED_GAP_HOURS = 2;
-
-/** Ceiling on the hydration gap the engine is asked to score. */
-const MAX_GAP_HOURS = 8;
+const baselineFor = (profile?: UserProfile): SensorData => ({
+  ...NO_READINGS,
+  ...baselineReadingsFor(profile),
+  lastUpdated: new Date().toISOString(),
+});
 
 /**
  * How the published score is allowed to move.
@@ -237,26 +205,6 @@ export const sweatLossRateFor = (sensors: SensorData): number => {
   return BASELINE_SWEAT_ML_PER_MIN +
     (activity / 100) * 8.6 +
     (heatStress(temperature, humidity) / 100) * 5.0;
-};
-
-/**
- * Hours between now and the newest entry, or the no-log assumption.
- *
- * Only *waking* hours count. A user who drinks at 22:30, sleeps eight hours
- * and opens the app at 07:15 has not neglected their hydration for nine hours
- * — they were asleep for eight of them, and scoring it that way put every
- * morning at the top of the risk band before the day had started.
- */
-const gapFromLogs = (logs: HydrationLog[], schedule: SleepSchedule | null): number => {
-  if (logs.length === 0) return NO_LOG_ASSUMED_GAP_HOURS;
-  const newest = logs.reduce((latest, log) =>
-    new Date(log.timestamp) > new Date(latest.timestamp) ? log : latest
-  );
-  const since = new Date(newest.timestamp).getTime();
-  const hours = schedule
-    ? awakeHoursBetween(schedule, since, Date.now())
-    : (Date.now() - since) / 3_600_000;
-  return Math.max(0, Math.min(MAX_GAP_HOURS, hours));
 };
 
 /**

@@ -32,6 +32,10 @@ const FeedbackPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      <div className="p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs font-bold">
+        Sample data. The mobile app has no feedback feature and saves no feedback, so nothing here
+        comes from real users.
+      </div>
       <FeedbackFilters
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}

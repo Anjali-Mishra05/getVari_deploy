@@ -46,9 +46,66 @@ export const NOTIFICATION_COOLDOWNS = {
    * app's notifications turned off.
    */
   FOCUS_COGNITIVE_ALERT: 24 * 60 * 60 * 1000, // scheduled checks are once per slot/day
-  /** After login, only a high risk alert may be delivered for this long. */
+  /**
+   * Nothing is delivered for this long after the app is opened (cold start,
+   * login, or a return to the foreground). The welcome is the one exception:
+   * the spec defines it as "immediately after login". The sleep window still
+   * outranks both.
+   */
   LOGIN_QUIET_MS: 5 * 60 * 1000, // 5 minutes
+  /**
+   * A scheduled notification delivered later than this after its own time is
+   * treated as missed (device off, doze, reboot) and dropped rather than sent
+   * late.
+   */
+  MISSED_DELIVERY_TOLERANCE_MS: 15 * 60 * 1000,
+  /** Risk Improved only follows a risk alert delivered within this window. */
+  RISK_IMPROVED_FOLLOW_UP_MS: 2 * 60 * 60 * 1000,
+  /**
+   * How old the last live risk/FDI/CDI reading may be when a fixed-time
+   * conditional notification (Risk Improved, Focus, Priority) is checked.
+   * Older than this counts as missing, and missing is not a pass.
+   */
+  CONDITION_SNAPSHOT_MAX_AGE_MS: 15 * 60 * 1000,
 };
+
+/**
+ * Activity load at or above this counts as significant motion — the same
+ * threshold the engine uses for an active session. FDI's time-since-motion
+ * input is measured from the last reading at or above it.
+ */
+export const SIGNIFICANT_MOTION_ACTIVITY_LOAD = 50;
+
+/**
+ * Temporary simulation mode.
+ *
+ * While `ENABLED`, Elevated Risk, Risk Improved, Focus Alert and Priority
+ * Alert (plus three extra Hydration Reminders) come from the fixed daily
+ * simulation timeline in `NotificationService.SIMULATED_SCHEDULE_SLOTS`, and
+ * the engine does not raise those four from live data — otherwise the user
+ * would get each one twice. Switching it off cancels the simulated queue and
+ * hands the four back to the live, event-driven triggers.
+ */
+export const NOTIFICATION_SIMULATION = {
+  ENABLED: true,
+  /**
+   * Whether the fixed Risk Improved (11:30 / 20:30), Focus (12:30 / 16:00)
+   * and Priority (14:30 / 18:30) slots check their condition — risk < 40
+   * after a risk alert, FDI >= 60, CDI >= 60 — before delivering.
+   *
+   * Off for now: all six are delivered at their fixed times regardless of the
+   * readings. Sleep window, the post-open quiet period and missed-delivery
+   * rules still apply.
+   */
+  CHECK_FIXED_SLOT_CONDITIONS: false,
+};
+
+/** High Temperature fires for 30 <= t < 34 °C, once per day. */
+export const HIGH_TEMP_RANGE_C = { min: 30, maxExclusive: 34 };
+/** High Humidity fires at or above this relative humidity, once per day. */
+export const HIGH_HUMIDITY_MIN_PCT = 70;
+/** Focus Alert (FDI) and Priority Alert (CDI) fire at or above this index. */
+export const DROP_INDEX_ALERT_THRESHOLD = 60;
 
 export const RISK_THRESHOLDS = {
   ELEVATED: 60,

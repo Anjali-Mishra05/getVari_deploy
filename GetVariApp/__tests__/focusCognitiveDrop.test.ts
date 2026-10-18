@@ -32,6 +32,7 @@ jest.mock('../src/services/NotificationService', () => ({
   __esModule: true,
   SIMULATED_SCHEDULE_SLOTS: [
     { hour: 9, minute: 0, trigger: 'regular_reminder', type: 'hydration_reminder' },
+    { hour: 10, minute: 30, trigger: 'focus_alert', type: 'simulated_alert' },
     { hour: 11, minute: 0, trigger: 'elevated_risk', type: 'simulated_alert' },
     { hour: 11, minute: 30, trigger: 'risk_improved', type: 'simulated_alert' },
     { hour: 12, minute: 30, trigger: 'focus_alert', type: 'simulated_alert' },
@@ -50,8 +51,10 @@ jest.mock('../src/services/NotificationService', () => ({
     scheduleSimulatedNotifications: () => Promise.resolve(),
     isSleeping: () => Promise.resolve(false),
     msSinceLastNotification: (...args: any[]) => mockMsSinceLastNotification.apply(null, args as []),
+    msSinceLastDynamicNotification: (...args: any[]) => mockMsSinceLastNotification.apply(null, args as []),
     noteNotificationShown: () => Promise.resolve(),
     noteIntakeLogged: () => Promise.resolve(),
+    noteConditionSnapshot: () => Promise.resolve(),
   },
 }));
 
@@ -257,10 +260,10 @@ describe('Focus / Cognitive Drop Engine', () => {
     const focusSlots = SIMULATED_SCHEDULE_SLOTS.filter(s => s.trigger === 'focus_alert');
     const prioritySlots = SIMULATED_SCHEDULE_SLOTS.filter(s => s.trigger === 'priority_alert');
 
-    expect(focusSlots).toHaveLength(2); // 12:30 PM and 4:00 PM
+    expect(focusSlots).toHaveLength(3); // 10:30 AM, 12:30 PM and 4:00 PM
     expect(prioritySlots).toHaveLength(2); // 2:30 PM and 6:30 PM
 
-    expect(focusSlots.map(s => `${s.hour}:${s.minute}`)).toEqual(['12:30', '16:0']);
+    expect(focusSlots.map(s => `${s.hour}:${s.minute}`)).toEqual(['10:30', '12:30', '16:0']);
     expect(prioritySlots.map(s => `${s.hour}:${s.minute}`)).toEqual(['14:30', '18:30']);
   });
 

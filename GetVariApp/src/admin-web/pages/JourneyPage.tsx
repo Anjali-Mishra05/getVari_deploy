@@ -1,38 +1,37 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import CompactUserList from '../components/users/CompactUserList';
 import UserJourney from '../components/users/UserJourney';
-import { User } from '../types';
 import { Users } from 'lucide-react';
-import { SupabaseAdminService } from '../services/SupabaseAdminService';
+import useAdminUsers from '../hooks/useAdminUsers';
+import DataStatus from '../components/shared/DataStatus';
 
 const JourneyPage: React.FC = () => {
-  const [users, setUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const { users, loading, error, loadedAt, refresh } = useAdminUsers();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedUser = useMemo(() => users.find(u => u.id === selectedId) ?? null, [users, selectedId]);
   const [searchQuery, setSearchQuery] = useState('');
-
-  useEffect(() => {
-    const loadData = async () => {
-      const data = await SupabaseAdminService.fetchAllUsers();
-      setUsers(data);
-      setLoading(false);
-    };
-    loadData();
-  }, []);
 
   const filtered = useMemo(() => {
     return users.filter(u => u.name.toLowerCase().includes(searchQuery.toLowerCase()) || u.id.toLowerCase().includes(searchQuery.toLowerCase()));
   }, [users, searchQuery]);
 
-  if (loading) {
+  if (loading && loadedAt === null) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-slate-400 font-mono text-sm animate-pulse">RECONSTRUCTING JOURNEY LOGS...</div>
-      </div>
+      <DataStatus loading loadingLabel="RECONSTRUCTING JOURNEY LOGS..." error={null} loadedAt={null} onRefresh={refresh} />
     );
   }
 
   return (
+    <>
+    <DataStatus
+      loading={loading}
+      loadingLabel="RECONSTRUCTING JOURNEY LOGS..."
+      error={error}
+      loadedAt={loadedAt}
+      onRefresh={refresh}
+      isEmpty={users.length === 0}
+      emptyLabel="No user profiles yet."
+    />
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
       <aside className="lg:col-span-3">
         <div className="mb-4">
@@ -45,7 +44,7 @@ const JourneyPage: React.FC = () => {
         </div>
         <div className="bg-slate-50 border border-slate-100 p-3 rounded-2xl shadow-sm">
           <div className="lg:sticky lg:top-6 max-h-[300px] lg:max-h-[calc(100vh-160px)] overflow-y-auto pr-1 custom-scrollbar">
-            <CompactUserList users={filtered} selected={selectedUser?.id ?? null} onSelect={u => setSelectedUser(u)} />
+            <CompactUserList users={filtered} selected={selectedUser?.id ?? null} onSelect={u => setSelectedId(u.id)} />
           </div>
         </div>
       </aside>
@@ -63,6 +62,7 @@ const JourneyPage: React.FC = () => {
         )}
       </main>
     </div>
+    </>
   );
 };
 

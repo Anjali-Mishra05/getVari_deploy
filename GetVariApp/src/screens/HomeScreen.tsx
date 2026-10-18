@@ -1,20 +1,22 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, AppState } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Bell, BellOff, Plus, Battery, Cpu } from 'lucide-react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, ScrollView, StatusBar, TouchableOpacity, AppState } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { dashboardBottomPadding } from '../utils/navLayout';
+import { Bell, BellOff, Droplets, Menu, Plus } from 'lucide-react-native';
 import Svg, { Defs, RadialGradient, Stop, Rect as SvgRect } from 'react-native-svg';
 
-import BrandLogo from '../components/BrandLogo';
+import HeaderWordmark from '../components/dashboard/HeaderWordmark';
 import SensorTestPanel from '../components/SensorTestPanel';
 import GlassCard from '../components/GlassCard';
 import { AuthService } from '../services/AuthService';
-import { AIInsight, HydrationLog, UserProfile } from '../types';
+import { HydrationLog, UserProfile } from '../types';
 import AquaSageChat from '../chatbot/AquaSageChat';
 import NotificationService from '../services/NotificationService';
 import ActiveReminder, { ActiveReminderRecord } from '../services/ActiveReminder';
 import NotificationHistory from '../services/NotificationHistory';
 import NotificationCenter from '../components/NotificationCenter';
 import QuickLogSheet from '../components/QuickLogSheet';
+import DeviceConnectSheet from '../components/DeviceConnectSheet';
 import ReminderFullScreen from '../components/ReminderFullScreen';
 import ProfileSheet from '../components/ProfileSheet';
 import ProfileEditSheet from '../components/ProfileEditSheet';
@@ -23,11 +25,12 @@ import HydrationService from '../services/HydrationService';
 import ProfileService from '../services/ProfileService';
 import useHydrationTelemetry from '../hooks/useHydrationTelemetry';
 import useAppConfig from '../hooks/useAppConfig';
-import generateInsights from '../utils/hydrationInsights';
 import nextHydrationTip from '../utils/hydrationTips';
-import { normaliseSleepSchedule } from '../utils/sleepWindow';
+import { reconcileNotificationsWithProfile } from '../services/NotificationSync';
+import { ADMIN_BROADCAST_POLL_MS, checkAdminBroadcasts } from '../services/AdminBroadcastService';
 
 import DashboardNav, { DashboardTab } from '../components/dashboard/DashboardNav';
+import DashboardMenu from '../components/dashboard/DashboardMenu';
 import AnalyticsView from '../components/analytics/AnalyticsView';
 import DashboardSkeleton from '../components/dashboard/DashboardSkeleton';
 import { CARD_GAP, cardStyle } from '../components/dashboard/cardTheme';
@@ -35,27 +38,45 @@ import RiskScoreCard from '../components/dashboard/RiskScoreCard';
 import VitalsRow from '../components/dashboard/VitalsRow';
 import AmbientCard from '../components/dashboard/AmbientCard';
 import QuickFluidLogStation from '../components/dashboard/QuickFluidLogStation';
-import CoreAIInsights from '../components/dashboard/CoreAIInsights';
 import FluidLoggingFeed from '../components/dashboard/FluidLoggingFeed';
-import WhyThisScoreCard from '../components/dashboard/WhyThisScoreCard';
 import RecoveryTelemetryPanel from '../components/dashboard/RecoveryTelemetryPanel';
+import DeviceBandCard from '../components/dashboard/DeviceBandCard';
 import FluidLogConfirmModal from '../components/dashboard/FluidLogConfirmModal';
 import FluidLogSuccessModal from '../components/dashboard/FluidLogSuccessModal';
-import PBWRBreakdownCard from '../components/dashboard/PBWRBreakdownCard';
 import { PBWRBreakdown } from '../services/PBWRService';
 import DailyTargetService from '../services/DailyTargetService';
 import TelemetryHistoryService from '../services/TelemetryHistoryService';
 import NotificationEngine from '../services/NotificationEngine';
 import ConfigService from '../services/ConfigService';
 import { warmBackend } from '../config/backend';
+import {
+  ThemeScope,
+  onAccent,
+  themed,
+  tone,
+  useThemeMode,
+} from '../theme/theme';
+import type { InfoTopic } from '../content/infoContent';
+
+/** How long the app may stay over the lock screen with no reminder showing. */
+const LOCK_SCREEN_RELEASE_GRACE_MS = 8 * 1000;
 
 const HomeScreen = ({ navigation }: any) => {
   const [waterLogs, setWaterLogs] = useState<HydrationLog[]>([]);
   const [userProfile, setUserProfile] = useState<UserProfile | undefined>(undefined);
   const [userId, setUserId] = useState<string | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  /**
+   * The shared dark/light mode. Read here so the whole dashboard re-renders
+   * when it changes, whichever control changed it.
+   */
+  const themeMode = useThemeMode();
+  const insets = useSafeAreaInsets();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [quickLogOpen, setQuickLogOpen] = useState(false);
+  /** The header's "+": onboarding's device connection screen, in a sheet. */
+  const [deviceConnectOpen, setDeviceConnectOpen] = useState(false);
   /**
    * The amount the quick-log sheet should open on, when it was opened from a
    * suggestion rather than from the "+" or the Log tab. Null for every other
@@ -87,10 +108,6 @@ const HomeScreen = ({ navigation }: any) => {
   const [loggedAmountMl, setLoggedAmountMl] = useState<number | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
 
-  const [insights, setInsights] = useState<AIInsight[]>([]);
-  /** Which pair of insights is showing; each "Refresh Core" tap moves on. */
-  const insightVariant = useRef(0);
-  const [insightsRefreshing, setInsightsRefreshing] = useState(false);
   const [pbwrBreakdown, setPbwrBreakdown] = useState<PBWRBreakdown | null>(null);
 
   /**
@@ -182,7 +199,7 @@ const HomeScreen = ({ navigation }: any) => {
   // Subscribed rather than read once: the config arrives over the network, so
   // a screen that only sampled it at mount would keep showing the previous
   // one until something unrelated re-rendered it.
-  const appConfig = useAppConfig();
+  useAppConfig();
 
   const telemetry = useHydrationTelemetry(userProfile, waterLogs);
 
@@ -253,6 +270,14 @@ const HomeScreen = ({ navigation }: any) => {
    */
   const reminderConfirmingRef = useRef(false);
 
+  const openInfoTopic = useCallback(
+    (topic: InfoTopic) => {
+      setMenuOpen(false);
+      navigation.navigate('Info', { topic });
+    },
+    [navigation]
+  );
+
   useEffect(() => {
     fetchUserData();
     setupNotifications();
@@ -300,7 +325,9 @@ const HomeScreen = ({ navigation }: any) => {
     // the current state, then kept in step with every change to it.
     const syncActiveReminder = async () => {
       try {
-        const next = await ActiveReminder.due();
+        // Sleep-aware: nothing is put up in the sleep window; the reminder
+        // stays stored and comes back after wake-up.
+        const next = await NotificationService.reminderDueNow();
         setActiveReminder(current =>
           next === null && reminderConfirmingRef.current ? current : next
         );
@@ -377,7 +404,8 @@ const HomeScreen = ({ navigation }: any) => {
       setWaterLogs(prev => (prev.some(log => log.id === entry.id) ? prev : [entry, ...prev]));
     });
 
-    // Returning to the app restarts the reminder countdown from now.
+    // Returning to the app rebuilds the notification queues. The reminder
+    // countdown stays anchored on the last drink, so this does not reset it.
     //
     // Only a real return counts. Android re-reports 'active' repeatedly — on
     // this device roughly once a second — and the handler used to run in full
@@ -391,6 +419,12 @@ const HomeScreen = ({ navigation }: any) => {
       previousAppState = state;
       if (!returned) return;
 
+      // Returning to the app is opening it: the same 5-minute quiet period
+      // applies, so reopening never releases a burst of notifications.
+      NotificationEngine.markSessionStart();
+      // The notification permission may have been changed in Settings while
+      // the app was away: the banner follows Android's real state.
+      void NotificationService.hasNotificationPermission().then(setNotificationsEnabled);
       replayPendingPrompts();
       // A reminder delivered, snoozed or answered while the app was away.
       syncActiveReminder();
@@ -403,9 +437,19 @@ const HomeScreen = ({ navigation }: any) => {
       refreshUnseen();
       ConfigService.refresh().catch(() => undefined);
       warmBackend();
-      NotificationService.scheduleHydrationReminders();
-      NotificationService.scheduleDailyNotifications();
-      NotificationService.scheduleSimulatedNotifications();
+      // Re-read the profile and reconcile: a wake/sleep window (or name)
+      // changed elsewhere is applied now; an unchanged one rebuilds nothing
+      // unless the 7-day queues are due a top-up.
+      void (async () => {
+        const userId = await AuthService.getCurrentUserId();
+        if (!userId) return;
+        await reconcileNotificationsWithProfile(userId, {
+          fullRebuild: NotificationService.isScheduleStale(),
+        });
+        // Deliveries that reached the tray while the app was away go into the
+        // bell even when nothing was rebuilt.
+        await NotificationService.syncDeliveredFromTray();
+      })().catch(error => console.error('[Notifications] Resume sync failed:', error));
     });
 
     return () => {
@@ -420,6 +464,48 @@ const HomeScreen = ({ navigation }: any) => {
     };
   }, []);
 
+  // Messages the admin panel sends to every user. There is no push server, so
+  // the app collects them itself: on arriving here, on returning to the
+  // foreground, and on a short interval while it is open.
+  useEffect(() => {
+    if (!userId) return;
+    const check = () => {
+      if (AppState.currentState === 'active') void checkAdminBroadcasts(userId);
+    };
+    check();
+    const timer = setInterval(check, ADMIN_BROADCAST_POLL_MS);
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') check();
+    });
+    return () => {
+      clearInterval(timer);
+      sub.remove();
+    };
+  }, [userId]);
+
+  // The app may show over the lock screen only while a reminder is
+  // outstanding (native turns it on when a reminder launches the app on a
+  // locked phone). With none showing, it is turned off so the lock screen
+  // returns. The grace period covers a cold start from the reminder, where
+  // this screen can mount a moment before the background handler has
+  // recorded the reminder it was launched for. In the sleep window there is
+  // no grace at all: nothing may show over the lock screen at night.
+  useEffect(() => {
+    if (activeReminder) return;
+    let cancelled = false;
+    let release: ReturnType<typeof setTimeout> | undefined;
+    void NotificationService.lockScreenReleaseDelayMs(LOCK_SCREEN_RELEASE_GRACE_MS).then(delay => {
+      if (cancelled) return;
+      release = setTimeout(() => {
+        void NotificationService.setShowOverLockScreen(false);
+      }, delay);
+    });
+    return () => {
+      cancelled = true;
+      if (release) clearTimeout(release);
+    };
+  }, [activeReminder]);
+
   /**
    * Push setup is best-effort: a device without Play Services, a revoked
    * permission or a missing Firebase config should cost the user their
@@ -430,13 +516,11 @@ const HomeScreen = ({ navigation }: any) => {
     try {
       await NotificationService.setupFCM();
       await NotificationService.getFCMToken();
-      const hasPermission = await NotificationService.requestPermission();
+      // A read, not a prompt: the permission screen is what asks.
+      const hasPermission = await NotificationService.hasNotificationPermission();
       setNotificationsEnabled(hasPermission);
-      await NotificationService.scheduleHydrationReminders();
-      // 07:00 and 22:00 messages, queued with the OS so they arrive on time
-      // whether or not the app is open.
-      await NotificationService.scheduleDailyNotifications();
-      await NotificationService.scheduleSimulatedNotifications();
+      // The schedule itself is built in `fetchUserData`, once the profile —
+      // and so the real wake/sleep window — has been read.
     } catch (error) {
       console.error('[Notifications] Setup failed:', error);
     }
@@ -479,17 +563,18 @@ const HomeScreen = ({ navigation }: any) => {
 
         // Sync local telemetry history to Supabase for Admin parity
         TelemetryHistoryService.syncLocalToCloud(uId);
-
-        // Reminders are scheduled by the OS from contexts that never see this
-        // row, so the sleep window is handed to the notification layer on
-        // every load. That also picks up a window edited on another device.
-        try {
-          await NotificationService.setNotificationRecipient(profile.fullName);
-          await NotificationService.setSleepSchedule(normaliseSleepSchedule(profile));
-        } catch (sleepError) {
-          console.error('[Notifications] Failed to apply sleep window:', sleepError);
-        }
       }
+
+      // Built once, now that the profile has been read: its wake/sleep
+      // window is the source of truth, and if the read failed the stored
+      // window (the last profile seen) is used rather than a default. A full
+      // rebuild on every load keeps the 7-day queues topped up; it replaces
+      // entries in place, so it never duplicates. Also covers a reinstall,
+      // where Android has no alarms left and everything is built from here.
+      await reconcileNotificationsWithProfile(uId, {
+        fullRebuild: true,
+        profileResult: { profile, failed: profileFailed },
+      });
 
       // Today's hydration logs — the widget reports a *daily* total, so
       // yesterday's entries must not be counted in it.
@@ -581,20 +666,6 @@ const HomeScreen = ({ navigation }: any) => {
 
   const profileInitial =
     (typeof userProfile?.gender === 'string' && userProfile.gender.charAt(0).toUpperCase()) || 'U';
-
-  const newestLog = useMemo(
-    () =>
-      waterLogs.reduce<HydrationLog | null>(
-        (latest, log) => (latest === null || log.timestamp > latest.timestamp ? log : latest),
-        null
-      ),
-    [waterLogs]
-  );
-
-  /** Real hours since the newest entry — what the "Last Intake" tile reports. */
-  const hoursSinceLastLog = newestLog
-    ? (Date.now() - new Date(newestLog.timestamp).getTime()) / 3_600_000
-    : 0;
 
   /**
    * After a sign-out, `reset` rather than `navigate`: the back gesture must not
@@ -712,6 +783,7 @@ const HomeScreen = ({ navigation }: any) => {
   // The sensor stream re-renders this screen every couple of seconds, and the
   // quick-log sheet closes itself on a timer keyed to its `onClose` prop — an
   // inline arrow would restart that timer on every tick. These stay stable.
+  const closeDeviceConnect = useCallback(() => setDeviceConnectOpen(false), []);
   const closeQuickLog = useCallback(() => {
     setQuickLogOpen(false);
     // Cleared on close so the next "+" opens on the usual default rather than
@@ -748,46 +820,30 @@ const HomeScreen = ({ navigation }: any) => {
     setLogError(null);
   }, []);
 
-  // Insights are derived from the current solve, so they are regenerated when
-  // the risk band moves rather than on every sensor tick — a card that rewrote
-  // itself twice a second would be unreadable.
-  const refreshInsights = useCallback(() => {
-    setInsights(
-      generateInsights(
-        {
-          sensorData: telemetry.sensorData,
-          risk: telemetry.solvedRisk,
-          hoursSinceDrink: telemetry.effectiveHoursSinceDrink,
-          totalMl: totalWaterConsumed,
-          targetMl,
-        },
-        insightVariant.current
-      )
-    );
-  }, [telemetry, totalWaterConsumed, targetMl]);
-
-  /** "Refresh Core": show the next two insights from the pool. */
-  const showNextInsights = useCallback(() => {
-    insightVariant.current += 1;
-    setInsightsRefreshing(true);
-    refreshInsights();
-    // A brief "Syncing" so the tap visibly registered.
-    setTimeout(() => setInsightsRefreshing(false), 400);
-  }, [refreshInsights]);
-
   useEffect(() => {
-    refreshInsights();
     if (userProfile && userId) {
       // Through `DailyTargetService`, not `PBWRService` directly: this effect
       // re-runs on every telemetry tick, and the live pipeline returns a
       // different goal each time an observed average crosses a band edge. The
       // goal is locked for the local day so it holds still while the user is
       // drinking against it.
-      DailyTargetService.getTodayBreakdown(userProfile, totalWaterConsumed, userId).then(
-        setPbwrBreakdown
-      );
+      DailyTargetService.getTodayBreakdown(userProfile, totalWaterConsumed, userId).then(breakdown => {
+        setPbwrBreakdown(breakdown);
+        // The Daily Water Requirement notification shows this same figure; a
+        // no-op unless the target actually changed.
+        NotificationService.setDailyWaterTarget(breakdown.finalTarget).catch(error =>
+          console.error('[Notifications] Failed to apply the daily water target:', error)
+        );
+        // The profile in memory carries the same Final Daily Target, so the
+        // notification engine (goal / PBWR 50%), the telemetry hook and the
+        // profile editor all read the number the dashboard shows.
+        setUserProfile(current =>
+          current && current.targetDailyMl !== breakdown.finalTarget
+            ? { ...current, targetDailyMl: breakdown.finalTarget }
+            : current
+        );
+      }).catch(error => console.error('[DailyTarget] Failed to compute today’s target:', error));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [telemetry.solvedRisk.status, totalWaterConsumed, userProfile, userId]);
 
   useEffect(() => {
@@ -805,91 +861,74 @@ const HomeScreen = ({ navigation }: any) => {
     }
   }, [telemetry.sensorData, userProfile, userId, telemetry.solvedRisk, waterLogs]);
 
-  // Which diagnoses require a doctor's daily limit is a property of the
-  // condition in the admin config, not a list of ids repeated on each screen.
-  // Read from `appConfig` rather than through ConfigService so the dependency
-  // on the config is visible to React (and to the linter): a condition
-  // re-flagged in the admin panel changes this gate without a reload.
-  const isPhysicianGated = useMemo(
-    () =>
-      (userProfile?.medicalConditions ?? []).some(id =>
-        appConfig.medicalConditions.some(
-          condition => condition.id === id && condition.requiresPhysicianLimit
-        )
-      ),
-    [userProfile, appConfig]
-  );
-
   return (
-    <View className="flex-1 bg-[#02050e]">
+    <ThemeScope.Provider value>
+    <View className={themed('flex-1 bg-[#02050e]')}>
       {/* Background Atmosphere */}
-      <View className="absolute inset-0">
+      <View className={themed('absolute inset-0')}>
         <Svg height="100%" width="100%">
           <Defs>
             <RadialGradient id="bgGrad" cx="50%" cy="30%" rx="80%" ry="40%" fx="50%" fy="30%" gradientUnits="userSpaceOnUse">
-              <Stop offset="0%" stopColor="#1e293b" stopOpacity="0.15" />
-              <Stop offset="100%" stopColor="#02050e" stopOpacity="1" />
+              <Stop offset="0%" stopColor={tone('#1e293b', '#ffffff')} stopOpacity={tone('0.15', '0.7')} />
+              <Stop offset="100%" stopColor={tone('#02050e', '#f5f5f3')} stopOpacity="1" />
             </RadialGradient>
           </Defs>
           <SvgRect x="0" y="0" width="100%" height="100%" fill="url(#bgGrad)" />
         </Svg>
       </View>
 
-      <SafeAreaView className="flex-1" edges={['top', 'left', 'right']}>
+      {/* Dark icons over the light background; dark mode keeps the default. */}
+      {themeMode === 'light' && <StatusBar barStyle="dark-content" />}
+
+      <SafeAreaView className={themed('flex-1')} edges={['top', 'left', 'right']}>
         <ScrollView
-          className="flex-1 px-4 pt-4"
+          className={themed('flex-1 px-4 pt-4')}
           showsVerticalScrollIndicator={false}
-          // The navbar floats 32px off the bottom and stands 80px tall, and the
-          // chat FAB sits above that again — so content has to clear ~184px
-          // before the last card is fully readable. Padding rather than a
-          // spacer view, so the scroll indicator and overscroll agree with it.
-          contentContainerStyle={{ paddingBottom: 200 }}
+          // The navbar is docked over the system navigation and the chat FAB
+          // sits above it again — so content has to clear all three before
+          // the last card is fully readable (see
+          // `navLayout`). Padding rather than a spacer view, so the scroll
+          // indicator and overscroll agree with it.
+          contentContainerStyle={{ paddingBottom: dashboardBottomPadding(insets.bottom) }}
         >
 
-          {/* Header */}
-          <View
-            className="flex-row justify-between items-center gap-3"
-            style={{ marginBottom: CARD_GAP }}
-          >
-            {/* The strapline is the widest thing in this row. Left unbounded it
-                sized the column past the screen and pushed the action buttons
-                off the right edge, clipping the "+". It now shrinks with the
-                row, and the buttons keep their intrinsic width. */}
-            <View className="flex-1">
+          {/* Top navigation: menu, logo, notifications, log, connect device. */}
+          <View className={themed('flex-row items-center')} style={{ marginBottom: 10 }}>
+            {/* Menu on the left; notifications and log on the right, in that
+                order. The logo is centred in the space between them and gives
+                way first on a narrow screen. The dark/light switch lives in
+                the menu. */}
+            <View className={themed('flex-row')}>
+              <TouchableOpacity
+                className={themed('w-10 h-10 rounded-2xl bg-white/[0.03] border border-white/10 items-center justify-center')}
+                onPress={() => setMenuOpen(true)}
+                hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel="Menu"
+                testID="header-menu"
+              >
+                <Menu color={tone('#94a3b8', '#52525b')} size={20} />
+              </TouchableOpacity>
+            </View>
+
+            <View className={themed('flex-1 items-center overflow-hidden px-1')}>
               {/* The logo is the tap target for the sensor test panel — see
                   `handleLogoTap`. It carries no accessibility role or label of
                   its own, because it is not an advertised control and reading
                   one out would defeat the point of hiding it. */}
               <TouchableOpacity onPress={handleLogoTap} activeOpacity={1} accessible={false}>
-                <BrandLogo size={32} fillProgress={1} withText={true} textSize="sm" />
+                <HeaderWordmark />
               </TouchableOpacity>
-              {telemetry.sensorOverride ? (
-                <TouchableOpacity
-                  className="flex-row items-center gap-1.5 mt-2 self-start rounded-md bg-amber-500/15 border border-amber-500/40 px-2 py-[3px]"
-                  onPress={() => setSensorPanelOpen(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Sensor readings are pinned. Open the test panel."
-                >
-                  <Text className="text-[8px] uppercase tracking-[0.18em] text-amber-400 font-mono font-black">
-                    Pinned readings
-                  </Text>
-                </TouchableOpacity>
-              ) : (
-                <Text
-                  className="text-[8px] uppercase tracking-[0.18em] text-cyan-400 font-mono font-black mt-2"
-                  numberOfLines={1}
-                >
-                  AI-Powered Hydration Intelligence
-                </Text>
-              )}
             </View>
-            <View className="flex-row gap-3 shrink-0">
+
+            <View className={themed('flex-row justify-end gap-1.5')}>
               {/* Both header actions share a size, radius and border weight;
                   only the fill separates the primary action from the secondary
                   one. */}
               <TouchableOpacity
-                className="w-11 h-11 rounded-2xl bg-white/[0.03] border border-white/10 items-center justify-center"
+                className={themed('w-10 h-10 rounded-2xl bg-white/[0.03] border border-white/10 items-center justify-center')}
                 onPress={() => setNotificationsOpen(true)}
+                hitSlop={4}
                 accessibilityRole="button"
                 accessibilityLabel={
                   unseenNotifications > 0
@@ -897,24 +936,62 @@ const HomeScreen = ({ navigation }: any) => {
                     : 'Notifications'
                 }
               >
-                <Bell color={unseenNotifications > 0 ? '#00f2fe' : '#94a3b8'} size={20} />
+                <Bell color={unseenNotifications > 0 ? tone('#00f2fe', '#0e7490') : tone('#94a3b8', '#52525b')} size={20} />
                 {unseenNotifications > 0 && (
-                  <View className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#00f2fe] items-center justify-center border-2 border-[#02050e]">
-                    <Text className="text-[9px] font-black text-[#020617]">
+                  <View className={themed('absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#00f2fe] items-center justify-center border-2 border-[#02050e]')}>
+                    <Text className={themed('text-[9px] font-black text-[#020617]')}>
                       {unseenNotifications > 9 ? '9+' : unseenNotifications}
                     </Text>
                   </View>
                 )}
               </TouchableOpacity>
+              {/* Opens the log sheet itself, not the Fluid Logs section. */}
               <TouchableOpacity
-                className="w-11 h-11 rounded-2xl bg-[#00f2fe] border border-[#00f2fe] items-center justify-center shadow-lg shadow-cyan-500/25"
+                className={themed('w-10 h-10 rounded-2xl bg-[#00f2fe] border border-[#00f2fe] items-center justify-center shadow-lg shadow-cyan-500/25')}
                 onPress={() => setQuickLogOpen(true)}
+                hitSlop={4}
                 accessibilityRole="button"
                 accessibilityLabel="Log water"
+                testID="header-log"
               >
-                <Plus color="#020617" size={20} strokeWidth={3} />
+                <Droplets color={onAccent()} size={20} strokeWidth={2.5} />
+              </TouchableOpacity>
+              {/* Connect a device: onboarding's connection screen, in a sheet.
+                  Drawn as a secondary action, like notifications. */}
+              <TouchableOpacity
+                className={themed('w-10 h-10 rounded-2xl bg-white/[0.03] border border-white/10 items-center justify-center')}
+                onPress={() => setDeviceConnectOpen(true)}
+                hitSlop={4}
+                accessibilityRole="button"
+                accessibilityLabel="Connect a device"
+                testID="header-connect-device"
+              >
+                <Plus color={tone('#94a3b8', '#52525b')} size={20} />
               </TouchableOpacity>
             </View>
+          </View>
+
+          {/* Tagline */}
+          <View className={themed('items-center')} style={{ marginBottom: CARD_GAP }}>
+            {telemetry.sensorOverride ? (
+              <TouchableOpacity
+                className={themed('flex-row items-center gap-1.5 rounded-md bg-amber-500/15 border border-amber-500/40 px-2 py-[3px]')}
+                onPress={() => setSensorPanelOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Sensor readings are pinned. Open the test panel."
+              >
+                <Text className={themed('text-[8px] uppercase tracking-[0.18em] text-amber-400 font-mono font-black')}>
+                  Pinned readings
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text
+                className={themed('text-[8px] uppercase tracking-[0.18em] text-cyan-400 font-mono font-black')}
+                numberOfLines={1}
+              >
+                AI-Powered Hydration Intelligence
+              </Text>
+            )}
           </View>
 
           {/*
@@ -927,24 +1004,31 @@ const HomeScreen = ({ navigation }: any) => {
             reminder lands here.
           */}
           {!notificationsEnabled && (
-            <GlassCard
-              className="bg-amber-500/10 border-amber-500/25 flex-row items-center gap-3"
+            <GlassCard adaptive
+              className={themed('bg-amber-500/10 border-amber-500/25 flex-row items-center gap-3')}
               style={cardStyle}
             >
               <BellOff color="#f59e0b" size={20} />
-              <View className="flex-1">
-                <Text className="text-amber-500 font-bold text-xs">Notifications are disabled</Text>
-                <Text className="text-amber-500/70 text-[10px] mt-0.5">
+              <View className={themed('flex-1')}>
+                <Text className={themed('text-amber-500 font-bold text-xs')}>Notifications are disabled</Text>
+                <Text className={themed('text-amber-500/70 text-[10px] mt-0.5')}>
                   You won't receive hydration reminders or risk alerts.
                 </Text>
               </View>
               <TouchableOpacity
-                onPress={() => NotificationService.requestPermission().then(setNotificationsEnabled)}
+                onPress={async () => {
+                  // The dialog when Android will still show it; otherwise the
+                  // settings page. The banner follows the real state either way
+                  // (re-read here, and again when the user comes back).
+                  const granted = await NotificationService.promptForNotificationPermission();
+                  if (!granted) await NotificationService.openNotificationSettings();
+                  setNotificationsEnabled(await NotificationService.hasNotificationPermission());
+                }}
                 accessibilityRole="button"
                 accessibilityLabel="Enable notifications"
-                className="shrink-0 bg-amber-500/20 px-3.5 py-2 rounded-xl border border-amber-500/40"
+                className={themed('shrink-0 bg-amber-500/20 px-3.5 py-2 rounded-xl border border-amber-500/40')}
               >
-                <Text className="text-amber-500 font-black text-[10px] tracking-wider">ENABLE</Text>
+                <Text className={themed('text-amber-500 font-black text-[10px] tracking-wider')}>ENABLE</Text>
               </TouchableOpacity>
             </GlassCard>
           )}
@@ -974,22 +1058,8 @@ const HomeScreen = ({ navigation }: any) => {
                 risk={telemetry.solvedRisk}
                 totalMl={totalWaterConsumed}
                 targetMl={targetMl}
-                hoursSinceDrink={hoursSinceLastLog}
-                lastIntakeMl={newestLog?.amountMl ?? null}
                 absorbing={telemetry.stomachVolume > 0}
                 updatedAt={telemetry.riskUpdatedAt}
-                // The five readings the engine is solved over, and the seam that
-                // pins them. Handing these in is what makes the load breakdown
-                // editable; the card falls back to read-only without them.
-                inputs={{
-                  heartRate: telemetry.sensorData.heartRate,
-                  activityLoad: telemetry.sensorData.activityLoad,
-                  temperature: telemetry.sensorData.temperature,
-                  humidity: telemetry.sensorData.humidity,
-                  gapHours: telemetry.effectiveHoursSinceDrink,
-                }}
-                override={telemetry.sensorOverride}
-                onOverrideChange={telemetry.setSensorOverride}
                 onRequirementPress={openQuickLogFor}
               />
 
@@ -1006,23 +1076,7 @@ const HomeScreen = ({ navigation }: any) => {
 
             <QuickFluidLogStation onSelectAmount={openConfirmation} disabled={savingLog} />
 
-            {pbwrBreakdown && (
-              <PBWRBreakdownCard
-                breakdown={pbwrBreakdown}
-                hasPhysicianLimit={!!userProfile?.physicianLimitMl}
-                isPhysicianGated={isPhysicianGated}
-              />
-            )}
-
-            <CoreAIInsights
-              insights={insights}
-              onRefresh={showNextInsights}
-              refreshing={insightsRefreshing}
-            />
-
             <FluidLoggingFeed logs={waterLogs} />
-
-            <WhyThisScoreCard risk={telemetry.solvedRisk} />
 
             <RecoveryTelemetryPanel
               stomachVolume={telemetry.stomachVolume}
@@ -1038,34 +1092,10 @@ const HomeScreen = ({ navigation }: any) => {
               onToggle={() => setTelemetryExpanded(prev => !prev)}
             />
 
-            {/* Hardware Status */}
-            <GlassCard
-              className="flex-row items-center justify-between border-white/5 bg-black/60"
-              style={cardStyle}
-            >
-              <View className="flex-row items-center gap-3.5">
-                <View className="p-2.5 bg-neutral-900 rounded-2xl border border-white/5">
-                  <Cpu color="#00f2fe" size={17} />
-                </View>
-                <View>
-                  <Text className="text-[10px] font-black text-white uppercase tracking-widest font-mono">
-                    ESP32 Core Link
-                  </Text>
-                  <View className="flex-row items-center gap-1.5 mt-1">
-                    <View className={`w-1.5 h-1.5 rounded-full ${TelemetryHistoryService.isFresh(telemetry.sensorData.lastUpdated) ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                    <Text className="text-[9px] text-neutral-500 font-mono font-bold uppercase tracking-widest">
-                      {TelemetryHistoryService.isFresh(telemetry.sensorData.lastUpdated) ? 'Streaming encrypted' : 'Offline / Status Unknown'}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-              <View className="flex-row items-center gap-2.5 bg-white/[0.03] px-3 py-1.5 rounded-xl">
-                <Battery color={telemetry.sensorData.batteryLevel && telemetry.sensorData.batteryLevel <= 20 ? '#ef4444' : '#10b981'} size={16} />
-                <Text className={`text-[11px] font-black font-mono ${telemetry.sensorData.batteryLevel && telemetry.sensorData.batteryLevel <= 20 ? 'text-red-500' : 'text-emerald-500'}`}>
-                  {telemetry.sensorData.batteryLevel !== null ? `${telemetry.sensorData.batteryLevel}%` : '--%'}
-                </Text>
-              </View>
-            </GlassCard>
+            <DeviceBandCard
+              connected={TelemetryHistoryService.isFresh(telemetry.sensorData.lastUpdated)}
+              batteryLevel={telemetry.sensorData.batteryLevel}
+            />
             </>
           )}
 
@@ -1085,6 +1115,8 @@ const HomeScreen = ({ navigation }: any) => {
           an unanswered reminder outranks whatever else is on screen — that is
           the whole difference between this and the notification it replaces.
         */}
+        {/* Follows the dark/light mode like every other screen here, so the
+            shared controls inside it do too. */}
         <ReminderFullScreen
           visible={activeReminder !== null}
           firedAt={activeReminder?.firedAt ?? null}
@@ -1110,6 +1142,12 @@ const HomeScreen = ({ navigation }: any) => {
           hoursSinceDrink={telemetry.effectiveHoursSinceDrink}
         />
 
+        <DashboardMenu
+          visible={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          onOpenTopic={openInfoTopic}
+        />
+
         <NotificationCenter
           visible={notificationsOpen}
           onClose={closeNotifications}
@@ -1123,6 +1161,8 @@ const HomeScreen = ({ navigation }: any) => {
           targetMl={targetMl}
           prefillMl={quickLogPrefillMl}
         />
+
+        <DeviceConnectSheet visible={deviceConnectOpen} onClose={closeDeviceConnect} />
 
         <FluidLogConfirmModal
           amountMl={pendingAmountMl}
@@ -1159,6 +1199,7 @@ const HomeScreen = ({ navigation }: any) => {
           onSaved={handleProfileSaved}
         />
 
+        <ThemeScope.Provider value={false}>
         <SensorTestPanel
           visible={sensorPanelOpen}
           onClose={() => setSensorPanelOpen(false)}
@@ -1173,12 +1214,14 @@ const HomeScreen = ({ navigation }: any) => {
           override={telemetry.sensorOverride}
           onApply={telemetry.setSensorOverride}
         />
+        </ThemeScope.Provider>
 
         {/* The chat writes through HydrationService itself and reports back
             over ChatBus, so no logging callback is threaded through here. */}
         <AquaSageChat userProfile={userProfile} />
       </SafeAreaView>
     </View>
+    </ThemeScope.Provider>
   );
 };
 

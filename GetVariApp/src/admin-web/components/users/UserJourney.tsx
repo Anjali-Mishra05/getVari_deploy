@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityEvent, User } from '../../types';
 import ActivityService from '../../services/ActivityService';
+import { UserClock, describeOffset, formatUserTime, startOfUserDay, userDateKey } from '../../utils/userClock';
 import {
   Cpu,
   Server,
@@ -62,6 +63,8 @@ const humanizeEvent = (ev: ActivityEvent) => {
       return { title: 'Telemetry received', desc: ev.description || 'Live sensor metrics captured.' };
     case 'water_intake_added':
       return { title: 'Water intake recorded', desc: `Logged ${ev.metadata?.amount ?? '0'} mL of water.` };
+    case 'water_intake_corrected':
+      return { title: 'Intake corrected', desc: ev.description || 'A logged amount was taken back.' };
     case 'ai_recommendation':
       return {
         title: 'AI Recommendation',
@@ -74,21 +77,28 @@ const humanizeEvent = (ev: ActivityEvent) => {
   }
 };
 
-const formatDateHeading = (dateStr: string) => {
-  const d = new Date(dateStr);
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
+const DAY_MS = 24 * 60 * 60 * 1000;
+const isIntake = (ev: ActivityEvent) =>
+  ev.eventType === 'water_intake_added' || ev.eventType === 'water_intake_corrected';
 
-  if (d.toDateString() === today.toDateString()) return `Today — ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}`;
-  if (d.toDateString() === yesterday.toDateString()) return `Yesterday — ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}`;
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+/** "Today — 16 October", on the user's calendar rather than the admin's. */
+const formatDateHeading = (dateStr: string, clock: UserClock) => {
+  const key = userDateKey(clock, new Date(dateStr).getTime());
+  // Noon UTC of that calendar date, so no zone can push the label a day over.
+  const label = (opts: Intl.DateTimeFormatOptions) =>
+    new Date(`${key}T12:00:00Z`).toLocaleDateString(undefined, { ...opts, timeZone: 'UTC' });
+  const now = Date.now();
+  if (key === userDateKey(clock, now)) return `Today — ${label({ day: 'numeric', month: 'long' })}`;
+  if (key === userDateKey(clock, now - DAY_MS)) return `Yesterday — ${label({ day: 'numeric', month: 'long' })}`;
+  return label({ day: 'numeric', month: 'long', year: 'numeric' });
 };
 
-const formatTime = (timestamp: string) => new Date(timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+const formatTime = (timestamp: string, clock: UserClock) => formatUserTime(clock, new Date(timestamp).getTime());
 
 const UserJourney: React.FC<Props> = ({ user }) => {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [eventsError, setEventsError] = useState<string | null>(null);
+  const clock = user.clock;
   const [query, setQuery] = useState('');
   const [actorFilter, setActorFilter] = useState<'All' | 'User' | 'AI' | 'System' | 'Admin'>('All');
   const [range, setRange] = useState<'7' | '30' | 'all' | '1'>('1');
@@ -96,35 +106,34 @@ const UserJourney: React.FC<Props> = ({ user }) => {
   const [openEventId, setOpenEventId] = useState<string | null>(null);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
 
+  // Re-read when the user list's refresh shows new activity, so an entry
+  // logged on the phone reaches an open journey too.
   useEffect(() => {
     let mounted = true;
-    ActivityService.fetchEventsForUser(user.id).then(ev => {
-      if (mounted) setEvents(ev.reverse());
-    });
+    ActivityService.fetchEventsForUser(user.id)
+      .then(ev => {
+        if (!mounted) return;
+        setEvents(ev.reverse());
+        setEventsError(null);
+      })
+      .catch(err => {
+        console.error('[UserJourney] Events not loaded:', err);
+        if (mounted) setEventsError(err?.message ?? String(err));
+      });
     return () => { mounted = false; };
-  }, [user.id]);
+  }, [user.id, user.lastSynced]);
 
   const filtered = useMemo(() => {
-    const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setHours(0, 0, 0, 0);
-    const startOf7DaysAgo = new Date(startOfToday);
-    startOf7DaysAgo.setDate(startOfToday.getDate() - 6);
-    const startOf30DaysAgo = new Date(startOfToday);
-    startOf30DaysAgo.setDate(startOfToday.getDate() - 29);
-
-    const cutoff = range === '7' ? startOf7DaysAgo.getTime()
-      : range === '30' ? startOf30DaysAgo.getTime()
-        : range === '1' ? startOfToday.getTime() : 0;
-
-    const customCutoff = customDate ? new Date(customDate).setHours(0, 0, 0, 0) : null;
+    // Day boundaries on the user's clock, the way the app draws its "today".
+    const now = Date.now();
+    const cutoff = range === '7' ? startOfUserDay(clock, now - 6 * DAY_MS)
+      : range === '30' ? startOfUserDay(clock, now - 29 * DAY_MS)
+        : range === '1' ? startOfUserDay(clock, now) : 0;
 
     return events.filter(e => {
       if (actorFilter !== 'All' && e.actor !== actorFilter) return false;
-      if (customCutoff !== null) {
-        const eventDate = new Date(e.timestamp);
-        eventDate.setHours(0, 0, 0, 0);
-        if (eventDate.getTime() !== customCutoff) return false;
+      if (customDate) {
+        if (userDateKey(clock, new Date(e.timestamp).getTime()) !== customDate) return false;
       } else if (cutoff && new Date(e.timestamp).getTime() < cutoff) return false;
       if (query) {
         const q = query.toLowerCase();
@@ -132,37 +141,38 @@ const UserJourney: React.FC<Props> = ({ user }) => {
       }
       return true;
     });
-  }, [events, actorFilter, range, query, customDate]);
+  }, [events, actorFilter, range, query, customDate, clock]);
 
   const byDateGroups = useMemo(() => {
     const groups: Record<string, ActivityEvent[]> = {};
     const sorted = [...filtered].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     sorted.forEach(ev => {
-      const key = new Date(ev.timestamp).toDateString();
+      const key = userDateKey(clock, new Date(ev.timestamp).getTime());
       groups[key] = groups[key] || [];
       groups[key].push(ev);
     });
     return groups;
-  }, [filtered]);
+  }, [filtered, clock]);
 
   const stats = useMemo(() => {
-    const intakeEvents = filtered.filter(e => e.eventType === 'water_intake_added');
+    // Corrections are negative entries and count, as in the app's total.
+    const intakeEvents = filtered.filter(isIntake);
     const aiEvents = filtered.filter(e => e.category === 'AI');
     const followedAi = aiEvents.filter(e => e.metadata?.userResponse === 'Completed');
     const errorEvents = filtered.filter(e => e.category === 'Error');
 
     const waterConsumed = intakeEvents.reduce((acc, e) => acc + (e.metadata?.amount || 0), 0);
     const waterRecommended = user.targetDailyMl;
-    const compliance = waterRecommended > 0 ? Math.min(100, Math.round((waterConsumed / waterRecommended) * 100)) : 0;
+    const compliance = waterRecommended && waterRecommended > 0
+      ? Math.max(0, Math.min(100, Math.round((waterConsumed / waterRecommended) * 100)))
+      : 0;
 
-    // Sort filtered events by timestamp to get range trend
-    const telemetryEvents = filtered
-      .filter(e => e.eventType === 'telemetry_received' && e.metadata?.risk !== undefined)
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-    const riskStart = telemetryEvents.length > 0 ? telemetryEvents[0].metadata?.risk : (user.riskHistory[0] || 0);
-    const riskEnd = telemetryEvents.length > 0 ? telemetryEvents[telemetryEvents.length - 1].metadata?.risk : user.riskScore;
-    const riskTrend = riskEnd - riskStart;
+    // The app keeps no risk history: the start is the oldest point of the
+    // recomputed hourly trend, the end the current solve. Either can be
+    // missing ("Insufficient Data"), and then there is no trend to state.
+    const riskStart = user.riskHistory.find(v => v !== null) ?? null;
+    const riskEnd = user.riskScore;
+    const riskTrend = riskStart !== null && riskEnd !== null ? riskEnd - riskStart : 0;
 
     return {
       waterRecommended,
@@ -181,23 +191,22 @@ const UserJourney: React.FC<Props> = ({ user }) => {
     const dailyData: Record<string, any> = {};
     filtered.forEach(e => {
       // Group by Hour for Today, otherwise by Date
-      const date = range === '1'
-        ? new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        : new Date(e.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      const at = new Date(e.timestamp).getTime();
+      const date = range === '1' ? formatUserTime(clock, at) : userDateKey(clock, at);
 
       if (!dailyData[date]) {
         dailyData[date] = {
           date,
           timestamp: new Date(e.timestamp).getTime(),
           consumed: 0,
-          recommended: user.targetDailyMl,
+          recommended: user.targetDailyMl ?? 0,
           risk: 0,
           riskCount: 0,
           aiRecs: 0,
           aiFollowed: 0
         };
       }
-      if (e.eventType === 'water_intake_added') dailyData[date].consumed += (e.metadata?.amount || 0);
+      if (isIntake(e)) dailyData[date].consumed += (e.metadata?.amount || 0);
       if (e.eventType === 'telemetry_received' && e.metadata?.risk !== undefined) {
         dailyData[date].risk += e.metadata.risk;
         dailyData[date].riskCount++;
@@ -226,7 +235,7 @@ const UserJourney: React.FC<Props> = ({ user }) => {
       }));
 
     return { timeline, scatter };
-  }, [filtered, user, range]);
+  }, [filtered, user, range, clock]);
 
   const accountCreated = events.find(e => e.eventType === 'account_created')?.timestamp;
   const lastActive = events.length ? events[0].timestamp : null;
@@ -255,7 +264,7 @@ const UserJourney: React.FC<Props> = ({ user }) => {
       if (digits.length === 10) return `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
       return phone;
     }
-    return '+91 98765 43210';
+    return 'Phone not provided';
   };
 
   return (
@@ -270,6 +279,10 @@ const UserJourney: React.FC<Props> = ({ user }) => {
             <div>
               <h1 className="text-xl font-black text-slate-900 leading-tight">{user.name}</h1>
               <p className="text-[11px] font-bold text-slate-400">{formatIndianPhone(user.phone)}</p>
+              <p className="text-[10px] font-bold text-slate-400">Times on the user&apos;s clock: {describeOffset(clock)}</p>
+              {eventsError && (
+                <p className="text-[11px] font-bold text-red-600 mt-1">Journey could not be loaded: {eventsError}</p>
+              )}
             </div>
           </div>
 
@@ -284,7 +297,7 @@ const UserJourney: React.FC<Props> = ({ user }) => {
             </div>
             <div>
               <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Daily Goal</div>
-              <div className="text-sm sm:text-base font-black text-blue-600">{user.targetDailyMl} mL</div>
+              <div className="text-sm sm:text-base font-black text-blue-600">{user.targetDailyMl !== null ? `${user.targetDailyMl} mL` : 'Not stated'}</div>
             </div>
           </div>
         </div>
@@ -324,7 +337,7 @@ const UserJourney: React.FC<Props> = ({ user }) => {
                 </span>
               </div>
               <div className="text-lg font-black text-slate-900 leading-none whitespace-nowrap">
-                {stats.waterConsumed} <span className="text-slate-400 font-bold text-[10px]">/ {range === '1' ? stats.waterRecommended : '—'}</span>
+                {stats.waterConsumed} <span className="text-slate-400 font-bold text-[10px]">/ {range === '1' && stats.waterRecommended !== null ? stats.waterRecommended : '—'}</span>
               </div>
             </div>
 
@@ -343,7 +356,7 @@ const UserJourney: React.FC<Props> = ({ user }) => {
               </div>
               <div className="flex flex-col gap-1">
                 <div className="text-lg font-black text-slate-900 leading-none whitespace-nowrap">
-                  {stats.riskStart} <span className="text-slate-300 mx-1">→</span> {stats.riskEnd}
+                  {stats.riskStart ?? '--'} <span className="text-slate-300 mx-1">→</span> {stats.riskEnd ?? '--'}
                 </div>
                 {stats.riskTrend !== 0 && (
                   <div className={`text-[8px] font-black uppercase tracking-tight ${stats.riskTrend > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
@@ -399,7 +412,7 @@ const UserJourney: React.FC<Props> = ({ user }) => {
                 <div key={date} className="space-y-4">
                   <div className="sticky top-24 z-20">
                     <span className="bg-slate-100 text-slate-600 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest border border-slate-200">
-                      {formatDateHeading(evs[0].timestamp)}
+                      {formatDateHeading(evs[0].timestamp, clock)}
                     </span>
                   </div>
                   <div className="space-y-4">
@@ -417,7 +430,7 @@ const UserJourney: React.FC<Props> = ({ user }) => {
                               </div>
                             </div>
                             <div className="text-right">
-                              <div className="text-xs font-black text-slate-400 uppercase">{formatTime(ev.timestamp)}</div>
+                              <div className="text-xs font-black text-slate-400 uppercase">{formatTime(ev.timestamp, clock)}</div>
                               <div className="mt-3">{actorBadge(ev.actor)}</div>
                             </div>
                           </div>

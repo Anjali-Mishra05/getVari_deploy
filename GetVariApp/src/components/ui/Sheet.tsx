@@ -12,6 +12,10 @@ import {
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { X } from 'lucide-react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { useScopedTheme } from '../../theme/theme';
+import { SHEET_SAFE_EDGES } from '../../utils/navLayout';
 
 /**
  * The chrome every popup in the app shares: the scrim, the panel, the title
@@ -111,6 +115,8 @@ const Sheet: React.FC<SheetProps> = ({
   children,
 }) => {
   const { height: windowHeight } = useWindowDimensions();
+  // Light only inside a screen that follows the mode; dark everywhere else.
+  const { pick } = useScopedTheme();
   const panelHeight = heightFraction
     ? Math.min(windowHeight * heightFraction, windowHeight - 60)
     : undefined;
@@ -126,7 +132,9 @@ const Sheet: React.FC<SheetProps> = ({
       {/* RN's Modal opens its own native window outside the app root's
           GestureHandlerRootView; without one here, gesture-handler swallows
           touches inside the sheet on Android. */}
-      <GestureHandlerRootView style={styles.scrim}>
+      <GestureHandlerRootView
+        style={[styles.scrim, { backgroundColor: pick('rgba(0,0,0,0.75)', 'rgba(24,24,27,0.45)') }]}
+      >
         <TouchableOpacity
           activeOpacity={1}
           onPress={onClose}
@@ -135,12 +143,36 @@ const Sheet: React.FC<SheetProps> = ({
           accessibilityLabel={`Close ${title}`}
         />
 
-        <View style={[styles.panel, panelHeight ? { height: panelHeight } : null]}>
-          <View style={styles.grabber} />
+        {/* The panel is a safe-area view on its bottom and side edges, for
+            every sheet at once: where this window runs under Android's
+            navigation (a gesture handle, or the taller 3-button bar) the
+            panel's surface continues behind it and the content — the last
+            row, the action buttons — ends above it. The inset is measured for
+            this window, so where the system keeps the window clear of its
+            navigation nothing is added. */}
+        <SafeAreaView
+          edges={SHEET_SAFE_EDGES}
+          style={[
+            styles.panel,
+            {
+              backgroundColor: pick('#020617', '#ffffff'),
+              borderColor: pick('rgba(255,255,255,0.2)', '#e4e4e7'),
+            },
+            panelHeight ? { height: panelHeight } : null,
+          ]}
+        >
+          <View
+            style={[styles.grabber, { backgroundColor: pick('rgba(255,255,255,0.14)', 'rgba(24,24,27,0.18)') }]}
+          />
 
-          <View style={styles.header}>
+          <View
+            style={[
+              styles.header,
+              { borderBottomColor: pick('rgba(255,255,255,0.05)', 'rgba(24,24,27,0.08)') },
+            ]}
+          >
             <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={styles.title} numberOfLines={1}>
+              <Text style={[styles.title, { color: pick('#ffffff', '#18181b') }]} numberOfLines={1}>
                 {title}
               </Text>
               {!!subtitle && (
@@ -160,7 +192,7 @@ const Sheet: React.FC<SheetProps> = ({
                 accessibilityLabel={`Close ${title}`}
                 testID="sheet-close"
               >
-                <X color="#94a3b8" size={24} />
+                <X color={pick('#94a3b8', '#52525b')} size={24} />
               </TouchableOpacity>
             </View>
           </View>
@@ -176,7 +208,7 @@ const Sheet: React.FC<SheetProps> = ({
           ) : (
             children
           )}
-        </View>
+        </SafeAreaView>
       </GestureHandlerRootView>
     </Modal>
   );

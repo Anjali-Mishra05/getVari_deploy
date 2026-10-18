@@ -11,6 +11,7 @@ import {
   calculateRecoveryEstimation,
 } from '../../utils/hydrationModel';
 import { ACCENT } from './riskTheme';
+import { accent, themed, tone } from '../../theme/theme';
 
 interface FluidLogConfirmModalProps {
   /** The proposed amount, or null when the modal is closed. */
@@ -33,15 +34,15 @@ const Row: React.FC<{
   labelColor?: string;
   valueColor?: string;
   divider?: boolean;
-}> = ({ label, value, labelColor = '#94a3b8', valueColor = '#ffffff', divider = true }) => (
+}> = ({ label, value, labelColor = tone('#94a3b8', '#52525b'), valueColor = tone('#ffffff', '#18181b'), divider = true }) => (
   <View
-    className="flex-row justify-between items-center py-2"
-    style={divider ? { borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.04)' } : undefined}
+    className={themed('flex-row justify-between items-center py-2')}
+    style={divider ? { borderTopWidth: 1, borderTopColor: tone('rgba(255,255,255,0.04)', 'rgba(24,24,27,0.08)') } : undefined}
   >
-    <Text className="text-[11.5px] font-mono font-bold" style={{ color: labelColor }}>
+    <Text className={themed('text-[11.5px] font-mono font-bold')} style={{ color: labelColor }}>
       {label}
     </Text>
-    <Text className="text-[11.5px] font-mono font-black" style={{ color: valueColor }}>
+    <Text className={themed('text-[11.5px] font-mono font-black')} style={{ color: valueColor }}>
       {value}
     </Text>
   </View>
@@ -89,36 +90,36 @@ const FluidLogConfirmModal: React.FC<FluidLogConfirmModalProps> = ({
       busy={!!saving}
       accessibilityLabel="Confirm fluid log"
     >
-      <View className="w-16 h-16 rounded-3xl items-center justify-center bg-cyan-950/60 border border-cyan-400/30">
-        <Droplets color={ACCENT} size={30} />
+      <View className={themed('w-16 h-16 rounded-3xl items-center justify-center bg-cyan-950/60 border border-cyan-400/30')}>
+        <Droplets color={accent()} size={30} />
       </View>
 
-      <Text className="text-[20px] font-black text-white tracking-tight mt-4">
+      <Text className={themed('text-[20px] font-black text-white tracking-tight mt-4')}>
         Fluid Log Simulation
       </Text>
-      <Text className="text-[12px] text-neutral-300 leading-[18px] text-center mt-1.5">
-        Confirming <Text className="text-cyan-400 font-bold">{amount}ml</Text> of active water
+      <Text className={themed('text-[12px] text-neutral-300 leading-[18px] text-center mt-1.5')}>
+        Confirming <Text className={themed('text-cyan-400 font-bold')}>{amount}ml</Text> of active water
         intake?
       </Text>
 
       {/* Predictive stress analytics */}
-      <View className="w-full bg-black/50 rounded-2xl border border-white/5 px-4 py-1 mt-5">
+      <View className={themed('w-full bg-black/50 rounded-2xl border border-white/5 px-4 py-1 mt-5')}>
         <Row label="Current Risk:" value={currentRiskLabel} divider={false} />
         <Row
           label="Predicted Risk after absorption:"
           value={predictedRiskLabel}
           labelColor={ACCENT}
-          valueColor="#34d399"
+          valueColor={tone('#34d399', '#047857')}
         />
-        <Row label="Est. Recovery Window:" value={recoveryWindow} valueColor="#67e8f9" />
+        <Row label="Est. Recovery Window:" value={recoveryWindow} valueColor={tone('#67e8f9', '#0e7490')} />
 
-        <View className="py-2.5 border-t border-white/[0.04]">
-          <Text className="text-[9px] text-neutral-500 uppercase font-mono mb-1.5">
+        <View className={themed('py-2.5 border-t border-white/[0.04]')}>
+          <Text className={themed('text-[9px] text-neutral-500 uppercase font-mono mb-1.5')}>
             Estimated Recovery Progress:
           </Text>
-          <View className="w-full h-1.5 rounded-full bg-white/5 overflow-hidden">
+          <View className={themed('w-full h-1.5 rounded-full bg-white/5 overflow-hidden')}>
             <View
-              className="h-full rounded-full"
+              className={themed('h-full rounded-full')}
               style={{ width: `${recoveryProgress}%`, backgroundColor: '#34d399' }}
             />
           </View>
@@ -126,10 +127,10 @@ const FluidLogConfirmModal: React.FC<FluidLogConfirmModalProps> = ({
       </View>
 
       {!!error && (
-        <Text className="text-[11px] text-rose-400 font-bold text-center mt-3">{error}</Text>
+        <Text className={themed('text-[11px] text-rose-400 font-bold text-center mt-3')}>{error}</Text>
       )}
 
-      <View className="flex-row gap-3 w-full mt-5">
+      <View className={themed('flex-row gap-3 w-full mt-5')}>
         <Button
           label="Cancel"
           onPress={onCancel}

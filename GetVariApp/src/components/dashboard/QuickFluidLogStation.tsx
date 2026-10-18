@@ -6,7 +6,7 @@ import GlassCard from '../GlassCard';
 import { cardStyle } from './cardTheme';
 import { MAX_SINGLE_ENTRY_ML } from '../../services/HydrationService';
 import { quickLogAmounts } from '../../utils/hydrationAmounts';
-import { ACCENT } from './riskTheme';
+import { accent, accentFill, themed } from '../../theme/theme';
 
 interface QuickFluidLogStationProps {
   /** Opens the confirmation step. Nothing is written until it is accepted. */
@@ -49,18 +49,18 @@ const QuickFluidLogStation: React.FC<QuickFluidLogStationProps> = ({ onSelectAmo
   };
 
   return (
-    <GlassCard className="bg-cyan-950/10 border-white/5" style={cardStyle}>
-      <View className="flex-row items-center justify-between mb-3">
-        <Text className="text-[10px] font-mono font-black tracking-wider uppercase text-neutral-300">
+    <GlassCard adaptive className={themed('bg-cyan-950/10 border-white/5')} style={cardStyle}>
+      <View className={themed('flex-row items-center justify-between mb-3')}>
+        <Text className={themed('text-[10px] font-mono font-black tracking-wider uppercase text-neutral-300')}>
           Quick Fluid Log Station
         </Text>
-        <View className="bg-cyan-500/10 px-2.5 py-1 rounded-full">
-          <Text className="text-[9px] text-cyan-400 font-mono">Hydration calibration</Text>
+        <View className={themed('bg-cyan-500/10 px-2.5 py-1 rounded-full')}>
+          <Text className={themed('text-[9px] text-cyan-400 font-mono')}>Hydration calibration</Text>
         </View>
       </View>
 
       {customOpen ? (
-        <View className="flex-row items-center gap-2">
+        <View className={themed('flex-row items-stretch gap-2')} style={{ height: 36 }}>
           <TextInput
             value={customAmount}
             onChangeText={setCustomAmount}
@@ -71,17 +71,20 @@ const QuickFluidLogStation: React.FC<QuickFluidLogStationProps> = ({ onSelectAmo
             onSubmitEditing={submitCustom}
             returnKeyType="done"
             accessibilityLabel="Custom amount in millilitres"
-            className="flex-1 bg-white/[0.04] border border-white/10 rounded-xl px-3.5 py-2.5 text-white font-mono text-[13px]"
+            className={themed('flex-1 bg-white/[0.04] border border-white/10 rounded-xl px-3.5 text-white font-mono text-[13px]')}
+            // The row sets the height; Android's own vertical padding would
+            // clip the text inside it.
+            style={{ paddingVertical: 0 }}
           />
           <TouchableOpacity
             onPress={submitCustom}
             disabled={!customValid}
             accessibilityRole="button"
             accessibilityLabel="Add custom amount"
-            className="px-4 py-2.5 rounded-xl"
-            style={{ backgroundColor: ACCENT, opacity: customValid ? 1 : 0.35 }}
+            className={themed('px-4 rounded-xl justify-center')}
+            style={{ backgroundColor: accentFill(), opacity: customValid ? 1 : 0.35 }}
           >
-            <Text className="text-[12px] font-black text-[#020617]">Add</Text>
+            <Text className={themed('text-[12px] font-black text-[#020617]')}>Add</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => {
@@ -90,13 +93,13 @@ const QuickFluidLogStation: React.FC<QuickFluidLogStationProps> = ({ onSelectAmo
             }}
             accessibilityRole="button"
             accessibilityLabel="Cancel custom amount"
-            className="px-3 py-2.5 rounded-xl bg-white/5 border border-white/5"
+            className={themed('px-3 rounded-xl justify-center bg-white/5 border border-white/5')}
           >
-            <Text className="text-[12px] font-black text-neutral-300">Cancel</Text>
+            <Text className={themed('text-[12px] font-black text-neutral-300')}>Cancel</Text>
           </TouchableOpacity>
         </View>
       ) : (
-        <View className="flex-row gap-2">
+        <View className={themed('flex-row gap-2')}>
           {presets().map(preset => (
             <TouchableOpacity
               key={preset.ml}
@@ -105,11 +108,11 @@ const QuickFluidLogStation: React.FC<QuickFluidLogStationProps> = ({ onSelectAmo
               activeOpacity={0.75}
               accessibilityRole="button"
               accessibilityLabel={`Log ${preset.ml} millilitres`}
-              className="flex-1 bg-white/[0.04] border border-white/5 rounded-2xl py-3 items-center justify-center gap-1"
+              className={themed('flex-1 bg-white/[0.04] border border-white/5 rounded-2xl py-3 items-center justify-center gap-1')}
               style={{ opacity: disabled ? 0.4 : 1 }}
             >
-              <Plus color={ACCENT} size={14} strokeWidth={3} />
-              <Text className="text-[11px] font-black text-neutral-200">{preset.label}</Text>
+              <Plus color={accent()} size={14} strokeWidth={3} />
+              <Text className={themed('text-[11px] font-black text-neutral-200')}>{preset.label}</Text>
             </TouchableOpacity>
           ))}
 
@@ -119,11 +122,11 @@ const QuickFluidLogStation: React.FC<QuickFluidLogStationProps> = ({ onSelectAmo
             activeOpacity={0.75}
             accessibilityRole="button"
             accessibilityLabel="Log a custom amount"
-            className="flex-1 bg-white/[0.04] border border-white/5 rounded-2xl py-3 items-center justify-center gap-1"
+            className={themed('flex-1 bg-white/[0.04] border border-white/5 rounded-2xl py-3 items-center justify-center gap-1')}
             style={{ opacity: disabled ? 0.4 : 1 }}
           >
-            <Plus color={ACCENT} size={14} strokeWidth={3} />
-            <Text className="text-[11px] font-black text-cyan-400">Custom Amount</Text>
+            <Plus color={accent()} size={14} strokeWidth={3} />
+            <Text className={themed('text-[11px] font-black text-cyan-400')}>Custom Amount</Text>
           </TouchableOpacity>
         </View>
       )}

@@ -17,6 +17,7 @@ import ChatBus from '../services/ChatBus';
 import { formatDeliveredAt, formatClock } from '../utils/notificationFormat';
 import { formatMl } from '../utils/hydrationFormat';
 import type { NotificationRecord } from '../types';
+import { accent, tone } from '../theme/theme';
 
 interface NotificationCenterProps {
   visible: boolean;
@@ -28,8 +29,6 @@ const TICK_MS = 30 * 1000;
 
 /** Matches the sheet's exit animation, so hand-offs wait for it to finish. */
 const CLOSE_ANIMATION_MS = 320;
-
-const ACCENT = '#00f2fe';
 
 const NotificationRow: React.FC<{
   record: NotificationRecord;
@@ -49,14 +48,14 @@ const NotificationRow: React.FC<{
    * amber and says so, and the row stays tappable so the glass can still be
    * logged from here.
    */
-  const tone = answered ? 'answered' : actionable ? 'open' : 'settled';
+  const state = answered ? 'answered' : actionable ? 'open' : 'settled';
   const TONE = {
-    answered: { fg: '#10b981', bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.25)' },
+    answered: { fg: tone('#10b981', '#047857'), bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.25)' },
     open: opened
-      ? { fg: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.28)' }
-      : { fg: ACCENT, bg: 'rgba(0,242,254,0.1)', border: 'rgba(0,242,254,0.28)' },
-    settled: { fg: '#64748b', bg: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.08)' },
-  }[tone];
+      ? { fg: tone('#f59e0b', '#b45309'), bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.28)' }
+      : { fg: accent(), bg: 'rgba(0,242,254,0.1)', border: 'rgba(0,242,254,0.28)' },
+    settled: { fg: '#64748b', bg: tone('rgba(255,255,255,0.04)', 'rgba(24,24,27,0.04)'), border: tone('rgba(255,255,255,0.08)', 'rgba(24,24,27,0.12)') },
+  }[state];
 
   // Only an unanswered notification is pressable. Once it is opened — or
   // settled by a newer one — the row is a record, not a control.
@@ -77,7 +76,7 @@ const NotificationRow: React.FC<{
         paddingVertical: 16,
         paddingHorizontal: 20,
         borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.05)',
+        borderBottomColor: tone('rgba(255,255,255,0.05)', 'rgba(24,24,27,0.09)'),
         // Settled rows recede so the one still asking something stands out.
         opacity: actionable ? 1 : 0.55,
       }}
@@ -90,21 +89,21 @@ const NotificationRow: React.FC<{
           alignItems: 'center',
           justifyContent: 'center',
           marginRight: 14,
-          backgroundColor: isReminder ? 'rgba(0,242,254,0.08)' : 'rgba(255,255,255,0.04)',
+          backgroundColor: isReminder ? 'rgba(0,242,254,0.08)' : tone('rgba(255,255,255,0.04)', 'rgba(24,24,27,0.04)'),
           borderWidth: 1,
-          borderColor: isReminder ? 'rgba(0,242,254,0.2)' : 'rgba(255,255,255,0.08)',
+          borderColor: isReminder ? 'rgba(0,242,254,0.2)' : tone('rgba(255,255,255,0.08)', 'rgba(24,24,27,0.12)'),
         }}
       >
         {isReminder ? (
-          <Droplets color={ACCENT} size={18} />
+          <Droplets color={accent()} size={18} />
         ) : (
-          <Bell color="#94a3b8" size={18} />
+          <Bell color={tone('#94a3b8', '#52525b')} size={18} />
         )}
       </View>
 
       <View style={{ flex: 1 }}>
         <Text
-          style={{ color: '#ffffff', fontSize: 14, fontWeight: '800' }}
+          style={{ color: tone('#ffffff', '#18181b'), fontSize: 14, fontWeight: '800' }}
           numberOfLines={1}
         >
           {record.title}
@@ -112,7 +111,7 @@ const NotificationRow: React.FC<{
 
         {!!record.body && (
           <Text
-            style={{ color: '#94a3b8', fontSize: 12, marginTop: 3, lineHeight: 17 }}
+            style={{ color: tone('#94a3b8', '#52525b'), fontSize: 12, marginTop: 3, lineHeight: 17 }}
             numberOfLines={2}
           >
             {record.body}
@@ -136,7 +135,7 @@ const NotificationRow: React.FC<{
               width: 3,
               height: 3,
               borderRadius: 2,
-              backgroundColor: '#334155',
+              backgroundColor: tone('#334155', '#d4d4d8'),
               marginHorizontal: 8,
             }}
           />
@@ -328,7 +327,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
             accessibilityLabel="Clear notification history"
             testID="clear-notifications"
           >
-            <Trash2 color="#94a3b8" size={20} />
+            <Trash2 color={tone('#94a3b8', '#52525b')} size={20} />
           </TouchableOpacity>
         ) : null
       }
@@ -352,12 +351,12 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
                 borderColor: 'rgba(0,242,254,0.22)',
               }}
             >
-              <Monitor color={ACCENT} size={18} />
+              <Monitor color={accent()} size={18} />
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={{ color: ACCENT, fontSize: 12, fontWeight: '900' }}>
+                <Text style={{ color: accent(), fontSize: 12, fontWeight: '900' }}>
                   Reminders open in the background
                 </Text>
-                <Text style={{ color: '#94a3b8', fontSize: 11, lineHeight: 15, marginTop: 2 }}>
+                <Text style={{ color: tone('#94a3b8', '#52525b'), fontSize: 11, lineHeight: 15, marginTop: 2 }}>
                   Tap to let a reminder open full screen, so it is not missed.
                 </Text>
               </View>
@@ -395,9 +394,9 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
                 borderColor: 'rgba(148,163,184,0.3)',
               }}
             >
-              <AlarmClock color="#94a3b8" size={18} />
+              <AlarmClock color={tone('#94a3b8', '#52525b')} size={18} />
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={{ color: '#cbd5e1', fontSize: 12, fontWeight: '900' }}>
+                <Text style={{ color: tone('#cbd5e1', '#3f3f46'), fontSize: 12, fontWeight: '900' }}>
                   Fire a test reminder (10s)
                 </Text>
                 <Text style={{ color: '#64748b', fontSize: 11, lineHeight: 15, marginTop: 2 }}>
@@ -426,13 +425,13 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
                 borderColor: 'rgba(234,179,8,0.25)',
               }}
             >
-              <AlarmClock color="#eab308" size={18} />
+              <AlarmClock color={tone('#eab308', '#a16207')} size={18} />
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={{ color: '#eab308', fontSize: 12, fontWeight: '900' }}>
+                <Text style={{ color: tone('#eab308', '#a16207'), fontSize: 12, fontWeight: '900' }}>
                   Reminders are being delayed
                 </Text>
                 <Text
-                  style={{ color: '#94a3b8', fontSize: 11, lineHeight: 15, marginTop: 2 }}
+                  style={{ color: tone('#94a3b8', '#52525b'), fontSize: 11, lineHeight: 15, marginTop: 2 }}
                 >
                   Android is batching them. Tap to allow alarms &amp; reminders.
                 </Text>
@@ -442,7 +441,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
 
           {loading ? (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-              <ActivityIndicator color={ACCENT} />
+              <ActivityIndicator color={accent()} />
             </View>
           ) : records.length === 0 ? (
             <View
@@ -460,17 +459,17 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
                   borderRadius: 24,
                   alignItems: 'center',
                   justifyContent: 'center',
-                  backgroundColor: 'rgba(255,255,255,0.03)',
+                  backgroundColor: tone('rgba(255,255,255,0.03)', 'rgba(24,24,27,0.03)'),
                   borderWidth: 1,
-                  borderColor: 'rgba(255,255,255,0.08)',
+                  borderColor: tone('rgba(255,255,255,0.08)', 'rgba(24,24,27,0.12)'),
                   marginBottom: 18,
                 }}
               >
-                <BellOff color="#475569" size={26} />
+                <BellOff color={tone('#475569', '#a1a1aa')} size={26} />
               </View>
               <Text
                 style={{
-                  color: '#94a3b8',
+                  color: tone('#94a3b8', '#52525b'),
                   fontSize: 13,
                   fontWeight: '700',
                   textAlign: 'center',
@@ -480,7 +479,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
               </Text>
               <Text
                 style={{
-                  color: '#475569',
+                  color: tone('#475569', '#a1a1aa'),
                   fontSize: 11,
                   lineHeight: 17,
                   textAlign: 'center',

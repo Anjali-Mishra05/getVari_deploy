@@ -4,6 +4,7 @@ import { Check } from 'lucide-react-native';
 
 import Button from '../ui/Button';
 import Dialog from '../ui/Dialog';
+import { themed, tone } from '../../theme/theme';
 
 interface FluidLogSuccessModalProps {
   /** Amount that was written, or null when the modal is closed. */
@@ -19,10 +20,10 @@ const Fact: React.FC<{ label: string; value: React.ReactNode; caption: string }>
   value,
   caption,
 }) => (
-  <View className="flex-1 bg-black/40 rounded-2xl border border-white/5 p-2.5">
-    <Text className="text-[8px] uppercase font-mono tracking-wider text-neutral-500">{label}</Text>
-    <View className="mt-1">{value}</View>
-    <Text className="text-[8px] text-neutral-400 font-mono mt-0.5">{caption}</Text>
+  <View className={themed('flex-1 bg-black/40 rounded-2xl border border-white/5 p-2.5')}>
+    <Text className={themed('text-[8px] uppercase font-mono tracking-wider text-neutral-500')}>{label}</Text>
+    <View className={themed('mt-1')}>{value}</View>
+    <Text className={themed('text-[8px] text-neutral-400 font-mono mt-0.5')}>{caption}</Text>
   </View>
 );
 
@@ -46,27 +47,27 @@ const FluidLogSuccessModal: React.FC<FluidLogSuccessModalProps> = ({
 
   return (
     <Dialog visible={visible} onDismiss={onDismiss} accessibilityLabel="Intake logged">
-      <View className="w-16 h-16 rounded-full items-center justify-center bg-emerald-950/60 border border-emerald-500/30">
-        <Check color="#34d399" size={30} strokeWidth={3} />
+      <View className={themed('w-16 h-16 rounded-full items-center justify-center bg-emerald-950/60 border border-emerald-500/30')}>
+        <Check color={tone('#34d399', '#047857')} size={30} strokeWidth={3} />
       </View>
 
-      <Text className="text-[9px] uppercase tracking-[0.2em] text-emerald-400 font-mono font-black mt-4">
+      <Text className={themed('text-[9px] uppercase tracking-[0.2em] text-emerald-400 font-mono font-black mt-4')}>
         Biometric System Calibrated
       </Text>
-      <Text className="text-[20px] font-black text-white tracking-tight mt-1.5">
+      <Text className={themed('text-[20px] font-black text-white tracking-tight mt-1.5')}>
         Intake Logged Successfully!
       </Text>
 
-      <Text className="text-[12px] text-neutral-300 leading-[19px] text-center mt-2">
-        Registered <Text className="text-emerald-400 font-black">+{amount} ml</Text> of active fluid
+      <Text className={themed('text-[12px] text-neutral-300 leading-[19px] text-center mt-2')}>
+        Registered <Text className={themed('text-emerald-400 font-black')}>+{amount} ml</Text> of active fluid
         to your real-time physiological model.
       </Text>
 
-      <View className="flex-row gap-2 w-full mt-4">
+      <View className={themed('flex-row gap-2 w-full mt-4')}>
         <Fact
           label="Equivalence"
           value={
-            <Text className="text-[12px] font-black text-neutral-200">
+            <Text className={themed('text-[12px] font-black text-neutral-200')}>
               {glasses.toFixed(1)} Glasses
             </Text>
           }
@@ -75,9 +76,9 @@ const FluidLogSuccessModal: React.FC<FluidLogSuccessModalProps> = ({
         <Fact
           label="Metabolized"
           value={
-            <View className="flex-row items-center gap-1.5">
-              <View className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              <Text className="text-[12px] font-black text-neutral-200">100% Synced</Text>
+            <View className={themed('flex-row items-center gap-1.5')}>
+              <View className={themed('w-1.5 h-1.5 rounded-full bg-emerald-400')} />
+              <Text className={themed('text-[12px] font-black text-neutral-200')}>100% Synced</Text>
             </View>
           }
           caption="Telemetry stream"
@@ -85,7 +86,7 @@ const FluidLogSuccessModal: React.FC<FluidLogSuccessModalProps> = ({
       </View>
 
       {!!message && (
-        <Text className="text-[10.5px] text-neutral-400 leading-[16px] italic text-center mt-4">
+        <Text className={themed('text-[10.5px] text-neutral-400 leading-[16px] italic text-center mt-4')}>
           “{message}”
         </Text>
       )}

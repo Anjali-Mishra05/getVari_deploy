@@ -29,6 +29,34 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
+/** The profile row the final target is written to; no real database. */
+var mockProfileRows: Record<string, any> = {};
+jest.mock('../src/services/SupabaseClient', () => ({
+  supabase: {
+    from: () => {
+      let id: string | null = null;
+      let patch: any = null;
+      const self: any = {
+        select: () => self,
+        update: (value: any) => {
+          patch = value;
+          return self;
+        },
+        eq: (_col: string, value: string) => {
+          id = value;
+          if (patch) {
+            if (mockProfileRows[id]) mockProfileRows[id] = { ...mockProfileRows[id], ...patch };
+            return Promise.resolve({ data: null, error: null });
+          }
+          return self;
+        },
+        maybeSingle: () => Promise.resolve({ data: id ? mockProfileRows[id] ?? null : null, error: null }),
+      };
+      return self;
+    },
+  },
+}));
+
 /**
  * The live pipeline, stubbed so a test can move the goal underneath the lock.
  * What is asserted here is that the lock holds, not what PBWR computes — that
@@ -75,7 +103,7 @@ describe('the daily hydration goal is decided once per day', () => {
   it('returns the live figure the first time it is asked, and stores it', async () => {
     const first = await getTodayBreakdown(profile, 0, 'user-1');
     expect(first.finalTarget).toBe(4000);
-    expect(await peekTodayTargetMl()).toBe(4000);
+    expect(await peekTodayTargetMl('user-1')).toBe(4000);
   });
 
   it('holds that figure when the live pipeline moves later the same day', async () => {
@@ -110,7 +138,7 @@ describe('the daily hydration goal is decided once per day', () => {
 
     // Yesterday's lock, left behind by an app that ran last night.
     mockStore.set(
-      'getvari_daily_target',
+      'getvari_daily_target:user-1',
       JSON.stringify({ date: '2000-01-01', targetMl: 4000 })
     );
 
@@ -122,25 +150,71 @@ describe('the daily hydration goal is decided once per day', () => {
     await getTodayBreakdown(profile, 0, 'user-1');
     mockFinalTarget = 3200; // the user corrected their weight downward
 
-    await clearLockedTarget();
+    await clearLockedTarget('user-1');
 
     const after = await getTodayBreakdown(profile, 0, 'user-1');
     expect(after.finalTarget).toBe(3200);
   });
 
   it('peeks without computing, so a background caller cannot start a day', async () => {
-    expect(await peekTodayTargetMl()).toBeNull();
+    expect(await peekTodayTargetMl('user-1')).toBeNull();
     // And having peeked, still nothing is stored — the reminder path falls
     // back to the profile's figure rather than locking a goal of its own.
-    expect(mockStore.has('getvari_daily_target')).toBe(false);
+    expect(mockStore.has('getvari_daily_target:user-1')).toBe(false);
   });
 
   it('ignores a stored entry that is not a usable number', async () => {
-    mockStore.set('getvari_daily_target', JSON.stringify({ date: localDateKey(), targetMl: 0 }));
-    expect(await peekTodayTargetMl()).toBeNull();
+    mockStore.set('getvari_daily_target:user-1', JSON.stringify({ date: localDateKey(), targetMl: 0 }));
+    expect(await peekTodayTargetMl('user-1')).toBeNull();
 
-    mockStore.set('getvari_daily_target', 'not json');
-    expect(await peekTodayTargetMl()).toBeNull();
+    mockStore.set('getvari_daily_target:user-1', 'not json');
+    expect(await peekTodayTargetMl('user-1')).toBeNull();
+  });
+});
+
+describe('the final target is per account and stored on the account’s profile', () => {
+  beforeEach(() => {
+    mockStore.clear();
+    mockFinalTarget = 4000;
+    mockProfileRows = {
+      'user-1': { id: 'user-1', profile: { fullName: 'A', targetDailyMl: 3100 } },
+      'user-2': { id: 'user-2', profile: { fullName: 'B', targetDailyMl: 2600 } },
+    };
+  });
+
+  it('two accounts on one device never share a day’s lock', async () => {
+    await getTodayBreakdown(profile, 0, 'user-1');
+    mockFinalTarget = 2900;
+    const b = await getTodayBreakdown(profile, 0, 'user-2');
+    expect(b.finalTarget).toBe(2900);
+    expect(await peekTodayTargetMl('user-1')).toBe(4000);
+    expect(await peekTodayTargetMl('user-2')).toBe(2900);
+  });
+
+  it('writes the capped final target (not the Adjusted Total) onto the profile row', async () => {
+    await getTodayBreakdown(profile, 0, 'user-1');
+    const stored = mockProfileRows['user-1'].profile;
+    expect(stored.targetDailyMl).toBe(4000);
+    // The device's zone travels with the date, so the admin panel can tell
+    // which day `date` means.
+    expect(stored.dailyTarget).toEqual({
+      date: localDateKey(),
+      finalTargetMl: 4000,
+      adjustedTotalMl: 4000,
+      upperLimitMl: 5000,
+      utcOffsetMinutes: -new Date().getTimezoneOffset(),
+    });
+    expect(stored.fullName).toBe('A'); // the rest of the profile untouched
+    expect(mockProfileRows['user-2'].profile.targetDailyMl).toBe(2600); // other account untouched
+  });
+
+  it('a new day stores the new day’s target for that account', async () => {
+    mockStore.set('getvari_daily_target:user-1', JSON.stringify({ date: '2000-01-01', targetMl: 4000, persisted: true }));
+    mockProfileRows['user-1'].profile.dailyTarget = { date: '2000-01-01', finalTargetMl: 4000, adjustedTotalMl: 4000, upperLimitMl: 5000 };
+    mockFinalTarget = 4700;
+    await getTodayBreakdown(profile, 0, 'user-1');
+    expect(mockProfileRows['user-1'].profile.dailyTarget).toMatchObject({ date: localDateKey(), finalTargetMl: 4700 });
+    expect(mockProfileRows['user-1'].profile.targetDailyMl).toBe(4700);
   });
 });
 

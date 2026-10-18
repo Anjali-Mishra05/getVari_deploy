@@ -5,7 +5,7 @@ import { Activity, Droplets, Heart, RefreshCw, Sparkles, Thermometer } from 'luc
 import GlassCard from '../GlassCard';
 import { cardStyle } from './cardTheme';
 import { AIInsight } from '../../types';
-import { ACCENT } from './riskTheme';
+import { accent, themed } from '../../theme/theme';
 
 interface CoreAIInsightsProps {
   insights: AIInsight[];
@@ -48,11 +48,11 @@ const CATEGORY_STYLE: Record<
  * reads "Adaptive rule" unless a run actually came back from the model.
  */
 const CoreAIInsights: React.FC<CoreAIInsightsProps> = ({ insights, onRefresh, refreshing }) => (
-  <GlassCard className="bg-white/[0.01]" style={cardStyle}>
-    <View className="flex-row items-center justify-between mb-4">
-      <View className="flex-row items-center gap-2">
-        <Sparkles color={ACCENT} size={17} />
-        <Text className="text-[10px] uppercase tracking-[0.2em] font-black text-white/80">
+  <GlassCard adaptive className={themed('bg-white/[0.01]')} style={cardStyle}>
+    <View className={themed('flex-row items-center justify-between mb-4')}>
+      <View className={themed('flex-row items-center gap-2')}>
+        <Sparkles color={accent()} size={17} />
+        <Text className={themed('text-[10px] uppercase tracking-[0.2em] font-black text-white/80')}>
           GetVari Core AI Insights
         </Text>
       </View>
@@ -61,40 +61,40 @@ const CoreAIInsights: React.FC<CoreAIInsightsProps> = ({ insights, onRefresh, re
         disabled={refreshing}
         accessibilityRole="button"
         accessibilityLabel="Refresh insights"
-        className="flex-row items-center gap-1.5 px-3 py-1.5 border border-white/10 rounded-xl"
+        className={themed('flex-row items-center gap-1.5 px-3 py-1.5 border border-white/10 rounded-xl')}
         style={{ opacity: refreshing ? 0.5 : 1 }}
       >
-        <RefreshCw color={ACCENT} size={11} />
-        <Text className="text-[10px] font-black text-neutral-400">
+        <RefreshCw color={accent()} size={11} />
+        <Text className={themed('text-[10px] font-black text-neutral-400')}>
           {refreshing ? 'Syncing' : 'Refresh Core'}
         </Text>
       </TouchableOpacity>
     </View>
 
-    <View className="gap-2.5">
+    <View className={themed('gap-2.5')}>
       {insights.map(insight => {
         const style = CATEGORY_STYLE[insight.category];
         return (
           <View
             key={insight.id}
-            className="flex-row gap-3 bg-white/[0.02] p-3.5 rounded-2xl border border-white/5"
+            className={themed('flex-row gap-3 bg-white/[0.02] p-3.5 rounded-2xl border border-white/5')}
           >
             <View
-              className="p-2 rounded-xl self-start"
+              className={themed('p-2 rounded-xl self-start')}
               style={{ backgroundColor: style.well }}
             >
               {style.icon(style.color)}
             </View>
-            <View className="flex-1">
-              <View className="flex-row items-center gap-2 flex-wrap">
-                <Text className="text-[12px] font-black text-white">{insight.title}</Text>
-                <View className="bg-cyan-950/60 border border-cyan-800/30 px-1.5 py-0.5 rounded">
-                  <Text className="text-[7.5px] font-mono text-cyan-400 uppercase tracking-widest">
+            <View className={themed('flex-1')}>
+              <View className={themed('flex-row items-center gap-2 flex-wrap')}>
+                <Text className={themed('text-[12px] font-black text-white')}>{insight.title}</Text>
+                <View className={themed('bg-cyan-950/60 border border-cyan-800/30 px-1.5 py-0.5 rounded')}>
+                  <Text className={themed('text-[7.5px] font-mono text-cyan-400 uppercase tracking-widest')}>
                     {insight.source === 'gemini_brain' ? 'Gemini 3.5' : 'Adaptive rule'}
                   </Text>
                 </View>
               </View>
-              <Text className="text-[11px] text-neutral-400 leading-[17px] italic mt-1.5">
+              <Text className={themed('text-[11px] text-neutral-400 leading-[17px] italic mt-1.5')}>
                 “{insight.text}”
               </Text>
             </View>
@@ -103,8 +103,8 @@ const CoreAIInsights: React.FC<CoreAIInsightsProps> = ({ insights, onRefresh, re
       })}
     </View>
 
-    <Text className="text-[9px] font-mono text-neutral-500 text-right mt-2.5">
-      <Text className="text-cyan-500">*</Text> Generated using sensor fusion analysis
+    <Text className={themed('text-[9px] font-mono text-neutral-500 text-right mt-2.5')}>
+      <Text className={themed('text-cyan-500')}>*</Text> Generated using sensor fusion analysis
     </Text>
   </GlassCard>
 );

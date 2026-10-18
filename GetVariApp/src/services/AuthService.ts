@@ -30,6 +30,16 @@ import { supabase } from './SupabaseClient';
 
 const SESSION_KEY = 'getvari_session';
 const DEMO_IDS_KEY = 'getvari_demo_identities';
+/**
+ * Account ids that have completed onboarding on this device, id -> ISO time.
+ *
+ * Kept apart from the session on purpose: logging out ends the *session*, it
+ * does not make the account new. Before this existed, "onboarded" lived only
+ * on the session, so a logout deleted it and the same account was sent back
+ * through onboarding on its next sign-in. Consulted only after authentication
+ * has produced an account id, so it never lets anyone past the login screen.
+ */
+const ONBOARDED_USERS_KEY = 'getvari_onboarded_users';
 const LEGACY_KEYCHAIN_SERVICE = 'com.getvari.auth';
 const PROFILES_TABLE = 'getvari_profiles';
 
@@ -92,6 +102,36 @@ const writeSession = async (session: StoredSession): Promise<StoredSession> => {
 
 const isUsable = (value: any): value is StoredSession =>
   !!value && typeof value.userId === 'string' && value.userId.length > 0;
+
+const readOnboardedUsers = async (): Promise<Record<string, string>> => {
+  try {
+    const raw = await AsyncStorage.getItem(ONBOARDED_USERS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    console.warn('[Auth] Could not read onboarded accounts:', error);
+    return {};
+  }
+};
+
+/**
+ * Whether a stored profile blob holds the details onboarding collects.
+ *
+ * A row can exist without them: the Firebase sign-in path inserts a row with
+ * an empty `profile: {}` for a brand-new account before onboarding has run,
+ * so "a row exists" cannot tell a new account from an existing one.
+ */
+export const hasSavedProfileDetails = (profile: unknown): boolean => {
+  if (!profile || typeof profile !== 'object') return false;
+  const p = profile as Record<string, unknown>;
+  const named = typeof p.fullName === 'string' && p.fullName.trim().length > 0;
+  const measured =
+    (typeof p.weightKg === 'number' && p.weightKg > 0) || (typeof p.age === 'number' && p.age > 0);
+  return named || measured;
+};
+
+/** `complete`: saved details found; `missing`: none; `unknown`: could not be read. */
+export type ProfileStatus = 'complete' | 'missing' | 'unknown';
 
 /**
  * The profile a phone number already owns on the server, or null.
@@ -315,40 +355,78 @@ export class AuthService {
     const userId = await AuthService.getCurrentUserId();
     if (!userId) return 'Login';
 
-    const stored = await AuthService.getStoredSession();
-    if (stored?.onboardedAt) return 'Home';
-
-    // No local flag: the profile may still exist from a previous install.
     try {
-      const lookup = supabase
-        .from(PROFILES_TABLE)
-        .select('id')
-        .eq('id', userId)
-        .maybeSingle();
+      // This account already finished onboarding — on this session, or on an
+      // earlier one it has since logged out of.
+      if (await AuthService.hasCompletedOnboarding()) return 'Home';
 
-      const data = await Promise.race([
-        lookup.then(result => result.data),
-        new Promise<null>(resolve =>
-          setTimeout(() => resolve(null), STARTUP_LOOKUP_TIMEOUT_MS)
-        ),
-      ]);
-
-      if (data?.id) {
+      // Nothing local: the saved profile may still exist (a reinstall, cleared
+      // data, another phone). Only saved details count, not a bare row.
+      if ((await AuthService.profileStatus(userId)) === 'complete') {
         await AuthService.markOnboardingComplete();
         return 'Home';
       }
     } catch (error) {
-      console.warn('[Auth] Profile lookup failed, continuing to onboarding:', error);
+      console.warn('[Auth] Profile check failed, continuing to onboarding:', error);
     }
 
     return 'Onboarding';
   }
 
-  /** Records that the onboarding wizard finished, so it is never re-shown. */
+  /**
+   * Where a successful sign-in should land: the dashboard for an account with
+   * a saved profile, onboarding for a genuinely new one. Signing in again after
+   * a logout is a new *session*, not a new user.
+   */
+  static async routeAfterLogin(): Promise<'Home' | 'Onboarding'> {
+    return (await AuthService.resolveStartupRoute()) === 'Home' ? 'Home' : 'Onboarding';
+  }
+
+  /**
+   * Whether `userId` has saved profile details on the server. The lookup is on
+   * a deadline, because it can run while the splash screen is the only thing
+   * on screen; past it the answer is `unknown`, not `missing`.
+   */
+  static async profileStatus(userId: string): Promise<ProfileStatus> {
+    try {
+      const lookup = supabase
+        .from(PROFILES_TABLE)
+        .select('id, profile')
+        .eq('id', userId)
+        .maybeSingle();
+
+      const result = await Promise.race([
+        Promise.resolve(lookup),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), STARTUP_LOOKUP_TIMEOUT_MS)),
+      ]);
+
+      if (!result || result.error) return 'unknown';
+      return hasSavedProfileDetails(result.data?.profile) ? 'complete' : 'missing';
+    } catch (error) {
+      console.warn('[Auth] Profile lookup failed:', error);
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Records that the onboarding wizard finished, so it is never re-shown —
+   * on the session, and for the account itself so that survives a logout.
+   */
   static async markOnboardingComplete(): Promise<void> {
     const stored = await AuthService.getStoredSession();
     if (!stored) return;
-    await writeSession({ ...stored, onboardedAt: new Date().toISOString() });
+    const now = new Date().toISOString();
+    await writeSession({ ...stored, onboardedAt: now });
+
+    try {
+      const accounts = await readOnboardedUsers();
+      const currentId = await AuthService.getCurrentUserId();
+      const ids = new Set([stored.userId, ...(currentId ? [currentId] : [])]);
+      for (const id of ids) accounts[id] = accounts[id] ?? now;
+      await AsyncStorage.setItem(ONBOARDED_USERS_KEY, JSON.stringify(accounts));
+    } catch (error) {
+      console.warn('[Auth] Could not record the onboarded account:', error);
+    }
   }
 
   /**
@@ -364,7 +442,12 @@ export class AuthService {
   static async hasCompletedOnboarding(): Promise<boolean> {
     try {
       const stored = await AuthService.getStoredSession();
-      return Boolean(stored?.onboardedAt);
+      if (!stored) return false;
+      if (stored.onboardedAt) return true;
+      // The signed-in account finished onboarding on an earlier session.
+      const accounts = await readOnboardedUsers();
+      const currentId = await AuthService.getCurrentUserId();
+      return Boolean(accounts[stored.userId] || (currentId && accounts[currentId]));
     } catch (error) {
       console.warn('[Auth] Could not read the onboarding stamp:', error);
       // Unknown is treated as "not yet": a gate that fails open costs a user

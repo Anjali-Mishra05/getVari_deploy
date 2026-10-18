@@ -40,7 +40,8 @@ const CompactUserList: React.FC<Props> = ({ users, selected, onSelect }) => {
               u.status === 'Critical' ? 'bg-red-100 text-red-700' :
               u.status === 'High Risk' ? 'bg-orange-100 text-orange-700' :
               u.status === 'Mild Risk' ? 'bg-blue-100 text-blue-700' :
-              'bg-emerald-100 text-emerald-700'
+              u.status === 'Hydrated' ? 'bg-emerald-100 text-emerald-700' :
+              'bg-slate-100 text-slate-500'
             }`}>
               {u.status}
             </div>

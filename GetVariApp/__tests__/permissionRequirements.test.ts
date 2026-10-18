@@ -11,6 +11,7 @@ import {
   allPermissionsGranted,
   firstMissing,
   missingRequirements,
+  shouldShowPermissionGate,
   type PermissionSnapshot,
 } from '../src/utils/permissionRequirements';
 
@@ -154,5 +155,54 @@ describe('the restricted-settings way out is on the screen', () => {
     for (const requirement of PERMISSION_REQUIREMENTS) {
       if (requirement.key !== 'displayOverApps') expect(requirement.steps).toBeUndefined();
     }
+  });
+});
+
+describe('the permission screen follows Android’s real state', () => {
+  const show = (snapshot: PermissionSnapshot | null, over: { armed?: boolean; checking?: boolean } = {}) =>
+    shouldShowPermissionGate({ armed: over.armed ?? true, checking: over.checking ?? false, snapshot });
+
+  it('everything already granted (e.g. before a relaunch or an update): skipped', () => {
+    expect(show(granted)).toBe(false);
+  });
+
+  it('a permission not granted: shown, pointing at that one', () => {
+    const snapshot = { ...granted, notifications: false };
+    expect(show(snapshot)).toBe(true);
+    expect(firstMissing(snapshot)?.key).toBe('notifications');
+  });
+
+  it('full-screen notifications already enabled: that step is skipped', () => {
+    const snapshot = { ...granted, displayOverApps: false };
+    expect(missingRequirements(snapshot).map(r => r.key)).not.toContain('fullScreenIntent');
+    expect(firstMissing(snapshot)?.key).toBe('displayOverApps');
+  });
+
+  it('full-screen notifications not enabled: shown, and that is the step asked for', () => {
+    const snapshot = { ...granted, fullScreenIntent: false };
+    expect(show(snapshot)).toBe(true);
+    expect(firstMissing(snapshot)?.key).toBe('fullScreenIntent');
+  });
+
+  it('granted after the request: the next missing one comes up, then the screen goes away', () => {
+    let snapshot: PermissionSnapshot = { notifications: false, channelAllows: true, fullScreenIntent: false, displayOverApps: true };
+    expect(firstMissing(snapshot)?.key).toBe('notifications');
+    snapshot = { ...snapshot, notifications: true }; // re-read after the dialog
+    expect(firstMissing(snapshot)?.key).toBe('fullScreenIntent');
+    snapshot = { ...snapshot, fullScreenIntent: true }; // re-read on return from Settings
+    expect(show(snapshot)).toBe(false);
+  });
+
+  it('denied: stays shown on that step (no loop to another, no skipping it)', () => {
+    const snapshot = { ...granted, notifications: false };
+    expect(show(snapshot)).toBe(true);
+    expect(firstMissing(snapshot)?.key).toBe('notifications');
+  });
+
+  it('never before onboarding is finished, and never before the first real read', () => {
+    const missing = { ...granted, notifications: false };
+    expect(show(missing, { armed: false })).toBe(false);
+    expect(show(missing, { checking: true })).toBe(false);
+    expect(show(null)).toBe(false);
   });
 });

@@ -330,22 +330,29 @@ export class HydrationRiskEngine {
     if (finalRisk <= 25) {
       status = 'Hydrated';
       meaning = 'Body signals appear stable. Hydration levels are likely sufficient.';
-      suggestedAction = 'Maintain current healthy beverage routing habits.';
     } else if (finalRisk <= 50) {
       status = 'Mild Risk';
       meaning = 'Early signs of dehydration risk detected based on activity, heart rate, environmental conditions, or prolonged hydration gap.';
-      suggestedAction = 'Drink water soon.';
       glassesRequired = 1;
     } else if (finalRisk <= 75) {
       status = 'High Risk';
       meaning = 'Multiple physiological and environmental indicators suggest increasing dehydration probability.';
-      suggestedAction = 'Hydrate immediately and reduce exertion if needed.';
       glassesRequired = 2;
     } else {
       status = 'Critical';
       meaning = 'High strain, prolonged hydration gap, elevated activity or heat load detected. Potential significant dehydration risk.';
-      suggestedAction = 'Immediate hydration recommended. Rest and recover if symptoms persist.';
       glassesRequired = Math.min(5, Math.max(3, Math.round((finalRisk * 4) / 80)));
+    }
+
+    // The suggested action uses three ranges of its own (0–50, 51–75, 76+),
+    // independent of the four status bands above. 0–50 spans both 'Hydrated'
+    // and 'Mild Risk', so its wording must not claim either.
+    if (finalRisk <= 50) {
+      suggestedAction = 'Keep drinking water regularly to stay hydrated.';
+    } else if (finalRisk <= 75) {
+      suggestedAction = 'Your water level is getting low. Drink water soon and take a short break.';
+    } else {
+      suggestedAction = 'Your water level is very low. Drink water now and rest.';
     }
 
     return {

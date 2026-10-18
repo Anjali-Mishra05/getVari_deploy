@@ -17,6 +17,8 @@ import {
   Easing,
   StyleSheet,
   useWindowDimensions,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { MessageCircle, X, Send, Trash2, Droplets, Pencil } from 'lucide-react-native';
@@ -30,6 +32,9 @@ import { buildLogConfirmation, formatMl } from '../utils/hydrationFormat';
 import { withHydrationTip } from '../utils/hydrationTips';
 import { quickLogAmounts } from '../utils/hydrationAmounts';
 import type { HydrationLogResult } from '../types';
+import { accent, accentFill, onAccent, themedStyles, tone, useThemeMode } from '../theme/theme';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { chatButtonBottom, footerBottomPadding, sideInset } from '../utils/navLayout';
 
 interface Message {
   id: string;
@@ -130,7 +135,10 @@ const quickRepliesFor = (state: Exclude<LogFlowState, 'idle'>): QuickReply[] => 
 /** Horizontal padding of the sheet's input area, which the buttons sit in. */
 const SHEET_SIDE_PADDING = 16;
 
-const styles = StyleSheet.create({
+/** The teaser bubble's outline on a light page: neutral, and firm enough to read. */
+const TEASER_BORDER_LIGHT = '#a1a1aa';
+
+const styles = themedStyles(() => StyleSheet.create({
   /** One choice per row, the full width of the sheet. */
   choiceButton: {
     height: 56,
@@ -173,7 +181,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
   },
-});
+}));
 
 let messageCounter = 0;
 const nextMessageId = () => `msg_${Date.now()}_${messageCounter++}`;
@@ -201,6 +209,7 @@ const ChatComposer = React.memo(function ChatComposer({
   busy,
   onSend,
 }: ChatComposerProps) {
+  useThemeMode();
   const [text, setText] = useState('');
 
   const send = () => {
@@ -215,19 +224,19 @@ const ChatComposer = React.memo(function ChatComposer({
       style={{
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: 'rgba(255,255,255,0.05)',
+        backgroundColor: tone('rgba(255,255,255,0.05)', 'rgba(24,24,27,0.05)'),
         borderRadius: 24,
         paddingHorizontal: 16,
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.15)',
+        borderColor: tone('rgba(255,255,255,0.15)', 'rgba(24,24,27,0.19)'),
       }}
     >
       <TextInput
         value={text}
         onChangeText={setText}
         placeholder={placeholder}
-        placeholderTextColor="#475569"
-        style={{ flex: 1, color: '#ffffff', paddingVertical: 12, fontSize: 15 }}
+        placeholderTextColor={tone('#475569', '#a1a1aa')}
+        style={{ flex: 1, color: tone('#ffffff', '#18181b'), paddingVertical: 12, fontSize: 15 }}
         multiline
         blurOnSubmit={false}
       />
@@ -241,13 +250,42 @@ const ChatComposer = React.memo(function ChatComposer({
           opacity: pressed ? 0.5 : 1,
         })}
       >
-        <Send color={text.trim() ? '#00f2fe' : '#475569'} size={24} />
+        <Send color={text.trim() ? tone('#00f2fe', '#0891b2') : tone('#475569', '#a1a1aa')} size={24} />
       </Pressable>
     </View>
   );
 });
 
+/**
+ * The input row's container at the bottom of the chat sheet.
+ *
+ * Its own component so it can read the insets of the chat's own window — the
+ * `SafeAreaProvider` inside the Modal — rather than the main window's, which
+ * is what the floating button outside the Modal uses. The two can differ:
+ * where Android keeps a dialog window clear of its navigation bar, the main
+ * window's inset would add padding here that nothing calls for.
+ *
+ * Bottom padding: 16 while the keyboard is up, otherwise the row's usual
+ * figure, or enough to clear the system navigation when that is taller.
+ */
+const ChatFooter: React.FC<{
+  keyboardOpen: boolean;
+  style: StyleProp<ViewStyle>;
+  children: React.ReactNode;
+}> = ({ keyboardOpen, style, children }) => {
+  const insets = useSafeAreaInsets();
+  const paddingBottom = keyboardOpen
+    ? 16
+    : footerBottomPadding(Platform.OS === 'android' ? 44 : 48, insets.bottom);
+  return <View style={[style, { paddingBottom }]}>{children}</View>;
+};
+
 const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) => {
+  // Both this component and its composer are memoised, so a dashboard
+  // re-render does not reach them: each subscribes to the mode itself.
+  useThemeMode();
+  // The system navigation's share of the bottom of the screen.
+  const insets = useSafeAreaInsets();
   const [isOpen, setIsOpen] = useState(false);
   const [logFlow, setLogFlow] = useState<LogFlowState>('idle');
   /**
@@ -888,9 +926,10 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
   return (
     <>
       {/* Floating Action Button & Teaser Bubble */}
-      {/* 124px clears the floating navbar (32px inset + 80px tall) by 12px, so
-          the button sits beside the dashboard rather than on top of it. */}
-      <View style={{ position: 'absolute', bottom: 124, right: 20, zIndex: 1000, alignItems: 'flex-end' }}>
+      {/* Clears the bottom navbar by 12px wherever the system navigation
+          puts it (see `navLayout`), so the button sits beside the dashboard
+          rather than on top of it. */}
+      <View style={{ position: 'absolute', bottom: chatButtonBottom(insets.bottom), right: 20 + sideInset(insets.right), zIndex: 1000, alignItems: 'flex-end' }}>
         {!isOpen && teaserShown && (
           <Animated.View style={{ opacity: teaserOpacity, marginBottom: 10, marginRight: 2 }}>
             {/* Tapping the bubble opens the chat it is advertising. */}
@@ -899,23 +938,27 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
               accessibilityRole="button"
               accessibilityLabel="Open chat"
               style={{
-                backgroundColor: '#002855',
+                backgroundColor: tone('#002855', '#ffffff'),
                 paddingHorizontal: 12,
                 paddingVertical: 7,
                 borderRadius: 14,
                 borderWidth: 1.5,
-                borderColor: '#ffffff',
+                // Light mode: a neutral grey outline defines the bubble, and
+                // there is no shadow at all. The bubble fades in and out, and
+                // Android draws an elevation shadow under a fading view as a
+                // solid grey patch — a second bubble behind the real one.
+                borderColor: tone('#ffffff', TEASER_BORDER_LIGHT),
                 shadowColor: '#000',
                 shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.35,
+                shadowOpacity: tone(0.35, 0),
                 shadowRadius: 6,
-                elevation: 14,
+                elevation: tone(14, 0),
               }}
             >
               <Text
                 numberOfLines={1}
                 style={{
-                  color: '#ffffff',
+                  color: tone('#ffffff', '#18181b'),
                   fontSize: 11,
                   fontWeight: '800',
                   fontFamily: Platform.OS === 'android' ? 'monospace' : 'Menlo',
@@ -932,10 +975,10 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                   right: 18,
                   width: 10,
                   height: 10,
-                  backgroundColor: '#002855',
+                  backgroundColor: tone('#002855', '#ffffff'),
                   borderRightWidth: 1.5,
                   borderBottomWidth: 1.5,
-                  borderColor: '#ffffff',
+                  borderColor: tone('#ffffff', TEASER_BORDER_LIGHT),
                   transform: [{ rotate: '45deg' }],
                 }}
               />
@@ -950,20 +993,31 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
             width: 54,
             height: 54,
             borderRadius: 27,
-            backgroundColor: '#00f2fe',
+            // A white disc with the accent icon in light mode. The cyan
+            // disc's large shadow, made for a black page, showed on a light
+            // one as a grey smudge around the button.
+            backgroundColor: tone('#00f2fe', '#ffffff'),
+            borderWidth: tone(0, 1),
+            borderColor: tone('transparent', '#e4e4e7'),
             alignItems: 'center',
             justifyContent: 'center',
-            shadowColor: '#00f2fe',
-            shadowOffset: { width: 0, height: 8 },
-            shadowOpacity: 0.45,
-            shadowRadius: 12,
-            elevation: 12,
+            shadowColor: tone('#00f2fe', '#000000'),
+            shadowOffset: { width: 0, height: tone(8, 4) },
+            shadowOpacity: tone(0.45, 0.1),
+            shadowRadius: tone(12, 10),
+            elevation: tone(12, 5),
           }}
         >
           {isOpen ? (
-            <X color="#020617" size={25} strokeWidth={3} />
+            <X color={tone('#020617', '#0e7490')} size={25} strokeWidth={3} />
           ) : (
-            <MessageCircle color="#020617" size={27} fill="#020617" fillOpacity={0.1} strokeWidth={2.5} />
+            <MessageCircle
+              color={tone('#020617', '#0e7490')}
+              size={27}
+              fill={tone('#020617', '#0e7490')}
+              fillOpacity={0.1}
+              strokeWidth={2.5}
+            />
           )}
         </TouchableOpacity>
       </View>
@@ -975,10 +1029,15 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
         onRequestClose={toggleChat}
         statusBarTranslucent
       >
+        {/* The Modal is a native window of its own, and whether it runs under
+            Android's navigation is that window's business, not the main
+            one's. This provider measures the insets of *this* window, which
+            is what `ChatFooter` pads the input row from. */}
+        <SafeAreaProvider>
         {/* RN's Modal opens its own native window, which sits outside the
             GestureHandlerRootView at the app root. Without its own root here,
             gesture-handler swallows touches inside the sheet on Android. */}
-        <GestureHandlerRootView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'flex-end' }}>
+        <GestureHandlerRootView style={{ flex: 1, backgroundColor: tone('rgba(0,0,0,0.75)', 'rgba(24,24,27,0.45)'), justifyContent: 'flex-end' }}>
           <View style={{ width: '100%', height: '100%', justifyContent: 'flex-end' }}>
             <TouchableOpacity
               activeOpacity={1}
@@ -996,11 +1055,11 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
               style={{
                 height: sheetHeight,
                 marginBottom: keyboardHeight,
-                backgroundColor: '#020617',
+                backgroundColor: tone('#020617', '#ffffff'),
                 borderTopLeftRadius: 40,
                 borderTopRightRadius: 40,
                 borderTopWidth: 1,
-                borderColor: 'rgba(255,255,255,0.2)',
+                borderColor: tone('rgba(255,255,255,0.2)', 'rgba(24,24,27,0.24)'),
                 overflow: 'hidden'
               }}
             >
@@ -1012,7 +1071,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                 paddingHorizontal: 24,
                 paddingVertical: 18,
                 borderBottomWidth: 1,
-                borderBottomColor: 'rgba(255,255,255,0.05)'
+                borderBottomColor: tone('rgba(255,255,255,0.05)', 'rgba(24,24,27,0.09)')
               }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <View style={{ width: 40, height: 40, borderRadius: 20, overflow: 'hidden', marginRight: 12 }}>
@@ -1022,15 +1081,15 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                     />
                   </View>
                   <View>
-                    <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 16 }}>{ASSISTANT_NAME}</Text>
+                    <Text style={{ color: tone('#ffffff', '#18181b'), fontWeight: 'bold', fontSize: 16 }}>{ASSISTANT_NAME}</Text>
                   </View>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <TouchableOpacity onPress={clearChat} style={{ padding: 10 }}>
-                    <Trash2 color="#475569" size={20} />
+                    <Trash2 color={tone('#475569', '#a1a1aa')} size={20} />
                   </TouchableOpacity>
                   <TouchableOpacity onPress={toggleChat} style={{ padding: 10 }}>
-                    <X color="#94a3b8" size={24} />
+                    <X color={tone('#94a3b8', '#52525b')} size={24} />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1056,17 +1115,17 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                       maxWidth: '85%',
                       padding: 16,
                       borderRadius: 20,
-                      backgroundColor: msg.role === 'user' ? '#00f2fe' : 'rgba(255,255,255,0.05)',
+                      backgroundColor: msg.role === 'user' ? accentFill() : tone('rgba(255,255,255,0.05)', '#f4f4f5'),
                       borderWidth: msg.role === 'user' ? 0 : 1,
-                      borderColor: 'rgba(255,255,255,0.1)',
+                      borderColor: tone('rgba(255,255,255,0.1)', '#e4e4e7'),
                       borderBottomLeftRadius: msg.role === 'assistant' ? 0 : 20,
                       borderTopRightRadius: msg.role === 'user' ? 0 : 20,
                     }}>
-                      <Text style={{ fontSize: 14, lineHeight: 20, color: msg.role === 'user' ? '#020617' : '#e2e8f0' }}>
+                      <Text style={{ fontSize: 14, lineHeight: 20, color: msg.role === 'user' ? onAccent() : tone('#e2e8f0', '#27272a') }}>
                         {msg.content.split(/(\*\*.*?\*\*)/g).map((part, i) => {
                           if (part.startsWith('**') && part.endsWith('**')) {
                             return (
-                              <Text key={i} style={{ fontWeight: 'bold', color: msg.role === 'user' ? '#000000' : '#ffffff' }}>
+                              <Text key={i} style={{ fontWeight: 'bold', color: msg.role === 'user' ? tone('#000000', '#ffffff') : tone('#ffffff', '#18181b') }}>
                                 {part.slice(2, -2)}
                               </Text>
                             );
@@ -1086,7 +1145,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                       />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <ActivityIndicator size="small" color="#00f2fe" style={{ alignSelf: 'flex-start' }} />
+                      <ActivityIndicator size="small" color={tone('#00f2fe', '#0891b2')} style={{ alignSelf: 'flex-start' }} />
                       {slowResponse && (
                         <Text style={{ color: '#64748b', fontSize: 11, marginTop: 8, lineHeight: 16 }}>
                           Waking the assistant up — the first answer after a quiet spell takes a little longer.
@@ -1098,13 +1157,12 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
               </ScrollView>
 
               {/* Input Area */}
-              <View style={{
+              <ChatFooter keyboardOpen={keyboardHeight > 0} style={{
                 paddingHorizontal: SHEET_SIDE_PADDING,
                 paddingTop: 16,
-                paddingBottom: keyboardHeight > 0 ? 16 : Platform.OS === 'android' ? 44 : 48,
-                backgroundColor: '#01040a',
+                backgroundColor: tone('#01040a', '#ffffff'),
                 borderTopWidth: 1,
-                borderTopColor: 'rgba(255,255,255,0.1)'
+                borderTopColor: tone('rgba(255,255,255,0.1)', 'rgba(24,24,27,0.14)')
               }}>
                 {/* Quick replies for the guided hydration logging flow.
                     These wrap in a plain View rather than a horizontal
@@ -1118,7 +1176,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                 {logFlow !== 'idle' && (
                   <View style={{ paddingBottom: 12 }}>
                     <Text style={{
-                      color: '#475569',
+                      color: tone('#475569', '#a1a1aa'),
                       fontSize: 9,
                       fontWeight: '800',
                       letterSpacing: 1,
@@ -1146,7 +1204,7 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                           reply.action.kind === 'choice' && reply.action.choice === 'assisted'
                             ? Droplets
                             : Pencil;
-                        const ink = isPrimary ? '#020617' : '#00f2fe';
+                        const ink = isPrimary ? onAccent() : accent();
 
                         return (
                           // `TouchableOpacity`, not `Pressable` with
@@ -1171,8 +1229,8 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                               {
                                 width: isChoice ? quickReplyWidth : amountButtonWidth,
                                 marginLeft: !isChoice && index > 0 ? QUICK_REPLY_GAP : 0,
-                                borderColor: isPrimary ? '#00f2fe' : 'rgba(0,242,254,0.5)',
-                                backgroundColor: isPrimary ? '#00f2fe' : 'rgba(0,242,254,0.1)',
+                                borderColor: isPrimary ? accentFill() : tone('rgba(0,242,254,0.5)', 'rgba(8,145,178,0.4)'),
+                                backgroundColor: isPrimary ? accentFill() : tone('rgba(0,242,254,0.1)', 'rgba(8,145,178,0.07)'),
                                 opacity: disabled && !isPending ? 0.4 : 1,
                               },
                             ]}
@@ -1186,8 +1244,8 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                                     styles.choiceIcon,
                                     {
                                       backgroundColor: isPrimary
-                                        ? 'rgba(2,6,23,0.14)'
-                                        : 'rgba(0,242,254,0.14)',
+                                        ? tone('rgba(2,6,23,0.14)', 'rgba(255,255,255,0.2)')
+                                        : tone('rgba(0,242,254,0.14)', 'rgba(8,145,178,0.12)'),
                                     },
                                   ]}
                                 >
@@ -1225,13 +1283,14 @@ const AquaSageChat: React.FC<AquaSageChatProps> = ({ userProfile, onLogWater }) 
                   busy={isLoading}
                   onSend={submitMessage}
                 />
-                <Text style={{ color: '#475569', fontSize: 9, textAlign: 'center', marginTop: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                <Text style={{ color: tone('#475569', '#a1a1aa'), fontSize: 9, textAlign: 'center', marginTop: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                   {ASSISTANT_NAME} answers on hydration only, from getVāri's research documents
                 </Text>
-              </View>
+              </ChatFooter>
             </View>
           </View>
         </GestureHandlerRootView>
+        </SafeAreaProvider>
       </Modal>
     </>
   );

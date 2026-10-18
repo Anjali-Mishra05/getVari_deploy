@@ -1,7 +1,24 @@
+import type { HydrationRiskStatus } from '../../utils/hydrationRiskEngine';
+import type { UserClock } from '../utils/userClock';
+
 export type Workload = 'Office' | 'Commuter' | 'Gym' | 'Field';
-export type RiskStatus = 'Hydrated' | 'Mild Risk' | 'High Risk' | 'Critical';
+
+/** The app's own status labels, including the two that carry no score. */
+export type RiskStatus = HydrationRiskStatus;
 export type LogType = 'info' | 'success' | 'warn' | 'error';
 export type AlertType = 'critical' | 'warn' | 'info';
+
+/** One row of `getvari_hydration_logs`, as the app's feed shows it. */
+export interface WaterEntry {
+  id: string;
+  /** "14:05" on the user's clock. */
+  time: string;
+  timestamp: string;
+  /** Negative for a correction. */
+  amount: number;
+  source: string;
+  isCorrection: boolean;
+}
 
 export interface User {
   id: string;
@@ -11,22 +28,39 @@ export interface User {
   gender: string;
   weightKg: number;
   workload: Workload;
+  /** The app's simulated readings at their baseline for this profile. */
   heartRate: number;
   activityLoad: number;
   temperature: number;
   humidity: number;
   batteryLevel: number;
   rssi: number;
-  firmwareVersion: string;
+  /** The app reports no firmware. */
+  firmwareVersion: string | null;
+  /** Latest of the last profile save and the last logged entry. */
   lastSynced: string;
-  lastSyncedMinutes: number;
-  riskScore: number;
+  /** Minutes since `lastSynced`, or null when there has been no activity. */
+  lastSyncedMinutes: number | null;
+  /** Null when the engine reports Insufficient Data — never shown as 0. */
+  riskScore: number | null;
   status: RiskStatus;
+  riskMeaning: string;
+  riskSuggestedAction: string;
+  hoursSinceDrink: number;
   waterIntakeMl: number;
-  targetDailyMl: number;
-  riskHistory: number[];
-  waterHistory: { time: string; amount: number }[];
+  /** Null when the app states no goal (a fluid restriction with no doctor's limit). */
+  targetDailyMl: number | null;
+  /** The same solve recomputed hourly over the last hours; not stored by the app. */
+  riskHistory: (number | null)[];
+  waterHistory: WaterEntry[];
   phone?: string;
+  /** Other profile rows sharing this phone number. */
+  duplicateRowCount: number;
+  clock: UserClock;
+  activityLabel: string;
+  sleepWindowLabel: string;
+  city: string | null;
+  profileUpdatedAt: string | null;
   fullProfile?: any;
 }
 
@@ -64,6 +98,8 @@ export interface DashboardStats {
   avgRisk: number;
   critical: number;
   totalWater: number;
+  /** Users the engine could score; the average is over these only. */
+  scoredCount: number;
 }
 
 // Generic activity/event model for User Journey / audit trail

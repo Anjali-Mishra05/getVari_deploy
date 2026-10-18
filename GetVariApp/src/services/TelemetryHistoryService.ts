@@ -135,14 +135,23 @@ class TelemetryHistoryService {
         // `getHistory` reads back as the source of truth, so writing the
         // instantaneous value here would reintroduce the drift on every
         // device that syncs.
-        await supabase.from(TABLE_NAME).upsert({
-          user_id: userId,
-          date: today,
-          avg_temp: newSnapshot.avgTemp,
-          avg_humidity: newSnapshot.avgHumidity,
-          total_steps: newSnapshot.totalSteps,
-          avg_heart_rate: newSnapshot.avgHeartRate,
-        });
+        // One row per user per day, updated in place (see
+        // supabase/migrations/20260929_telemetry_snapshots_access.sql). The
+        // error is checked: a rejected write used to vanish without a trace.
+        const { error } = await supabase.from(TABLE_NAME).upsert(
+          {
+            user_id: userId,
+            date: today,
+            avg_temp: newSnapshot.avgTemp,
+            avg_humidity: newSnapshot.avgHumidity,
+            total_steps: newSnapshot.totalSteps,
+            avg_heart_rate: newSnapshot.avgHeartRate,
+          },
+          { onConflict: 'user_id,date' }
+        );
+        if (error) {
+          console.error('[TelemetryHistory] Snapshot not stored:', error.code ?? '', error.message);
+        }
       }
     } catch (e) {
       console.error('[TelemetryHistory] Failed to record snapshot:', e);
@@ -177,7 +186,11 @@ class TelemetryHistoryService {
         avg_heart_rate: s.avgHeartRate,
       }));
 
-      await supabase.from(TABLE_NAME).upsert(rows);
+      const { error } = await supabase.from(TABLE_NAME).upsert(rows, { onConflict: 'user_id,date' });
+      if (error) {
+        console.error('[TelemetryHistory] Sync not stored:', error.code ?? '', error.message);
+        return;
+      }
       console.log('[TelemetryHistory] Local data synced to cloud.');
     } catch (e) {
       console.error('[TelemetryHistory] Sync failed:', e);
@@ -188,7 +201,12 @@ class TelemetryHistoryService {
    * Returns history for the last 7 days from Supabase.
    * If real data is missing, fills with deterministic mock data.
    */
-  async getHistory(userId?: string, profile?: UserProfile): Promise<TelemetrySnapshot[]> {
+  async getHistory(
+    userId?: string,
+    profile?: UserProfile,
+    /** 1 ends the window yesterday: the previous 7 full days, today excluded. */
+    endDaysAgo: number = 0
+  ): Promise<TelemetrySnapshot[]> {
     try {
       if (!userId || !profile) return [];
 
@@ -198,7 +216,12 @@ class TelemetryHistoryService {
         .select('*')
         .eq('user_id', userId)
         .order('date', { ascending: false })
-        .limit(MAX_DAYS);
+        .limit(MAX_DAYS + endDaysAgo);
+      if (error) {
+        // Reported, not swallowed: every missing day falls back to mock data
+        // below, which would otherwise hide a rejected read (42501).
+        console.warn('[TelemetryHistory] History not read:', error.code ?? '', error.message);
+      }
 
       const realSnapshots: TelemetrySnapshot[] = (cloudData || []).map(row => ({
         date: row.date,
@@ -212,7 +235,7 @@ class TelemetryHistoryService {
       const combinedHistory: TelemetrySnapshot[] = [];
       const now = new Date();
 
-      for (let i = MAX_DAYS - 1; i >= 0; i--) {
+      for (let i = MAX_DAYS - 1 + endDaysAgo; i >= endDaysAgo; i--) {
         const d = new Date(now);
         d.setDate(d.getDate() - i);
         const dateStr = d.toISOString().split('T')[0];
@@ -233,8 +256,13 @@ class TelemetryHistoryService {
     }
   }
 
-  async getAverages(days: number = 7, userId?: string, profile?: UserProfile): Promise<{ avgTemp: number | null; avgHumidity: number | null; avgSteps: number | null; avgHR: number | null }> {
-    const history = await this.getHistory(userId, profile);
+  async getAverages(
+    days: number = 7,
+    userId?: string,
+    profile?: UserProfile,
+    endDaysAgo: number = 0
+  ): Promise<{ avgTemp: number | null; avgHumidity: number | null; avgSteps: number | null; avgHR: number | null }> {
+    const history = await this.getHistory(userId, profile, endDaysAgo);
     const slice = history.slice(-days);
     if (slice.length === 0) return { avgTemp: null, avgHumidity: null, avgSteps: null, avgHR: null };
 

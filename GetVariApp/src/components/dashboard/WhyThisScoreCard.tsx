@@ -5,7 +5,8 @@ import { Layers } from 'lucide-react-native';
 import GlassCard from '../GlassCard';
 import { cardStyle } from './cardTheme';
 import { HydrationRiskDetails } from '../../types';
-import { ACCENT, loadColor } from './riskTheme';
+import { loadColor } from './riskTheme';
+import { accent, themed } from '../../theme/theme';
 
 interface WhyThisScoreCardProps {
   risk: HydrationRiskDetails;
@@ -39,10 +40,10 @@ const WhyThisScoreCard: React.FC<WhyThisScoreCardProps> = ({ risk }) => {
   const reweighted = scored && Math.abs(baseTotal - (risk.score as number)) > 1;
 
   return (
-    <GlassCard className="bg-white/[0.01]" style={cardStyle}>
-      <View className="flex-row items-center gap-2 mb-4">
-        <Layers color={ACCENT} size={15} />
-        <Text className="text-[10px] font-black tracking-wider uppercase text-neutral-200">
+    <GlassCard adaptive className={themed('bg-white/[0.01]')} style={cardStyle}>
+      <View className={themed('flex-row items-center gap-2 mb-4')}>
+        <Layers color={accent()} size={15} />
+        <Text className={themed('text-[10px] font-black tracking-wider uppercase text-neutral-200')}>
           Why This Score?
         </Text>
       </View>
@@ -50,21 +51,21 @@ const WhyThisScoreCard: React.FC<WhyThisScoreCardProps> = ({ risk }) => {
       {rows.map(row => (
         <View
           key={row.label}
-          className="flex-row justify-between items-center border-b border-white/[0.03] py-2"
+          className={themed('flex-row justify-between items-center border-b border-white/[0.03] py-2')}
         >
-          <Text className="text-[11.5px] font-mono text-neutral-400">
+          <Text className={themed('text-[11.5px] font-mono text-neutral-400')}>
             {row.label} ({Math.round(row.weight * 100)}%)
           </Text>
-          <Text className="text-[11.5px] font-mono font-black text-white">
+          <Text className={themed('text-[11.5px] font-mono font-black text-white')}>
             {row.pts === null ? '--' : `${row.pts} pts`}
           </Text>
         </View>
       ))}
 
-      <View className="flex-row justify-between items-center pt-3 mt-1 border-t border-white/10">
-        <Text className="text-[12px] font-black text-cyan-400">Total Risk Score</Text>
+      <View className={themed('flex-row justify-between items-center pt-3 mt-1 border-t border-white/10')}>
+        <Text className={themed('text-[12px] font-black text-cyan-400')}>Total Risk Score</Text>
         <Text
-          className="text-[15px] font-mono font-black"
+          className={themed('text-[15px] font-mono font-black')}
           style={{ color: scored ? loadColor(risk.score as number) : '#64748b' }}
         >
           {scored ? risk.score : '--'}
@@ -72,7 +73,7 @@ const WhyThisScoreCard: React.FC<WhyThisScoreCardProps> = ({ risk }) => {
       </View>
 
       {reweighted && (
-        <Text className="text-[9px] text-neutral-500 leading-[14px] mt-2.5">
+        <Text className={themed('text-[9px] text-neutral-500 leading-[14px] mt-2.5')}>
           Percentages shown are the model's base weights. Your profile re-weights them, so the
           solved total differs from their sum.
         </Text>

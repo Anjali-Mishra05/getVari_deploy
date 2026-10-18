@@ -5,6 +5,7 @@ import { Activity, Heart, Thermometer } from 'lucide-react-native';
 import GlassCard from '../GlassCard';
 import { CARD_GAP, TILE_GAP, tileStyle } from './cardTheme';
 import { SensorData } from '../../types';
+import { themed } from '../../theme/theme';
 
 interface VitalsRowProps {
   sensorData: SensorData;
@@ -31,22 +32,22 @@ const Vital: React.FC<VitalProps> = ({
   caption,
   captionColor = '#64748b',
 }) => (
-  <GlassCard className="flex-1 bg-white/[0.01]" style={tileStyle}>
-    <View className="flex-row items-center gap-1.5">
+  <GlassCard adaptive className={themed('flex-1 bg-white/[0.01]')} style={tileStyle}>
+    <View className={themed('flex-row items-center gap-1.5')}>
       {icon}
-      <Text className="text-[9px] uppercase tracking-wider text-neutral-400 font-mono" numberOfLines={1}>
+      <Text className={themed('text-[9px] uppercase tracking-wider text-neutral-400 font-mono')} numberOfLines={1}>
         {label}
       </Text>
     </View>
-    <View className="flex-row items-end gap-1 my-2">
-      <Text className="text-[26px] font-black text-white font-mono" style={{ letterSpacing: -1 }}>
+    <View className={themed('flex-row items-end gap-1 my-2')}>
+      <Text className={themed('text-[26px] font-black text-white font-mono')} style={{ letterSpacing: -1 }}>
         {value}
       </Text>
-      <Text className="text-[9px] font-mono mb-1.5" style={{ color: unitColor }}>
+      <Text className={themed('text-[9px] font-mono mb-1.5')} style={{ color: unitColor }}>
         {unit}
       </Text>
     </View>
-    <Text className="text-[8.5px]" style={{ color: captionColor }} numberOfLines={1}>
+    <Text className={themed('text-[8.5px]')} style={{ color: captionColor }} numberOfLines={1}>
       {caption}
     </Text>
   </GlassCard>
@@ -57,7 +58,7 @@ const VitalsRow: React.FC<VitalsRowProps> = ({ sensorData, connected = true }) =
   const dash = (value: any) => (connected && value !== null ? String(value) : '--');
 
   return (
-    <View className="flex-row" style={{ gap: TILE_GAP, marginBottom: CARD_GAP }}>
+    <View className={themed('flex-row')} style={{ gap: TILE_GAP, marginBottom: CARD_GAP }}>
       <Vital
         icon={<Heart color="#ef4444" size={13} />}
         label="HR BPM"

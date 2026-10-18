@@ -1,236 +1,153 @@
 import { ActivityEvent } from '../types';
 import { supabase } from '../../services/SupabaseClient';
-import MockTelemetryService from '../../services/MockTelemetryService';
-import { HydrationRiskEngine } from '../../utils/hydrationRiskEngine';
 
-const makeId = (prefix = 'EV') => `${prefix}_${Math.random().toString(36).slice(2,9)}`;
+/** PostgREST answers at most 1000 rows per request by default. */
+const PAGE_SIZE = 1000;
+
+const readAll = async (build: () => any): Promise<any[]> => {
+  const rows: any[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await build().range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message ?? String(error));
+    rows.push(...(data ?? []));
+    if ((data ?? []).length < PAGE_SIZE) return rows;
+  }
+};
 
 /**
- * Fetches real activity events for a given user from Supabase.
+ * A user's journey, built only from rows that exist.
+ *
+ * Every event is a database row the app or the panel wrote: the profile row's
+ * creation and last save, each `getvari_hydration_logs` entry (corrections
+ * included, shown as corrections), devices and admin messages. The app
+ * persists no risk history, telemetry stream or AI recommendations, so none
+ * are shown — the generated "Telemetry received" points this used to add were
+ * computed from invented readings.
+ *
+ * Throws when the profile or the entries cannot be read, so the journey shows
+ * an error instead of an empty history.
  */
 export const fetchEventsForUser = async (userId: string): Promise<ActivityEvent[]> => {
-  try {
-    const events: ActivityEvent[] = [];
+  const events: ActivityEvent[] = [];
 
-    // 1. Fetch Profile for account creation / profile set info
-    const { data: profileRow } = await supabase
-      .from('getvari_profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
+  const { data: profileRow, error: profileError } = await supabase
+    .from('getvari_profiles')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
+  if (profileError) throw new Error(profileError.message);
 
-    if (profileRow) {
-      // Account created
+  if (profileRow) {
+    events.push({
+      eventId: `profile_created_${userId}`,
+      userId,
+      eventType: 'account_created',
+      category: 'Auth',
+      actor: 'System',
+      title: 'Account created',
+      description: 'Profile row created in Supabase.',
+      timestamp: profileRow.created_at,
+      status: 'success',
+    });
+    if (profileRow.updated_at) {
       events.push({
-        eventId: makeId('EV'),
-        userId,
-        eventType: 'account_created',
-        category: 'Auth',
-        actor: 'System',
-        title: 'Account created',
-        description: `Account initialized in Supabase.`,
-        timestamp: profileRow.created_at,
-        status: 'success'
-      });
-
-      // Profile set
-      events.push({
-        eventId: makeId('EV'),
+        eventId: `profile_saved_${userId}`,
         userId,
         eventType: 'profile_set',
         category: 'Profile',
         actor: 'User',
-        title: 'Profile details saved',
-        description: `Hydration baseline and biometric blueprint configured.`,
+        title: 'Profile last saved',
+        description: 'The most recent save of the profile. Earlier saves are not recorded.',
         timestamp: profileRow.updated_at,
-        status: 'success'
+        status: 'success',
       });
     }
+  }
 
-    // 2. Fetch Water Intake Logs
-    const { data: logs } = await supabase
+  const logs = await readAll(() =>
+    supabase
       .from('getvari_hydration_logs')
       .select('*')
       .eq('user_id', userId)
-      .order('timestamp', { ascending: true });
+      .order('timestamp', { ascending: true })
+  );
 
-    if (logs) {
-      let cumulativeMl = 0;
-      logs.forEach(log => {
-        cumulativeMl += log.amount_ml;
-
-        // Calculate risk snapshot at the time of this intake
-        const mockTelemetry = MockTelemetryService.getMockPrimaryTelemetry(userId);
-
-        // Find logs before this point to calculate time since drink
-        const logsBefore = logs.filter(l => new Date(l.timestamp).getTime() < new Date(log.timestamp).getTime());
-        let hoursSince = 2.0;
-        if (logsBefore.length > 0) {
-          const newest = logsBefore.reduce((latest, l) =>
-            new Date(l.timestamp) > new Date(latest.timestamp) ? l : latest
-          );
-          hoursSince = (new Date(log.timestamp).getTime() - new Date(newest.timestamp).getTime()) / 3_600_000;
-        }
-
-        // Calculate risk AFTER this intake to show correlation improvement
-        const activeAbsorbed = Math.min(1000, 200 + cumulativeMl);
-
-        const engineResult = HydrationRiskEngine.solveRisk({
-          ...mockTelemetry,
-          timeSinceWaterIntake: Math.max(0, Math.min(8, hoursSince))
-        }, profileRow?.profile);
-
-        events.push({
-          eventId: makeId('EV'),
-          userId,
-          eventType: 'water_intake_added',
-          category: 'Intake',
-          actor: 'User',
-          title: 'Water intake recorded',
-          description: `Logged ${log.amount_ml}ml via ${log.source}.`,
-          timestamp: log.timestamp,
-          status: 'success',
-          metadata: {
-            amount: log.amount_ml,
-            cumulativeAmount: cumulativeMl,
-            riskSnapshot: engineResult.score
-          }
-        });
-      });
-    }
-
-    // 3. Inject Mock Telemetry Events for the Trend Graph
-    const now = Date.now();
-
-    // 3a. Generate 6 points for the last 6 hours for Today's trend
-    for (let i = 6; i >= 0; i--) {
-      const pointTime = now - i * 3600000;
-      const pointTimestamp = new Date(pointTime).toISOString();
-
-      const mockTelemetry = MockTelemetryService.getMockPrimaryTelemetry(userId, undefined, pointTime);
-      const logsBeforePoint = logs?.filter(l => new Date(l.timestamp).getTime() <= pointTime) || [];
-      const waterIntakeMlAtTime = logsBeforePoint.reduce((sum, l) => sum + l.amount_ml, 0);
-
-      let hoursSince = 2.0 + i;
-      if (logsBeforePoint.length > 0) {
-        const newest = logsBeforePoint.reduce((latest, l) =>
-          new Date(l.timestamp) > new Date(latest.timestamp) ? l : latest
-        );
-        hoursSince = (pointTime - new Date(newest.timestamp).getTime()) / 3_600_000;
-      }
-
-      const activeAbsorbed = Math.min(1000, 200 + waterIntakeMlAtTime);
-      const engineResult = HydrationRiskEngine.solveRisk({
-        ...mockTelemetry,
-        timeSinceWaterIntake: Math.max(0, Math.min(8, hoursSince))
-      }, activeAbsorbed, profileRow?.profile);
-
-      events.push({
-        eventId: makeId('TELEMETRY_TODAY'),
-        userId,
-        eventType: 'telemetry_received',
-        category: 'Telemetry',
-        actor: 'System',
-        title: 'Telemetry received',
-        description: `Risk index at ${new Date(pointTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} was ${engineResult.score}%.`,
-        timestamp: pointTimestamp,
-        status: 'success',
-        metadata: {
-          risk: engineResult.score,
-          heartRate: mockTelemetry.heartRate,
-          activity: mockTelemetry.activityLoad
-        }
-      });
-    }
-
-    // 3b. Generate 7 daily points for the last 7 days for historical trend
-    for (let i = 7; i > 0; i--) {
-      const pointTime = now - i * 86400000;
-      const pointTimestamp = new Date(pointTime).toISOString();
-
-      const mockTelemetry = MockTelemetryService.getMockPrimaryTelemetry(userId, undefined, pointTime);
-      const logsBeforePoint = logs?.filter(l => new Date(l.timestamp).getTime() <= pointTime) || [];
-      // Approximate daily intake for that day (mocking historical distribution)
-      const waterIntakeMlAtTime = logsBeforePoint.reduce((sum, l) => sum + l.amount_ml, 0) / (7 - i + 1);
-
-      const activeAbsorbed = Math.min(1000, 200 + waterIntakeMlAtTime);
-      const engineResult = HydrationRiskEngine.solveRisk({
-        ...mockTelemetry,
-        timeSinceWaterIntake: 2.5 // Assume average gap for daily snapshots
-      }, activeAbsorbed, profileRow?.profile);
-
-      events.push({
-        eventId: makeId('TELEMETRY_HIST'),
-        userId,
-        eventType: 'telemetry_received',
-        category: 'Telemetry',
-        actor: 'System',
-        title: 'Historical Telemetry',
-        description: `Daily average risk was ${engineResult.score}%.`,
-        timestamp: pointTimestamp,
-        status: 'success',
-        metadata: {
-          risk: engineResult.score,
-          isHistorical: true
-        }
-      });
-    }
-    const { data: devices } = await supabase
-      .from('getvari_devices')
-      .select('*')
-      .eq('user_id', userId);
-
-    if (devices) {
-      devices.forEach(dev => {
-        events.push({
-          eventId: makeId('EV'),
-          userId,
-          eventType: 'ble_connected',
-          category: 'Device',
-          actor: 'User',
-          title: 'Device paired',
-          description: `Linked ${dev.name || 'GetVari Node'}.`,
-          timestamp: dev.created_at || dev.last_synced,
-          status: 'success'
-        });
-      });
-    }
-
-    const { data: alerts } = await supabase
-      .from('getvari_admin_alerts')
-      .select('*')
-      .eq('user_id', userId)
-      .order('sent_at', { ascending: true });
-
-    alerts?.forEach(alert => {
-      events.push({
-        eventId: alert.id || makeId('ALERT'),
-        userId,
-        eventType: 'critical_alert_sent',
-        category: 'Notification',
-        actor: 'Admin',
-        title: alert.title || 'Critical hydration alert sent',
-        description: alert.message || 'Admin sent a critical hydration alert.',
-        timestamp: alert.sent_at,
-        status: alert.status === 'sent' ? 'success' : 'failed',
-        metadata: { severity: alert.severity, alertStatus: alert.status }
-      });
+  let cumulativeMl = 0;
+  for (const log of logs) {
+    const amount = Number(log.amount_ml) || 0;
+    cumulativeMl += amount;
+    const isCorrection = log.source === 'correction' || amount < 0;
+    events.push({
+      eventId: String(log.id),
+      userId,
+      eventType: isCorrection ? 'water_intake_corrected' : 'water_intake_added',
+      category: 'Intake',
+      actor: 'User',
+      title: isCorrection ? 'Intake corrected' : 'Water intake recorded',
+      description: isCorrection
+        ? `Took back ${Math.abs(amount)} ml.`
+        : `Logged ${amount} ml via ${log.source}.`,
+      // The write time, which is what the app's feed and daily total use.
+      timestamp: log.timestamp,
+      status: 'success',
+      metadata: {
+        amount,
+        cumulativeAmount: cumulativeMl,
+        source: log.source,
+        reportedAt: log.reported_at ?? log.timestamp,
+        verificationSource: log.verification_source,
+      },
     });
-
-    // Note: AI recommendations and real-time telemetry are not currently persisted in Supabase.
-    // We do not fabricate these events here.
-
-    // Sort ascending (oldest first)
-    events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-    return events;
-  } catch (error) {
-    console.error('[ActivityService] Error fetching real events:', error);
-    return [];
   }
+
+  // Only the web demo writes devices; a missing table is not a broken journey.
+  const { data: devices, error: deviceError } = await supabase
+    .from('getvari_devices')
+    .select('*')
+    .eq('user_id', userId);
+  if (deviceError) console.warn('[ActivityService] Devices not read:', deviceError.message);
+  (devices ?? []).forEach((dev: any) => {
+    events.push({
+      eventId: `device_${dev.device_id ?? dev.id ?? dev.created_at}`,
+      userId,
+      eventType: 'ble_connected',
+      category: 'Device',
+      actor: 'User',
+      title: 'Device paired',
+      description: `Linked ${dev.name || 'GetVari Node'}.`,
+      timestamp: dev.created_at || dev.last_synced,
+      status: 'success',
+    });
+  });
+
+  const { data: alerts, error: alertError } = await supabase
+    .from('getvari_admin_alerts')
+    .select('*')
+    .eq('user_id', userId)
+    .order('sent_at', { ascending: true });
+  if (alertError) console.warn('[ActivityService] Admin messages not read:', alertError.message);
+  (alerts ?? []).forEach((alert: any) => {
+    const critical = alert.severity === 'critical';
+    events.push({
+      eventId: String(alert.id),
+      userId,
+      eventType: critical ? 'critical_alert_sent' : 'admin_message_sent',
+      category: 'Notification',
+      actor: 'Admin',
+      title: alert.title || (critical ? 'Critical hydration alert sent' : 'Admin notification sent'),
+      description: alert.message || '',
+      timestamp: alert.sent_at,
+      // "sent" is recorded when the row is written; the app does not report
+      // delivery back.
+      status: alert.status === 'sent' ? 'success' : 'failed',
+      metadata: { severity: alert.severity, alertStatus: alert.status, delivery: 'not reported by the app' },
+    });
+  });
+
+  events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  return events;
 };
 
 export default {
   fetchEventsForUser,
 };
-

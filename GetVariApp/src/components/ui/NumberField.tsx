@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
 
+import { useScopedTheme } from '../../theme/theme';
+
 interface NumberFieldProps {
   label: string;
   value: number;
@@ -44,6 +46,7 @@ const NumberField: React.FC<NumberFieldProps> = ({
   unit,
   hint,
 }) => {
+  const { cls, pick } = useScopedTheme();
   const [text, setText] = useState(String(value));
   const [focused, setFocused] = useState(false);
 
@@ -83,23 +86,23 @@ const NumberField: React.FC<NumberFieldProps> = ({
   };
 
   return (
-    <View className="w-full mb-6">
-      <Text className="text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2">
+    <View className={cls('w-full mb-6')}>
+      <Text className={cls('text-[11px] text-neutral-400 font-mono uppercase tracking-wider mb-2')}>
         {label}
       </Text>
 
       <View
-        className="flex-row items-center bg-white/5 border rounded-xl px-4"
+        className={cls('flex-row items-center bg-white/5 border rounded-xl px-4')}
         style={{
           borderColor: outOfRange
             ? 'rgba(245,158,11,0.6)'
             : focused
-            ? 'rgba(0,242,254,0.75)'
-            : 'rgba(255,255,255,0.10)',
+            ? pick('rgba(0,242,254,0.75)', 'rgba(8,145,178,0.8)')
+            : pick('rgba(255,255,255,0.10)', 'rgba(24,24,27,0.15)'),
         }}
       >
         <TextInput
-          className="flex-1 text-white text-[20px] font-black font-mono py-3"
+          className={cls('flex-1 text-white text-[20px] font-black font-mono py-3')}
           value={text}
           onChangeText={handleChange}
           onFocus={() => setFocused(true)}
@@ -114,13 +117,13 @@ const NumberField: React.FC<NumberFieldProps> = ({
           underlineColorAndroid="transparent"
         />
         {!!unit && (
-          <Text className="text-[13px] text-neutral-400 font-mono font-bold ml-2">{unit}</Text>
+          <Text className={cls('text-[13px] text-neutral-400 font-mono font-bold ml-2')}>{unit}</Text>
         )}
       </View>
 
       <Text
-        className="text-[10px] mt-1.5 leading-[14px]"
-        style={{ color: outOfRange ? WARN : '#64748b' }}
+        className={cls('text-[10px] mt-1.5 leading-[14px]')}
+        style={{ color: outOfRange ? pick(WARN, '#b45309') : '#64748b' }}
       >
         {outOfRange
           ? `Enter a value between ${min} and ${max}${unit ? ` ${unit}` : ''}.`

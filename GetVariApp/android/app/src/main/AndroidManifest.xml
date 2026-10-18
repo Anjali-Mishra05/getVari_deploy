@@ -63,13 +63,17 @@
       <!-- Push messages shown by Firebase while the app is closed. -->
       <meta-data
         android:name="com.google.firebase.messaging.default_notification_icon"
-        android:resource="@drawable/ic_stat_notification" />
+        android:resource="@drawable/ic_stat_final_icon" />
       <meta-data
         android:name="com.google.firebase.messaging.default_notification_color"
         android:resource="@color/notification_accent"
         tools:replace="android:resource" />
-      <!-- Keep Android's keyguard in front of this activity until the user
-           authenticates, including when a reminder wakes the device. -->
+      <!-- No static `showWhenLocked` / `turnScreenOn`: that would put the whole
+           app over the lock screen on every launch. Instead `MainActivity`
+           turns both on at runtime only when a hydration reminder's
+           full-screen intent launches it with the phone locked or dark, and
+           JS turns them off again once the reminder is answered, so the rest
+           of the app still needs an unlock. The keyguard is never dismissed. -->
       <activity
         android:name=".MainActivity"
         android:label="@string/app_name"

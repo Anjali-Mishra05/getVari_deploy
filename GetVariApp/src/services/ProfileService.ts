@@ -3,6 +3,8 @@ import { AuthService } from './AuthService';
 import NotificationService from './NotificationService';
 import DailyTargetService from './DailyTargetService';
 import { targetFromProfile } from '../utils/hydrationTarget';
+import { accountStartDate } from '../utils/pbwr';
+import { storedTargetForToday } from '../utils/dailyTargetRecord';
 import { awakeHoursPerDay, normaliseSleepSchedule } from '../utils/sleepWindow';
 import type { UserProfile } from '../types';
 
@@ -72,11 +74,12 @@ export const fetchProfileResult = async (
   const id = userId ?? (await AuthService.getCurrentUserId());
   if (!id) return { profile: null, failed: false };
 
-  let data: { profile?: unknown } | null = null;
+  let data: { profile?: unknown; created_at?: unknown } | null = null;
   try {
+    // `*` rather than naming `created_at`, so a table without it still loads.
     const response = await supabase
       .from(PROFILES_TABLE)
-      .select('profile')
+      .select('*')
       .eq('id', id)
       .maybeSingle();
 
@@ -92,8 +95,9 @@ export const fetchProfileResult = async (
     return { profile: null, failed: true };
   }
 
-  const stored = (data?.profile as UserProfile) ?? null;
-  if (!stored) return { profile: null, failed: false };
+  const raw = (data?.profile as UserProfile) ?? null;
+  if (!raw) return { profile: null, failed: false };
+  const stored: UserProfile = { ...raw, accountCreatedAt: accountStartDate(data?.created_at, raw.accountCreatedAt) };
 
   /**
    * The goal is recomputed on read, not trusted as stored.
@@ -106,12 +110,14 @@ export const fetchProfileResult = async (
    * formula's 3250 ml to every screen in the app: the exact over-drinking the
    * physician gate exists to prevent, preserved by the cache.
    *
-   * Only this one field is re-derived. `accountCreatedAt` deliberately is not:
-   * `withDerivedFields` stamps it with `now` when absent, and doing that on
-   * every read would move the PBWR calibration window's start date each time
-   * the profile loaded, so the calibration period would never end.
+   * `accountCreatedAt` (above) comes from the row's server-set `created_at`,
+   * never from today's date, so no read, save or login moves the PBWR
+   * calibration window.
    */
-  return { profile: { ...stored, targetDailyMl: targetFromProfile(stored) }, failed: false };
+  // Today's Final Daily Target when the app has already computed it (the same
+  // capped number the dashboard shows); otherwise the telemetry-less figure.
+  const targetDailyMl = storedTargetForToday(stored) ?? targetFromProfile(stored);
+  return { profile: { ...stored, targetDailyMl }, failed: false };
 };
 
 /** The stored profile blob, or null when the user has not onboarded yet. */
@@ -126,13 +132,19 @@ export const withDerivedFields = (profile: any): any => {
   const schedule = normaliseSleepSchedule(profile);
   return {
     ...profile,
-    // Stamped on the first save and preserved thereafter, so the PBWR
-    // calibration window has a fixed start date to measure from.
-    accountCreatedAt: profile.accountCreatedAt ?? new Date().toISOString(),
+    // Carried through, never stamped with the time of this save: the PBWR
+    // calibration window is measured from the row's server-set `created_at`
+    // (see `accountStartDate`), and an edit date here is what put old
+    // accounts back into days 1–7.
+    accountCreatedAt: profile.accountCreatedAt,
     // The dashboard reads `location`; onboarding has always written
     // `selectedCity`. Both are kept in step rather than migrating rows.
     location: profile.selectedCity ?? profile.location,
     targetDailyMl: targetFromProfile(profile),
+    // The day's stored Final Daily Target was computed from the answers this
+    // save changes; the app recomputes and stores it again (the lock is
+    // cleared below).
+    dailyTarget: undefined,
     ...(schedule
       ? {
           sleepSchedule: schedule,
@@ -195,6 +207,16 @@ export const updateProfile = async (patch: ProfilePatch): Promise<ProfileSaveRes
       console.error('[Profile] Failed to apply sleep window:', sleepError);
     }
 
+    // The Daily Water Requirement carries the goal in its text. The edit's own
+    // figure goes in now, so the queued messages never keep the old one if the
+    // dashboard's recalculation is slow or fails; that recalculation replaces
+    // it in place when it lands.
+    try {
+      await NotificationService.setDailyWaterTarget(merged.targetDailyMl);
+    } catch (targetError) {
+      console.error('[Profile] Failed to apply the daily water target:', targetError);
+    }
+
     /**
      * The day's goal is locked, and an edit is the one thing that should move
      * it before tomorrow.
@@ -206,7 +228,7 @@ export const updateProfile = async (patch: ProfilePatch): Promise<ProfileSaveRes
      * answer.
      */
     try {
-      await DailyTargetService.clearLockedTarget();
+      await DailyTargetService.clearLockedTarget(userId);
     } catch (targetError) {
       console.error('[Profile] Failed to unlock the daily target:', targetError);
     }

@@ -38,15 +38,16 @@ class PBWRService {
     waterConsumedMl: number,
     userId?: string
   ): Promise<PBWRBreakdown> {
-    // §3 — the rolling 7-day average of each observed metric.
+    // §3 — the rolling average of each observed metric over the previous
+    // 7 full days (today, still in progress, is not part of it).
     const avgs = await TelemetryHistoryService.getAverages(
       this.CALIBRATION_DAYS,
       userId,
-      profile
+      profile,
+      1
     );
 
-    // §3 — days 1–7 run on the baseline alone, so the observed bands are not
-    // fed in at all rather than being fed in and then zeroed.
+    // §3 — days 1–7: the target is PBWR only.
     const isCalibrationPeriod = isWithinCalibrationWindow(profile.accountCreatedAt);
 
     const breakdown = computePBWRBreakdown(
@@ -59,7 +60,8 @@ class PBWRService {
         physicianLimitMl: profile.physicianLimitMl,
         activityLevel: profile.activityLevel,
       },
-      isCalibrationPeriod ? null : avgs
+      isCalibrationPeriod ? null : avgs,
+      { calibrating: isCalibrationPeriod }
     );
 
     return {

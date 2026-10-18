@@ -23,6 +23,13 @@ react {
     //   skip the bundling of the JS bundle and the assets. Default is "debug", "debugOptimized".
     //   If you add flavors like lite, prod, etc. you'll have to list your debuggableVariants.
     // debuggableVariants = ["liteDebug", "liteDebugOptimized", "prodDebug", "prodDebugOptimized"]
+    //
+    // Empty: the JS bundle is packaged into debug APKs too. Notifications fire
+    // with the app closed, and the background handler that records them, runs
+    // the delivery gate and raises the full-screen reminder has to start
+    // without Metro. Without a bundle it crashed with "Unable to load script".
+    // Metro is still used for development whenever it is reachable.
+    debuggableVariants = []
 
     /* Bundling */
     //   A list containing the node command and its flags. Default is just 'node'.
@@ -85,6 +92,10 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        // The internal version shown on the Profile page: 0.1.DD.MM, from the
+        // day the APK is built. Compiled into BuildConfig, so an installed
+        // build keeps the same version however long it is used.
+        buildConfigField "String", "INTERNAL_VERSION", "\"0.1.${java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern('dd.MM'))}\""
     }
     signingConfigs {
         debug {

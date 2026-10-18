@@ -42,6 +42,7 @@ import {
   hourlyRhythm,
   weekSummary,
 } from '../../utils/analytics';
+import { accent, themed, tone } from '../../theme/theme';
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
@@ -94,10 +95,10 @@ const SectionTitle: React.FC<{ icon: React.ReactNode; title: string; right?: Rea
   title,
   right,
 }) => (
-  <View className="flex-row items-center justify-between mb-4">
-    <View className="flex-row items-center gap-2">
+  <View className={themed('flex-row items-center justify-between mb-4')}>
+    <View className={themed('flex-row items-center gap-2')}>
       {icon}
-      <Text className="text-[10px] uppercase tracking-[0.2em] font-black text-white/80">{title}</Text>
+      <Text className={themed('text-[10px] uppercase tracking-[0.2em] font-black text-white/80')}>{title}</Text>
     </View>
     {right}
   </View>
@@ -106,12 +107,12 @@ const SectionTitle: React.FC<{ icon: React.ReactNode; title: string; right?: Rea
 const StatTile: React.FC<{ label: string; value: string; accent?: string; sub?: React.ReactNode }> = ({
   label,
   value,
-  accent = '#ffffff',
+  accent = tone('#ffffff', '#18181b'),
   sub,
 }) => (
-  <View className="flex-1 bg-white/[0.03] border border-white/5 rounded-2xl px-3 py-3">
+  <View className={themed('flex-1 bg-white/[0.03] border border-white/5 rounded-2xl px-3 py-3')}>
     <Text
-      className="text-[8px] uppercase tracking-widest font-black text-neutral-500"
+      className={themed('text-[8px] uppercase tracking-widest font-black text-neutral-500')}
       numberOfLines={1}
       adjustsFontSizeToFit
       maxFontSizeMultiplier={1.2}
@@ -119,7 +120,7 @@ const StatTile: React.FC<{ label: string; value: string; accent?: string; sub?: 
       {label}
     </Text>
     <Text
-      className="text-[17px] font-black mt-1"
+      className={themed('text-[17px] font-black mt-1')}
       style={{ color: accent }}
       numberOfLines={1}
       adjustsFontSizeToFit
@@ -169,7 +170,7 @@ const GoalRing: React.FC<{ progress: number; size: number; label: string; sub: s
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          stroke="rgba(255,255,255,0.07)"
+          stroke={tone('rgba(255,255,255,0.07)', 'rgba(24,24,27,0.10)')}
           strokeWidth={stroke}
           fill="none"
         />
@@ -186,8 +187,8 @@ const GoalRing: React.FC<{ progress: number; size: number; label: string; sub: s
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </Svg>
-      <Text className="text-[18px] font-black text-white">{label}</Text>
-      <Text className="text-[9px] font-bold text-neutral-400 mt-0.5">{sub}</Text>
+      <Text className={themed('text-[18px] font-black text-white')}>{label}</Text>
+      <Text className={themed('text-[9px] font-bold text-neutral-400 mt-0.5')}>{sub}</Text>
     </View>
   );
 };
@@ -245,7 +246,7 @@ const IntakeBars: React.FC<{
           x2={width}
           y1={chartH * f}
           y2={chartH * f}
-          stroke="rgba(255,255,255,0.04)"
+          stroke={tone('rgba(255,255,255,0.04)', 'rgba(24,24,27,0.08)')}
           strokeWidth={1}
         />
       ))}
@@ -351,15 +352,15 @@ const RhythmClock: React.FC<{
 
   return (
     <Svg width={size} height={size}>
-      <Circle cx={cx} cy={cy} r={outer} stroke="rgba(255,255,255,0.05)" strokeWidth={1} fill="none" />
-      <Circle cx={cx} cy={cy} r={inner} stroke="rgba(255,255,255,0.08)" strokeWidth={1} fill="none" />
+      <Circle cx={cx} cy={cy} r={outer} stroke={tone('rgba(255,255,255,0.05)', 'rgba(24,24,27,0.08)')} strokeWidth={1} fill="none" />
+      <Circle cx={cx} cy={cy} r={inner} stroke={tone('rgba(255,255,255,0.08)', 'rgba(24,24,27,0.12)')} strokeWidth={1} fill="none" />
       {buckets.map((ml, hour) => {
         // Midnight at the top, running clockwise.
         const a0 = -Math.PI / 2 + hour * step + 0.03;
         const a1 = a0 + step - 0.06;
         const r1 = inner + Math.max(ml > 0 ? 0.12 : 0.03, ml / max) * (outer - inner);
         const isSel = selected === hour;
-        const color = isSel ? '#ffffff' : hour === peak && ml > 0 ? FLAME : ACCENT;
+        const color = isSel ? tone('#ffffff', '#18181b') : hour === peak && ml > 0 ? FLAME : ACCENT;
         return (
           <G key={hour} onPress={() => onSelect(hour)}>
             <Path d={wedge(cx, cy, inner, outer, a0, a1)} fill="transparent" />
@@ -419,7 +420,7 @@ const Heatmap: React.FC<{
               rx={7}
               fill={day.goalMet ? MET : ACCENT}
               opacity={day.totalMl > 0 ? 0.18 + 0.82 * ratio : 0.06}
-              stroke={isSel ? '#ffffff' : isToday ? ACCENT : 'transparent'}
+              stroke={isSel ? tone('#ffffff', '#18181b') : isToday ? ACCENT : 'transparent'}
               strokeWidth={isSel || isToday ? 1.5 : 0}
             />
             <SvgText
@@ -516,20 +517,20 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
 
   if (history === null) {
     return (
-      <View className="items-center justify-center py-24">
+      <View className={themed('items-center justify-center py-24')}>
         {failed ? (
           <>
-            <Text className="text-neutral-400 text-[12px] mb-3">Couldn't load your history.</Text>
+            <Text className={themed('text-neutral-400 text-[12px] mb-3')}>Couldn't load your history.</Text>
             <TouchableOpacity
               onPress={() => void load()}
-              className="px-4 py-2 rounded-xl border border-white/10"
+              className={themed('px-4 py-2 rounded-xl border border-white/10')}
               accessibilityRole="button"
             >
-              <Text className="text-[11px] font-black text-[#00f2fe]">RETRY</Text>
+              <Text className={themed('text-[11px] font-black text-[#00f2fe]')}>RETRY</Text>
             </TouchableOpacity>
           </>
         ) : (
-          <ActivityIndicator color={ACCENT} />
+          <ActivityIndicator color={accent()} />
         )}
       </View>
     );
@@ -545,16 +546,16 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
   return (
     <View>
       {failed && (
-        <Text className="text-[10px] text-amber-400 mb-3 text-center">
+        <Text className={themed('text-[10px] text-amber-400 mb-3 text-center')}>
           Offline — showing the last history loaded.
         </Text>
       )}
 
       {/* ---------------------------------------------------- Streak */}
-      <GlassCard className="bg-white/[0.01]" style={cardStyle}>
+      <GlassCard adaptive className={themed('bg-white/[0.01]')} style={cardStyle}>
         <SectionTitle icon={<Flame color={FLAME} size={17} />} title="Hydration Streak" />
-        <View className="flex-row items-center">
-          <View className="items-center mr-5">
+        <View className={themed('flex-row items-center')}>
+          <View className={themed('items-center mr-5')}>
             <Flame
               color={streak.current > 0 ? FLAME : MUTED}
               size={46}
@@ -562,16 +563,16 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
               fillOpacity={0.25}
             />
           </View>
-          <View className="flex-1">
-            <Text className="text-[34px] font-black text-white leading-[38px]">
+          <View className={themed('flex-1')}>
+            <Text className={themed('text-[34px] font-black text-white leading-[38px]')}>
               {streak.current}
-              <Text className="text-[13px] text-neutral-400"> {streak.current === 1 ? 'day' : 'days'}</Text>
+              <Text className={themed('text-[13px] text-neutral-400')}> {streak.current === 1 ? 'day' : 'days'}</Text>
             </Text>
             {/* The streak counts days logged, not days the goal was met — see
                 `computeStreak`. The copy has to say so, or a user reading
                 "streak extended" after one 250 ml glass will take it as having
                 hit their target. */}
-            <Text className="text-[11px] text-neutral-400 mt-1">
+            <Text className={themed('text-[11px] text-neutral-400 mt-1')}>
               {streak.todayLogged
                 ? streak.current === 1
                   ? 'Logged today — that’s day one.'
@@ -580,15 +581,15 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
                 ? `Log a drink today to make it ${streak.current + 1}.`
                 : 'Log a drink to start a streak.'}
             </Text>
-            <View className="flex-row items-center gap-1.5 mt-2">
+            <View className={themed('flex-row items-center gap-1.5 mt-2')}>
               <Trophy color="#fbbf24" size={12} />
-              <Text className="text-[10px] font-bold text-amber-300">
+              <Text className={themed('text-[10px] font-bold text-amber-300')}>
                 Best: {streak.best} {streak.best === 1 ? 'day' : 'days'}
                 {/* Named, not just counted: "Best: 5 days" is a number the
                     user cannot place — they have no way to tell which five,
                     or whether it was last week or in March. */}
                 {streak.bestStart !== null && streak.bestEnd !== null && (
-                  <Text className="text-[10px] font-bold text-amber-300/70">
+                  <Text className={themed('text-[10px] font-bold text-amber-300/70')}>
                     {'  ·  '}
                     {describeRun(streak.bestStart, streak.bestEnd)}
                   </Text>
@@ -604,7 +605,7 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
             goal: the streak counts logged days now, and a chain of empty
             circles under a "4 days running" headline would simply look
             broken. */}
-        <View className="flex-row justify-between mt-5">
+        <View className={themed('flex-row justify-between mt-5')}>
           {last7.map((day, i) => {
             const isToday = i === last7.length - 1;
             const isLogged = day.entries > 0;
@@ -619,7 +620,7 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
                 accessibilityLabel={`${dayName(day, i, last7.length)}, ${formatVolume(day.totalMl)}${
                   isLogged ? '' : ', nothing logged'
                 }`}
-                className="items-center"
+                className={themed('items-center')}
               >
                 <View
                   style={{
@@ -632,7 +633,7 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
                       ? 'rgba(0,242,254,0.18)'
                       : isLogged
                       ? 'rgba(52,211,153,0.2)'
-                      : 'rgba(255,255,255,0.04)',
+                      : tone('rgba(255,255,255,0.04)', 'rgba(24,24,27,0.04)'),
                     borderWidth: isOpen || isToday ? 1.5 : 1,
                     borderColor: isOpen
                       ? ACCENT
@@ -640,18 +641,18 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
                       ? MET
                       : isToday
                       ? ACCENT
-                      : 'rgba(255,255,255,0.08)',
+                      : tone('rgba(255,255,255,0.08)', 'rgba(24,24,27,0.12)'),
                   }}
                 >
                   {isLogged ? (
                     <Flame color={FLAME} size={14} fill={FLAME} fillOpacity={0.4} />
                   ) : (
-                    <Text className="text-[9px] font-black text-neutral-500">{day.dayOfMonth}</Text>
+                    <Text className={themed('text-[9px] font-black text-neutral-500')}>{day.dayOfMonth}</Text>
                   )}
                 </View>
                 <Text
-                  className="text-[8px] font-black mt-1"
-                  style={{ color: isOpen ? ACCENT : isToday ? ACCENT : MUTED }}
+                  className={themed('text-[8px] font-black mt-1')}
+                  style={{ color: isOpen || isToday ? tone(ACCENT, '#0e7490') : MUTED }}
                 >
                   {isToday ? 'TODAY' : day.label.toUpperCase()}
                 </Text>
@@ -662,26 +663,26 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
 
         {/* The tapped day, opened where it was tapped. */}
         {streakDay ? (
-          <View className="flex-row items-center mt-4 bg-white/[0.02] border border-white/5 rounded-2xl p-3">
+          <View className={themed('flex-row items-center mt-4 bg-white/[0.02] border border-white/5 rounded-2xl p-3')}>
             <GoalRing
               size={78}
               progress={targetMl ? streakDay.totalMl / targetMl : 0}
               label={targetMl ? `${Math.round((streakDay.totalMl / targetMl) * 100)}%` : '--'}
               sub="of goal"
             />
-            <View className="flex-1 ml-4">
-              <Text className="text-[10px] uppercase tracking-widest font-black text-neutral-500">
+            <View className={themed('flex-1 ml-4')}>
+              <Text className={themed('text-[10px] uppercase tracking-widest font-black text-neutral-500')}>
                 {dayName(streakDay, last7.findIndex(d => d.start === streakDay.start), last7.length)}
               </Text>
-              <Text className="text-[20px] font-black text-white mt-0.5">
+              <Text className={themed('text-[20px] font-black text-white mt-0.5')}>
                 {formatVolume(streakDay.totalMl)}
               </Text>
-              <Text className="text-[10px] text-neutral-400 mt-0.5">
+              <Text className={themed('text-[10px] text-neutral-400 mt-0.5')}>
                 {streakDay.entries} {streakDay.entries === 1 ? 'entry' : 'entries'}
                 {targetMl ? ` · goal ${formatVolume(targetMl)}` : ''}
               </Text>
               <Text
-                className="text-[10px] font-bold mt-1.5"
+                className={themed('text-[10px] font-bold mt-1.5')}
                 style={{ color: streakDay.goalMet ? MET : MUTED }}
               >
                 {streakDay.entries === 0
@@ -695,13 +696,13 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
             </View>
           </View>
         ) : (
-          <Text className="text-[9px] text-neutral-500 text-center mt-3">Tap a day to see it</Text>
+          <Text className={themed('text-[9px] text-neutral-500 text-center mt-3')}>Tap a day to see it</Text>
         )}
       </GlassCard>
 
       {/* ---------------------------------------------------- This week */}
-      <View className="flex-row gap-2.5" style={{ marginBottom: CARD_GAP }}>
-        <StatTile label="This week" value={formatVolume(week.totalMl)} accent={ACCENT} />
+      <View className={themed('flex-row gap-2.5')} style={{ marginBottom: CARD_GAP }}>
+        <StatTile label="This week" value={formatVolume(week.totalMl)} accent={tone(ACCENT, '#0e7490')} />
         <StatTile label="Daily avg" value={formatVolume(week.averageMl)} />
         <StatTile
           label="Goal days"
@@ -709,14 +710,14 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
           accent={MET}
           sub={
             week.changeVsLastWeek !== null ? (
-              <View className="flex-row items-center gap-1 mt-1">
+              <View className={themed('flex-row items-center gap-1 mt-1')}>
                 {week.changeVsLastWeek >= 0 ? (
                   <TrendingUp color={MET} size={10} />
                 ) : (
                   <TrendingDown color="#f43f5e" size={10} />
                 )}
                 <Text
-                  className="text-[8px] font-black flex-shrink"
+                  className={themed('text-[8px] font-black flex-shrink')}
                   style={{ color: week.changeVsLastWeek >= 0 ? MET : '#f43f5e' }}
                   numberOfLines={1}
                   adjustsFontSizeToFit
@@ -732,12 +733,12 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
       </View>
 
       {/* ---------------------------------------------------- Intake chart */}
-      <GlassCard className="bg-white/[0.01]" style={cardStyle}>
+      <GlassCard adaptive className={themed('bg-white/[0.01]')} style={cardStyle}>
         <SectionTitle
-          icon={<ChartColumn color={ACCENT} size={17} />}
+          icon={<ChartColumn color={accent()} size={17} />}
           title="Daily Intake"
           right={
-            <View className="flex-row bg-white/[0.04] rounded-xl p-0.5 border border-white/5">
+            <View className={themed('flex-row bg-white/[0.04] rounded-xl p-0.5 border border-white/5')}>
               {([7, 30] as const).map(r => (
                 <TouchableOpacity
                   key={r}
@@ -747,10 +748,10 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
                   }}
                   accessibilityRole="button"
                   accessibilityState={{ selected: range === r }}
-                  className="px-3 py-1 rounded-lg"
+                  className={themed('px-3 py-1 rounded-lg')}
                   style={{ backgroundColor: range === r ? 'rgba(0,242,254,0.15)' : 'transparent' }}
                 >
-                  <Text className="text-[10px] font-black" style={{ color: range === r ? ACCENT : MUTED }}>
+                  <Text className={themed('text-[10px] font-black')} style={{ color: range === r ? tone(ACCENT, '#0e7490') : MUTED }}>
                     {r}D
                   </Text>
                 </TouchableOpacity>
@@ -766,23 +767,23 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
           onSelect={setSelectedBar}
         />
         {barDay && (
-          <View className="flex-row items-center mt-4 bg-white/[0.02] border border-white/5 rounded-2xl p-3">
+          <View className={themed('flex-row items-center mt-4 bg-white/[0.02] border border-white/5 rounded-2xl p-3')}>
             <GoalRing
               size={92}
               progress={targetMl ? barDay.totalMl / targetMl : 0}
               label={targetMl ? `${Math.round((barDay.totalMl / targetMl) * 100)}%` : '--'}
               sub="of goal"
             />
-            <View className="flex-1 ml-4">
-              <Text className="text-[10px] uppercase tracking-widest font-black text-neutral-500">
+            <View className={themed('flex-1 ml-4')}>
+              <Text className={themed('text-[10px] uppercase tracking-widest font-black text-neutral-500')}>
                 {dayName(barDay, barIndex, rangeDays.length)}
               </Text>
-              <Text className="text-[22px] font-black text-white mt-0.5">{formatVolume(barDay.totalMl)}</Text>
-              <Text className="text-[10px] text-neutral-400 mt-0.5">
+              <Text className={themed('text-[22px] font-black text-white mt-0.5')}>{formatVolume(barDay.totalMl)}</Text>
+              <Text className={themed('text-[10px] text-neutral-400 mt-0.5')}>
                 {barDay.entries} {barDay.entries === 1 ? 'entry' : 'entries'}
                 {targetMl ? ` · goal ${formatVolume(targetMl)}` : ''}
               </Text>
-              <Text className="text-[10px] font-bold mt-1.5" style={{ color: barDay.goalMet ? MET : MUTED }}>
+              <Text className={themed('text-[10px] font-bold mt-1.5')} style={{ color: barDay.goalMet ? MET : MUTED }}>
                 {barDay.goalMet
                   ? '✓ Goal reached'
                   : targetMl
@@ -792,40 +793,40 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
             </View>
           </View>
         )}
-        <Text className="text-[9px] text-neutral-500 text-center mt-2.5">Tap a bar to see that day</Text>
+        <Text className={themed('text-[9px] text-neutral-500 text-center mt-2.5')}>Tap a bar to see that day</Text>
       </GlassCard>
 
       {/* ---------------------------------------------------- Rhythm */}
-      <GlassCard className="bg-white/[0.01]" style={cardStyle}>
+      <GlassCard adaptive className={themed('bg-white/[0.01]')} style={cardStyle}>
         <SectionTitle icon={<Clock color="#a78bfa" size={17} />} title="Drinking Rhythm · 7 days" />
-        <View className="flex-row items-center">
+        <View className={themed('flex-row items-center')}>
           <RhythmClock
             buckets={rhythm}
             size={Math.min(190, innerWidth * 0.58)}
             selected={selectedHour}
             onSelect={hour => setSelectedHour(prev => (prev === hour ? null : hour))}
           />
-          <View className="flex-1 ml-3">
+          <View className={themed('flex-1 ml-3')}>
             {shownHour !== null ? (
               <>
-                <Text className="text-[10px] uppercase tracking-widest font-black text-neutral-500">
+                <Text className={themed('text-[10px] uppercase tracking-widest font-black text-neutral-500')}>
                   {selectedHour === null ? 'Peak hour' : 'Selected hour'}
                 </Text>
                 <Text
-                  className="text-[20px] font-black text-white mt-0.5"
+                  className={themed('text-[20px] font-black text-white mt-0.5')}
                   numberOfLines={1}
                   adjustsFontSizeToFit
                 >
                   {String(shownHour).padStart(2, '0')}:00–{String((shownHour + 1) % 24).padStart(2, '0')}:00
                 </Text>
-                <Text className="text-[11px] mt-1" style={{ color: selectedHour === null ? FLAME : ACCENT }}>
+                <Text className={themed('text-[11px] mt-1')} style={{ color: selectedHour === null ? FLAME : tone(ACCENT, '#0e7490') }}>
                   {formatVolume(rhythm[shownHour])} this week
                 </Text>
               </>
             ) : (
-              <Text className="text-[11px] text-neutral-400">Log some water to see when you drink most.</Text>
+              <Text className={themed('text-[11px] text-neutral-400')}>Log some water to see when you drink most.</Text>
             )}
-            <Text className="text-[9px] text-neutral-500 mt-3 leading-[13px]">
+            <Text className={themed('text-[9px] text-neutral-500 mt-3 leading-[13px]')}>
               Each spoke is an hour of the day. Longer spokes mean more water. Tap one to inspect it.
             </Text>
           </View>
@@ -833,13 +834,13 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
       </GlassCard>
 
       {/* ---------------------------------------------------- Heatmap */}
-      <GlassCard className="bg-white/[0.01]" style={cardStyle}>
+      <GlassCard adaptive className={themed('bg-white/[0.01]')} style={cardStyle}>
         <SectionTitle
           icon={<CalendarDays color={MET} size={17} />}
           title="5-Week Heatmap"
           right={
             cellDay ? (
-              <Text className="text-[10px] font-black text-white">
+              <Text className={themed('text-[10px] font-black text-white')}>
                 {new Date(cellDay.start).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ·{' '}
                 {formatVolume(cellDay.totalMl)}
               </Text>
@@ -853,14 +854,14 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ userId, targetMl, todayLo
           selected={selectedCell}
           onSelect={i => setSelectedCell(prev => (prev === i ? null : i))}
         />
-        <View className="flex-row items-center justify-end gap-3 mt-2">
-          <View className="flex-row items-center gap-1">
+        <View className={themed('flex-row items-center justify-end gap-3 mt-2')}>
+          <View className={themed('flex-row items-center gap-1')}>
             <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: ACCENT, opacity: 0.5 }} />
-            <Text className="text-[8px] font-bold text-neutral-500">Some water</Text>
+            <Text className={themed('text-[8px] font-bold text-neutral-500')}>Some water</Text>
           </View>
-          <View className="flex-row items-center gap-1">
+          <View className={themed('flex-row items-center gap-1')}>
             <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: MET }} />
-            <Text className="text-[8px] font-bold text-neutral-500">Goal met</Text>
+            <Text className={themed('text-[8px] font-bold text-neutral-500')}>Goal met</Text>
           </View>
         </View>
       </GlassCard>

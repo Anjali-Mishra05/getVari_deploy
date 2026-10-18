@@ -31,7 +31,7 @@ const mockNativeCalls: string[] = [];
 
 /** What each bridged method resolves with; a value that throws is rethrown. */
 const mockNative: {
-  canUseFullScreenIntent: () => Promise<boolean> | boolean;
+  canUseFullScreenIntent: () => Promise<boolean | null> | boolean | null;
   canLaunchOverOtherApps: () => Promise<boolean> | boolean;
   presentReminder: () => Promise<string> | string;
   openOverlaySettings: () => Promise<boolean> | boolean;
@@ -285,6 +285,45 @@ describe('the two permissions are reported apart', () => {
       available: false,
       availableInUse: false,
     });
+  });
+});
+
+describe('the full-screen grant is read from Android, never assumed', () => {
+  it('reports granted when Android says it is enabled', async () => {
+    mockNative.canUseFullScreenIntent = () => true;
+    expect((await NotificationService.fullScreenReminderStatus()).granted).toBe(true);
+  });
+
+  it('reports not granted when Android says it is disabled', async () => {
+    mockNative.canUseFullScreenIntent = () => false;
+    expect((await NotificationService.fullScreenReminderStatus()).granted).toBe(false);
+  });
+
+  it('does not treat an unverifiable state as granted', async () => {
+    // The native side resolves null when it has no NotificationManager to ask.
+    mockNative.canUseFullScreenIntent = () => null;
+    expect((await NotificationService.fullScreenReminderStatus()).granted).toBe(false);
+
+    // The bridge threw.
+    mockNative.canUseFullScreenIntent = () => {
+      throw new Error('binder died');
+    };
+    expect((await NotificationService.fullScreenReminderStatus()).granted).toBe(false);
+
+    // A build without the native module at all.
+    mockNativeModules = {};
+    expect((await NotificationService.fullScreenReminderStatus()).granted).toBe(false);
+  });
+
+  it('ignores a stored flag and asks Android again on every read', async () => {
+    mockStore.set('fullScreenIntentGranted', 'true');
+    mockNative.canUseFullScreenIntent = () => false;
+    expect((await NotificationService.fullScreenReminderStatus()).granted).toBe(false);
+
+    // The user turns it on in Settings and comes back.
+    mockNative.canUseFullScreenIntent = () => true;
+    expect((await NotificationService.fullScreenReminderStatus()).granted).toBe(true);
+    expect(mockNativeCalls.filter(c => c === 'canUseFullScreenIntent')).toHaveLength(2);
   });
 });
 

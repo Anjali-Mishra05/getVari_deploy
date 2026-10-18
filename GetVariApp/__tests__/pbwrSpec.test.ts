@@ -188,7 +188,10 @@ describe('§6 upper limit and precedence', () => {
     const limit = (over: object) =>
       computePBWRBreakdown({ ...heavy, gender: 'Male', ...over }).upperLimit;
 
-    expect(limit({ activityLevel: 'active' })).toBe(5000);
+    // Gym Enthusiast / Active: from the observed Active/Gym step band.
+    expect(
+      computePBWRBreakdown({ ...heavy, gender: 'Male' }, { avgSteps: 10000, avgTemp: null, avgHumidity: null }).upperLimit
+    ).toBe(5000);
     expect(limit({ workEnvironment: 'outdoor' })).toBe(5000);
     expect(limit({ workEnvironment: 'heavy_outdoor' })).toBe(5500);
     expect(limit({ medicalConditions: ['diabetes'] })).toBe(5000);
@@ -212,8 +215,29 @@ describe('§6 upper limit and precedence', () => {
     // Including it unconditionally would make every other row in the table
     // dead: 4500 is below all of them, so a gym-goer would never reach 5000.
     expect(
-      computePBWRBreakdown({ ...heavy, gender: 'Male', activityLevel: 'elite' }).upperLimit
+      computePBWRBreakdown({ ...heavy, gender: 'Male' }, { avgSteps: 12000, avgTemp: null, avgHumidity: null }).upperLimit
     ).toBe(5000);
+  });
+
+  it('never raises the ceiling for a self-declared activity level (§3)', () => {
+    for (const activityLevel of ['moderate', 'active', 'elite']) {
+      expect(computePBWRBreakdown({ ...heavy, gender: 'Male', activityLevel }).upperLimit).toBe(4500);
+      // Observed below the Active/Gym band: still the healthy ceiling.
+      expect(
+        computePBWRBreakdown(
+          { ...heavy, gender: 'Male', activityLevel },
+          { avgSteps: 9999, avgTemp: null, avgHumidity: null }
+        ).upperLimit
+      ).toBe(4500);
+    }
+  });
+
+  it('the activity adjustment follows observed steps, never the selected level', () => {
+    const observed = { avgSteps: 5200, avgTemp: null, avgHumidity: null };
+    const adj = (activityLevel: string) =>
+      computePBWRBreakdown({ weightKg: 70, age: 25, gender: 'Male', activityLevel }, observed).activityAdj;
+    expect(adj('sedentary')).toBe(300);
+    expect(adj('elite')).toBe(300);
   });
 
   it('lets a physician limit win over every other category', () => {
@@ -276,6 +300,38 @@ describe('§3 the 7-day calibration window', () => {
     expect(isWithinCalibrationWindow(daysAgo(0))).toBe(true);
     expect(isWithinCalibrationWindow(daysAgo(6.9))).toBe(true);
     expect(isWithinCalibrationWindow(daysAgo(7.1))).toBe(false);
+  });
+
+  it('days 1–7: the target is PBWR only — no activity, climate, work or health adjustment', () => {
+    const inputs = {
+      weightKg: 70, age: 25, gender: 'Male',
+      workEnvironment: 'heavy_outdoor', medicalConditions: ['diabetes', 'stones'],
+    };
+    const observed = { avgSteps: 15000, avgTemp: 35, avgHumidity: 80 };
+    const b = computePBWRBreakdown(inputs, observed, { calibrating: true });
+    expect([b.activityAdj, b.tempAdj, b.humidityAdj, b.workEnvAdj, b.healthAdj]).toEqual([0, 0, 0, 0, 0]);
+    expect(b.adjustedTotal).toBe(3983); // 70 × 56.9 × 1.00
+    expect(b.finalTarget).toBe(3983);
+    // Day 8 onward: the adjustments apply, from the same inputs.
+    const after = computePBWRBreakdown(inputs, observed);
+    expect(after.adjustedTotal).toBe(3983 + 1300 + 900 + 500 + 1300 + 900);
+  });
+
+  it('calibration still honours a doctor’s limit', () => {
+    const b = computePBWRBreakdown(
+      { weightKg: 70, age: 25, gender: 'Male', medicalConditions: ['ckd'], physicianLimitMl: 1200 },
+      null,
+      { calibrating: true }
+    );
+    expect(b.finalTarget).toBe(1200);
+  });
+
+  it('recomputes from the inputs every time: nothing accumulates across calls', () => {
+    const inputs = { weightKg: 70, age: 25, gender: 'Male', workEnvironment: 'ac_office' };
+    const observed = { avgSteps: 5200, avgTemp: 27, avgHumidity: 55 };
+    const first = computePBWRBreakdown(inputs, observed);
+    for (let day = 0; day < 10; day++) computePBWRBreakdown(inputs, observed);
+    expect(computePBWRBreakdown(inputs, observed)).toEqual(first);
   });
 
   it('treats a row with no start date as established, not as brand new', () => {

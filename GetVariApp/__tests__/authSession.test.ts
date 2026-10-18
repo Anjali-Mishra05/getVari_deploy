@@ -8,7 +8,11 @@
 // and only names starting with "mock" may be referenced from inside one.
 var mockStore = new Map<string, string>();
 var mockSupabaseSession: { user: { id: string } } | null = null;
-var mockProfileRow: { id: string; updated_at?: string } | null = null;
+var mockProfileRow: { id: string; updated_at?: string; profile?: any } | null = null;
+/** When set, the profile lookup fails the way an unreachable backend does. */
+var mockLookupError = false;
+/** Every write to the profiles table: [operation, payload]. */
+var mockProfileWrites: Array<[string, any]> = [];
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
@@ -62,7 +66,10 @@ jest.mock('../src/services/SupabaseClient', () => ({
         eq: () => {
           const rows = mockProfileRow ? [mockProfileRow] : [];
           const query: any = {
-            maybeSingle: async () => ({ data: mockProfileRow, error: null }),
+            maybeSingle: async () =>
+              mockLookupError
+                ? { data: null, error: { message: 'network request failed' } }
+                : { data: mockProfileRow, error: null },
             order: () => query,
             limit: () => query,
             then: (resolve: any, reject: any) =>
@@ -71,8 +78,22 @@ jest.mock('../src/services/SupabaseClient', () => ({
           return query;
         },
       }),
-      update: () => ({ eq: async () => ({ error: null }) }),
-      insert: async () => ({ error: null }),
+      update: (payload: any) => {
+        mockProfileWrites.push(['update', payload]);
+        return { eq: async () => ({ error: null }) };
+      },
+      insert: async (payload: any) => {
+        mockProfileWrites.push(['insert', payload]);
+        return { error: null };
+      },
+      upsert: async (payload: any) => {
+        mockProfileWrites.push(['upsert', payload]);
+        return { error: null };
+      },
+      delete: () => {
+        mockProfileWrites.push(['delete', null]);
+        return { eq: async () => ({ error: null }) };
+      },
     }),
   },
 }));
@@ -89,6 +110,15 @@ beforeEach(() => {
   mockStore.clear();
   mockSupabaseSession = null;
   mockProfileRow = null;
+  mockLookupError = false;
+  mockProfileWrites = [];
+});
+
+/** A profile row holding the details onboarding saves. */
+const savedProfile = (id: string) => ({
+  id,
+  updated_at: '2026-09-05T10:00:00.000Z',
+  profile: { fullName: 'Anjali Mishra', age: 30, weightKg: 62, sleepSchedule: { sleepStart: '23:30', wakeUp: '07:00' } },
 });
 
 describe('demo sign-in', () => {
@@ -209,16 +239,138 @@ describe('persistence across a restart', () => {
     expect(await afterRestart.resolveStartupRoute()).toBe('Onboarding');
   });
 
-  it('recovers Home from an existing profile row when the local flag is gone', async () => {
+  it('recovers Home from an existing saved profile when the local flag is gone', async () => {
     const first = coldStart();
     const { userId } = await first.verifyOtp(await first.sendOtp('+919876543210'), '884200');
-    mockProfileRow = { id: userId };
+    // A row with the details onboarding saves. A bare row no longer counts:
+    // the Firebase path creates an empty one for every new account.
+    mockProfileRow = savedProfile(userId);
 
     const afterRestart = coldStart();
     expect(await afterRestart.resolveStartupRoute()).toBe('Home');
   });
 
   it('only sends a device that never signed in to Login', async () => {
+    expect(await coldStart().resolveStartupRoute()).toBe('Login');
+  });
+});
+
+describe('new user vs existing user vs new session', () => {
+  const PHONE = '+919876543210';
+  const signIn = async (auth: any) => auth.verifyOtp(await auth.sendOtp(PHONE), '884200');
+
+  it('a genuinely new user: login -> profile details -> dashboard', async () => {
+    const auth = coldStart();
+    const { userId } = await signIn(auth);
+    expect(await auth.routeAfterLogin()).toBe('Onboarding');
+
+    // Onboarding saves the details and stamps the account.
+    mockProfileRow = savedProfile(userId);
+    await auth.markOnboardingComplete();
+    expect(await auth.resolveStartupRoute()).toBe('Home');
+  });
+
+  it('an existing user: app launch restores the session and goes straight to the dashboard', async () => {
+    const first = coldStart();
+    const { userId } = await signIn(first);
+    mockProfileRow = savedProfile(userId);
+    await first.markOnboardingComplete();
+
+    const relaunched = coldStart();
+    expect(await relaunched.getCurrentUserId()).toBe(userId);
+    expect(await relaunched.resolveStartupRoute()).toBe('Home');
+    expect(await relaunched.hasCompletedOnboarding()).toBe(true);
+  });
+
+  it('an existing user: logout -> login again goes straight to the dashboard, not onboarding', async () => {
+    const first = coldStart();
+    const { userId } = await signIn(first);
+    mockProfileRow = savedProfile(userId);
+    await first.markOnboardingComplete();
+
+    await first.logout();
+    expect(await coldStart().resolveStartupRoute()).toBe('Login');
+
+    const again = coldStart();
+    const session = await signIn(again);
+    expect(session.userId).toBe(userId);
+    // The new session carries no stamp of its own; the account is still known.
+    expect(session.onboardedAt).toBeUndefined();
+    expect(await again.routeAfterLogin()).toBe('Home');
+    expect(await again.hasCompletedOnboarding()).toBe(true);
+  });
+
+  it('logout -> login is recognised even when the backend cannot be reached', async () => {
+    const first = coldStart();
+    const { userId } = await signIn(first);
+    mockProfileRow = savedProfile(userId);
+    await first.markOnboardingComplete();
+    await first.logout();
+
+    mockLookupError = true;
+    const again = coldStart();
+    await signIn(again);
+    expect(await again.routeAfterLogin()).toBe('Home');
+  });
+
+  it('logout keeps the saved profile: nothing is written or deleted, and the same account id comes back', async () => {
+    const first = coldStart();
+    const { userId } = await signIn(first);
+    mockProfileRow = savedProfile(userId);
+    await first.markOnboardingComplete();
+
+    mockProfileWrites = [];
+    await first.logout();
+    expect(mockProfileWrites).toEqual([]);
+
+    const again = coldStart();
+    expect((await signIn(again)).userId).toBe(userId);
+    // The profile row the dashboard reads is the same one, details intact.
+    expect(mockProfileRow?.profile.fullName).toBe('Anjali Mishra');
+  });
+
+  it('a reinstall (no local records) with a saved profile on the server still goes to the dashboard', async () => {
+    const first = coldStart();
+    const { userId } = await signIn(first);
+    mockProfileRow = savedProfile(userId);
+
+    mockStore.clear(); // reinstall: session, id map and onboarding record gone
+    const reinstalled = coldStart();
+    expect((await signIn(reinstalled)).userId).toBe(userId);
+    expect(await reinstalled.routeAfterLogin()).toBe('Home');
+  });
+
+  it('a genuinely new account whose row is empty (Firebase creates one at sign-in) still gets onboarding', async () => {
+    const auth = coldStart();
+    const { userId } = await signIn(auth);
+    mockProfileRow = { id: userId, profile: {} };
+    expect(await auth.routeAfterLogin()).toBe('Onboarding');
+    expect(await coldStart().resolveStartupRoute()).toBe('Onboarding');
+  });
+
+  it('a new user whose lookup fails is not waved through to the dashboard', async () => {
+    const auth = coldStart();
+    await signIn(auth);
+    mockLookupError = true;
+    expect(await auth.routeAfterLogin()).toBe('Onboarding');
+  });
+
+  it('one account finishing onboarding does not mark a different account on the same phone', async () => {
+    const first = coldStart();
+    const { userId } = await signIn(first);
+    mockProfileRow = savedProfile(userId);
+    await first.markOnboardingComplete();
+    await first.logout();
+
+    mockProfileRow = null;
+    const other = coldStart();
+    await other.verifyOtp(await other.sendOtp('+919111111111'), '884200');
+    expect(await other.routeAfterLogin()).toBe('Onboarding');
+  });
+
+  it('authentication failure: a wrong code is rejected and the app stays on Login', async () => {
+    const auth = coldStart();
+    await expect(auth.verifyOtp(await auth.sendOtp(PHONE), '000000')).rejects.toThrow();
     expect(await coldStart().resolveStartupRoute()).toBe('Login');
   });
 });
@@ -242,5 +394,112 @@ describe('user id resolution', () => {
     // A network failure here used to surface as "you're not signed in" in the
     // chat, because the old code asked the auth server on every write.
     expect(await AuthService.getCurrentUserId()).toBe(userId);
+  });
+});
+
+/**
+ * The dark/light choice belongs to the device, not to a session. Signing out
+ * and back in — the real `AuthService` calls, against the same storage — must
+ * leave it exactly as the user set it, and a fresh install must start dark.
+ */
+describe('the theme is independent of sign-in and sign-out', () => {
+  const PHONE = '+919876543210';
+  const THEME_KEY = 'getvari_theme_mode';
+  const signIn = async (auth: any) => auth.verifyOtp(await auth.sendOtp(PHONE), '884200');
+  /** A restart: every module's memory is gone, storage is not. */
+  const relaunch = async () => {
+    const auth = coldStart();
+    const theme = require('../src/theme/theme');
+    await theme.loadThemeMode();
+    return { auth, theme };
+  };
+
+  it('1. fresh install: nothing saved, so the app opens in Dark Mode', async () => {
+    expect(mockStore.has(THEME_KEY)).toBe(false);
+    const { theme } = await relaunch();
+    expect(theme.getThemeMode()).toBe('dark');
+    // Opening the app does not save a preference on the user's behalf.
+    expect(mockStore.has(THEME_KEY)).toBe(false);
+  });
+
+  it('2. Light Mode -> logout: the Login screen is still in Light Mode', async () => {
+    const { auth, theme } = await relaunch();
+    const { userId } = await signIn(auth);
+    mockProfileRow = savedProfile(userId);
+    await auth.markOnboardingComplete();
+
+    theme.setThemeMode('light');
+    await Promise.resolve();
+    await auth.logout();
+
+    expect(mockStore.get(THEME_KEY)).toBe('light');
+    expect(theme.getThemeMode()).toBe('light'); // same run: straight to Login
+    const afterRestart = await relaunch();
+    expect(await afterRestart.auth.resolveStartupRoute()).toBe('Login');
+    expect(afterRestart.theme.getThemeMode()).toBe('light');
+  });
+
+  it('3. ...and through OTP, profile details and onto the Dashboard it stays Light', async () => {
+    const first = await relaunch();
+    first.theme.setThemeMode('light');
+    await Promise.resolve();
+
+    // A new user: Login -> OTP -> profile details -> Dashboard.
+    const { userId } = await signIn(first.auth);
+    expect(first.theme.getThemeMode()).toBe('light');
+    expect(await first.auth.routeAfterLogin()).toBe('Onboarding');
+    mockProfileRow = savedProfile(userId);
+    await first.auth.markOnboardingComplete();
+    expect(await first.auth.resolveStartupRoute()).toBe('Home');
+    expect(first.theme.getThemeMode()).toBe('light');
+
+    // Logout, then the same account signs in again and lands on the Dashboard.
+    await first.auth.logout();
+    const again = await relaunch();
+    expect(again.theme.getThemeMode()).toBe('light');
+    await signIn(again.auth);
+    expect(await again.auth.routeAfterLogin()).toBe('Home');
+    expect(again.theme.getThemeMode()).toBe('light');
+    expect(mockStore.get(THEME_KEY)).toBe('light');
+  });
+
+  it('4. Dark Mode -> logout -> login: the whole flow stays Dark', async () => {
+    const first = await relaunch();
+    const { userId } = await signIn(first.auth);
+    mockProfileRow = savedProfile(userId);
+    await first.auth.markOnboardingComplete();
+    first.theme.setThemeMode('light');
+    first.theme.setThemeMode('dark'); // the user switches back
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await first.auth.logout();
+    expect(mockStore.get(THEME_KEY)).toBe('dark');
+    const again = await relaunch();
+    expect(again.theme.getThemeMode()).toBe('dark');
+    await signIn(again.auth);
+    expect(await again.auth.routeAfterLogin()).toBe('Home');
+    expect(again.theme.getThemeMode()).toBe('dark');
+  });
+
+  it('a different account signing in on the same phone does not change it either', async () => {
+    const first = await relaunch();
+    await signIn(first.auth);
+    first.theme.setThemeMode('light');
+    await Promise.resolve();
+    await first.auth.logout();
+
+    const other = await relaunch();
+    await other.auth.verifyOtp(await other.auth.sendOtp('+919812345678'), '884200');
+    expect(other.theme.getThemeMode()).toBe('light');
+  });
+
+  it('nothing in the sign-in or sign-out code touches the theme preference', () => {
+    const fs = require('fs');
+    const path = require('path');
+    for (const file of ['services/AuthService.ts', 'components/ProfileSheet.tsx', 'screens/LoginScreen.tsx', 'screens/OtpScreen.tsx']) {
+      const source = fs.readFileSync(path.join(__dirname, '..', 'src', file), 'utf8');
+      expect(source).not.toMatch(/setThemeMode|toggleThemeMode|getvari_theme_mode|AsyncStorage\.clear/);
+    }
   });
 });

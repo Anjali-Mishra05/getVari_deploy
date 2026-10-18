@@ -8,10 +8,11 @@ import Sheet from './ui/Sheet';
 
 import { AuthService, StoredSession } from '../services/AuthService';
 import NotificationService from '../services/NotificationService';
-import NotificationHistory from '../services/NotificationHistory';
 import HydrationPromptSession from '../services/HydrationPromptSession';
 import { describeSleepWindow, normaliseSleepSchedule } from '../utils/sleepWindow';
 import useAppConfig from '../hooks/useAppConfig';
+import { internalVersionLabel } from '../utils/buildInfo';
+import { accent, tone } from '../theme/theme';
 
 interface ProfileSheetProps {
   visible: boolean;
@@ -37,8 +38,6 @@ interface ProfileSheetProps {
   onEditProfile: () => void;
 }
 
-const ACCENT = '#00f2fe';
-
 /** "+919876543210" reads better as "+91 98765 43210". */
 const formatPhone = (raw?: string): string => {
   if (!raw) return 'Unknown number';
@@ -58,7 +57,7 @@ const Row: React.FC<{ icon: React.ReactNode; label: string; value: string }> = (
       paddingVertical: 15,
       paddingHorizontal: 18,
       borderBottomWidth: 1,
-      borderBottomColor: 'rgba(255,255,255,0.05)',
+      borderBottomColor: tone('rgba(255,255,255,0.05)', 'rgba(24,24,27,0.09)'),
     }}
   >
     <View
@@ -69,9 +68,9 @@ const Row: React.FC<{ icon: React.ReactNode; label: string; value: string }> = (
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 14,
-        backgroundColor: 'rgba(255,255,255,0.04)',
+        backgroundColor: tone('rgba(255,255,255,0.04)', 'rgba(24,24,27,0.04)'),
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.08)',
+        borderColor: tone('rgba(255,255,255,0.08)', 'rgba(24,24,27,0.12)'),
       }}
     >
       {icon}
@@ -82,7 +81,7 @@ const Row: React.FC<{ icon: React.ReactNode; label: string; value: string }> = (
       >
         {label.toUpperCase()}
       </Text>
-      <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '700', marginTop: 3 }}>
+      <Text style={{ color: tone('#ffffff', '#18181b'), fontSize: 14, fontWeight: '700', marginTop: 3 }}>
         {value}
       </Text>
     </View>
@@ -110,6 +109,7 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
   const [session, setSession] = useState<StoredSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
+  const versionLabel = internalVersionLabel();
 
   useEffect(() => {
     if (!visible) return;
@@ -134,13 +134,12 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
   const signOut = async () => {
     setSigningOut(true);
     try {
-      // Scheduled reminders are held by the OS, so they would keep firing for
-      // an account that is no longer signed in.
-      await NotificationService.cancelHydrationReminders();
-      await NotificationService.cancelAllNotifications();
-      // The next account on this device has its own sleep window.
-      await NotificationService.clearSleepSchedule();
-      await NotificationHistory.clear();
+      // Logout ends the session, nothing more. Scheduled notifications, the
+      // stored sleep window and the bell history stay: the same account
+      // signing back in keeps them, and a different account replaces the
+      // schedule when it signs in (`adoptAccount`) and sees only its own
+      // history.
+      await NotificationService.onSignedOut(session?.userId ?? (await AuthService.getCurrentUserId()));
       await HydrationPromptSession.reset();
     } catch (error) {
       console.error('[Auth] Failed to clear device state on sign-out:', error);
@@ -185,12 +184,11 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
       visible={visible}
       onClose={onClose}
       title="Account"
-      subtitle={session?.isDemo ? 'DEMO SESSION' : 'SIGNED IN'}
       heightFraction={0.75}
     >
           {loading ? (
             <View style={{ paddingVertical: 60, alignItems: 'center' }}>
-              <ActivityIndicator color={ACCENT} />
+              <ActivityIndicator color={accent()} />
             </View>
           ) : (
             // `flex: 1` so the list scrolls inside the panel's fixed height
@@ -214,13 +212,13 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
                     borderColor: 'rgba(0,242,254,0.25)',
                   }}
                 >
-                  <Text style={{ color: ACCENT, fontSize: 30, fontWeight: '900' }}>
+                  <Text style={{ color: accent(), fontSize: 30, fontWeight: '900' }}>
                     {initial}
                   </Text>
                 </View>
                 <Text
                   style={{
-                    color: '#ffffff',
+                    color: tone('#ffffff', '#18181b'),
                     fontSize: 17,
                     fontWeight: '900',
                     marginTop: 14,
@@ -242,24 +240,24 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
                   onPress={onEditProfile}
                   variant="secondary"
                   size="sm"
-                  icon={<Pencil color={ACCENT} size={13} strokeWidth={2.5} />}
+                  icon={<Pencil color={accent()} size={13} strokeWidth={2.5} />}
                   style={{
                     marginTop: 16,
                     backgroundColor: 'rgba(0,242,254,0.08)',
                     borderColor: 'rgba(0,242,254,0.25)',
                   }}
-                  textStyle={{ color: ACCENT, letterSpacing: 1.2, textTransform: 'uppercase' }}
+                  textStyle={{ color: accent(), letterSpacing: 1.2, textTransform: 'uppercase' }}
                   accessibilityLabel="Edit personal details"
                 />
               </View>
 
               <Row
-                icon={<Phone color="#94a3b8" size={17} />}
+                icon={<Phone color={tone('#94a3b8', '#52525b')} size={17} />}
                 label="Phone"
                 value={formatPhone(session?.phoneNumber)}
               />
               <Row
-                icon={<Target color={ACCENT} size={17} />}
+                icon={<Target color={accent()} size={17} />}
                 label="Daily goal"
                 value={
                   targetMl !== null
@@ -279,12 +277,12 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
                   so it read "Not set" for every user who has ever installed
                   the app. */}
               <Row
-                icon={<Activity color="#a78bfa" size={17} />}
+                icon={<Activity color={tone('#a78bfa', '#7c3aed')} size={17} />}
                 label="Activity level"
                 value={activityLabel}
               />
               <Row
-                icon={<Moon color="#818cf8" size={17} />}
+                icon={<Moon color={tone('#818cf8', '#4f46e5')} size={17} />}
                 label="Sleep window (alerts paused)"
                 value={sleepWindowLabel}
               />
@@ -301,6 +299,26 @@ const ProfileSheet: React.FC<ProfileSheetProps> = ({
                 textStyle={{ letterSpacing: 1.2 }}
                 accessibilityLabel="Log out"
               />
+
+              {/* The internal app version, fixed at build time. A footer:
+                  small and muted, clear of the button above it. */}
+              {!!versionLabel && (
+                <Text
+                  style={{
+                    color: '#64748b',
+                    fontSize: 11,
+                    fontWeight: '600',
+                    letterSpacing: 0.4,
+                    textAlign: 'center',
+                    marginTop: 18,
+                    paddingHorizontal: 20,
+                  }}
+                  numberOfLines={1}
+                  testID="profile-version"
+                >
+                  {versionLabel}
+                </Text>
+              )}
         </ScrollView>
       )}
     </Sheet>

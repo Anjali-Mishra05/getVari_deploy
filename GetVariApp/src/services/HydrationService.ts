@@ -12,6 +12,7 @@ import { AuthService } from './AuthService';
 import NotificationService from './NotificationService';
 import ChatBus from './ChatBus';
 import DailyTargetService from './DailyTargetService';
+import { storedTargetForToday } from '../utils/dailyTargetRecord';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /**
@@ -121,7 +122,7 @@ const fetchTargetMl = async (userId: string): Promise<number | null> => {
      * business fetching one, so it takes the number the dashboard locked in
      * and falls back when the app has not run yet today.
      */
-    const locked = await DailyTargetService.peekTodayTargetMl();
+    const locked = await DailyTargetService.peekTodayTargetMl(userId);
     if (locked !== null) return locked;
 
     const { data, error } = await supabase
@@ -133,7 +134,9 @@ const fetchTargetMl = async (userId: string): Promise<number | null> => {
     if (error) return DEFAULT_TARGET_ML;
 
     const profile = data?.profile;
-    const target = Number(profile?.targetDailyMl);
+    // Today's stored Final Daily Target (written by another device, say)
+    // before the telemetry-less figure.
+    const target = Number(storedTargetForToday(profile) ?? profile?.targetDailyMl);
     return Number.isFinite(target) && target > 0 ? target : DEFAULT_TARGET_ML;
   } catch {
     return DEFAULT_TARGET_ML;
